@@ -9,18 +9,39 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "next": "16.2.10",
-    "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "@neondatabase/auth": "^0.4.2-beta",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "firebase": "^12.16.0",
+    "firebase-admin": "^14.1.0",
+    "lucide-react": "^1.24.0",
+    "next": "^16.2.10",
+    "prisma": "^7.8.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "overrides": {
+    "@hono/node-server": "^1.19.13",
+    "next": {
+      "postcss": "^8.5.10"
+    },
+    "gaxios": {
+      "uuid": "^11.1.1"
+    },
+    "teeny-request": {
+      "uuid": "^11.1.1"
+    }
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
+    "tsx": "^4.23.1",
     "typescript": "^5"
   }
 }

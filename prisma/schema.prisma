@@ -1,0 +1,315 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AdminRole {
+  OWNER
+  ADMIN
+  DEVELOPER
+  SUPPORT
+  FINANCE
+  VIEWER
+}
+
+enum ClientStatus {
+  LEAD
+  ONBOARDING
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum ProjectStatus {
+  DEVELOPMENT
+  TESTING
+  ACTIVE
+  MAINTENANCE
+  PAUSED
+  ARCHIVED
+}
+
+enum ProjectCategory {
+  SCHOOL_MANAGEMENT
+  PROPERTY_TECH
+  HOTEL_MANAGEMENT
+  CAR_DEALERSHIP
+  ECOMMERCE
+  MOBILE_APPLICATION
+  WEBSITE
+  CUSTOM_SYSTEM
+}
+
+enum DatabaseType {
+  FIREBASE
+  POSTGRESQL
+  MYSQL
+  MONGODB
+  SUPABASE
+  OTHER
+}
+
+enum IntegrationProvider {
+  FIREBASE
+  RENTWISE_API
+  VERCEL
+  CLOUDINARY
+  GITHUB
+  NEON
+  CUSTOM_API
+}
+
+enum IntegrationStatus {
+  PENDING
+  CONNECTED
+  DEGRADED
+  DISCONNECTED
+}
+
+enum HealthStatus {
+  HEALTHY
+  DEGRADED
+  OFFLINE
+  UNKNOWN
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_FOR_CLIENT
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model AdminUser {
+  id         String    @id @default(cuid())
+  authUserId String?   @unique
+  email      String    @unique
+  firstName  String?
+  lastName   String?
+  avatarUrl  String?
+  role       AdminRole @default(VIEWER)
+  active     Boolean   @default(true)
+
+  auditLogs AuditLog[]
+  tickets   SupportTicket[] @relation("AssignedTickets")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Client {
+  id       String  @id @default(cuid())
+  name     String
+  slug     String  @unique
+  industry String?
+  country  String?
+  logoUrl  String?
+
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+
+  status ClientStatus @default(ACTIVE)
+
+  projects Project[]
+  tickets  SupportTicket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Project {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  name        String
+  slug        String
+  description String?
+  category    ProjectCategory
+  status      ProjectStatus   @default(ACTIVE)
+
+  productionUrl String?
+  adminUrl      String?
+  repositoryUrl String?
+
+  hostingProvider String?
+  databaseType    DatabaseType?
+  framework       String?
+
+  integrations Integration[]
+  snapshots    UsageSnapshot[]
+  healthChecks HealthCheck[]
+  deployments  Deployment[]
+  incidents    Incident[]
+  tickets      SupportTicket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientId, slug])
+  @@index([clientId])
+  @@index([status])
+}
+
+model Integration {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  name     String
+  provider IntegrationProvider
+  status   IntegrationStatus   @default(PENDING)
+
+  baseUrl       String?
+  credentialKey String?
+
+  syncEnabled   Boolean   @default(true)
+  lastSyncAt    DateTime?
+  lastSuccessAt DateTime?
+  lastError     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+}
+
+model UsageSnapshot {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  totalUsers     Int?
+  activeUsers    Int?
+  totalRecords   Int?
+  pendingActions Int?
+  storageBytes   BigInt?
+
+  metrics Json
+
+  recordedAt DateTime @default(now())
+
+  @@index([projectId, recordedAt])
+}
+
+model HealthCheck {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  status         HealthStatus
+  healthy        Boolean
+  responseTimeMs Int?
+  statusCode     Int?
+  message        String?
+  metadata       Json?
+
+  checkedAt DateTime @default(now())
+
+  @@index([projectId, checkedAt])
+  @@index([status])
+}
+
+model Deployment {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  provider      String?
+  environment   String?
+  status        String
+  branch        String?
+  commitHash    String?
+  commitTitle   String?
+  deploymentUrl String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([projectId, createdAt])
+}
+
+model Incident {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  severity    String
+  status      String
+  resolved    Boolean @default(false)
+
+  startedAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([projectId, startedAt])
+  @@index([resolved])
+}
+
+model SupportTicket {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  assignedToId String?
+  assignedTo   AdminUser? @relation("AssignedTickets", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  title       String
+  description String
+  priority    TicketPriority @default(MEDIUM)
+  status      TicketStatus   @default(OPEN)
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  resolvedAt DateTime?
+
+  @@index([clientId])
+  @@index([projectId])
+  @@index([status])
+}
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  actorId String?
+  actor   AdminUser? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  action     String
+  entityType String
+  entityId   String?
+
+  clientId  String?
+  projectId String?
+
+  metadata  Json?
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([actorId])
+  @@index([clientId])
+  @@index([projectId])
+  @@index([createdAt])
+}
