@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 
 import Header from '../layout/Header';
@@ -8,7 +8,7 @@ import Sidebar from '../layout/Sidebar';
 import { authClient } from '@/lib/auth/client';
 
 type DashboardShellProps = {
-  children: React.ReactNode;
+  children: ReactNode;
   admin: {
     name: string;
     email: string;
@@ -55,6 +55,7 @@ export default function DashboardShell({
         adminRole={admin.role}
         collapsed={collapsed}
         onOpenMobile={() => setMobileOpen(true)}
+        onSignOut={handleSignOut}
       />
 
       <main
