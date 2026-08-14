@@ -134,8 +134,8 @@ const initialPlatforms: ClientPlatform[] = [
     lastDeployment: '2 hours ago',
   },
   {
-    id: 'rentwise',
-    name: 'RentWise',
+    id: 'homewise',
+    name: 'HomeWise',
     product: 'Property Technology Platform',
     status: 'HEALTHY',
     responseTime: 93,

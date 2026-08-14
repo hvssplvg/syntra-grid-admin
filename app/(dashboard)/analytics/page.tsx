@@ -117,7 +117,7 @@ const revenueByPeriod: Record<Period, RevenueSeries[]> = {
 
 const clientPerformance: ClientPerformance[] = [
   {
-    name: 'RentWise',
+    name: 'HomeWise',
     initials: 'RW',
     product: 'Property Technology Platform',
     revenue: 32600,
@@ -160,8 +160,8 @@ const clientPerformance: ClientPerformance[] = [
 
 const projectPerformance: ProjectPerformance[] = [
   {
-    name: 'RentWise Platform',
-    client: 'RentWise',
+    name: 'HomeWise Platform',
+    client: 'HomeWise',
     progress: 78,
     margin: 42,
     health: 'Healthy',
@@ -499,8 +499,8 @@ export default function AnalyticsPage() {
         <ExecutiveInsight
           icon={Sparkles}
           title="Strongest growth driver"
-          value="RentWise"
-          description="RentWise generated 38.8% of portfolio revenue and recorded the fastest usage growth."
+          value="HomeWise"
+          description="HomeWise generated 38.8% of portfolio revenue and recorded the fastest usage growth."
         />
 
         <ExecutiveInsight

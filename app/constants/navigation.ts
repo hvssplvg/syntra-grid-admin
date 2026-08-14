@@ -2,6 +2,7 @@ import {
   Activity,
   BarChart3,
   Building2,
+  Camera,
   CircleDollarSign,
   CloudCog,
   FileSignature,
@@ -82,6 +83,14 @@ export const dashboardNavigation: DashboardNavigationItem[] = [
     icon: CloudCog,
     description: 'Review releases, environments and deployment activity.',
   },
+
+{
+    label: 'Website Media',
+    href: '/website-media',
+    icon: Camera,
+    description: 'Manage website images, videos and other media assets.',
+  },
+
   {
     label: 'Team',
     href: '/team',
