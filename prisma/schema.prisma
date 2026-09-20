@@ -7,11 +7,376 @@ datasource db {
   provider = "postgresql"
 }
 
-/**
- * --------------------------------------------------------------------------
- * Enums
- * --------------------------------------------------------------------------
- */
+model AdminUser {
+  id              String           @id @default(cuid())
+  authUserId      String?          @unique
+  email           String           @unique
+  firstName       String?
+  lastName        String?
+  avatarUrl       String?
+  role            AdminRole        @default(VIEWER)
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  auditLogs       AuditLog[]
+  monzoConnection MonzoConnection?
+  tickets         SupportTicket[]  @relation("AssignedTickets")
+}
+
+model MonzoConnection {
+  id                    String             @id @default(cuid())
+  adminUserId           String             @unique
+  monzoUserId           String
+  encryptedAccessToken  String
+  encryptedRefreshToken String?
+  accessTokenExpiresAt  DateTime
+  accountId             String?            @unique
+  accountType           BankAccountType    @default(UNKNOWN)
+  accountDescription    String?
+  accountNumberLast4    String?
+  sortCodeLast4         String?
+  currency              String             @default("GBP")
+  availableBalanceMinor BigInt?
+  totalBalanceMinor     BigInt?
+  balanceUpdatedAt      DateTime?
+  active                Boolean            @default(true)
+  syncEnabled           Boolean            @default(true)
+  syncStatus            BankSyncStatus     @default(IDLE)
+  connectedAt           DateTime           @default(now())
+  lastSyncedAt          DateTime?
+  lastSuccessfulAt      DateTime?
+  lastErrorAt           DateTime?
+  lastError             String?
+  disconnectedAt        DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  adminUser             AdminUser          @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  pots                  MonzoPot[]
+  transactions          MonzoTransaction[]
+
+  @@index([monzoUserId])
+  @@index([active])
+  @@index([syncStatus])
+  @@index([lastSyncedAt])
+}
+
+model MonzoTransaction {
+  id                   String                     @id @default(cuid())
+  monzoConnectionId    String
+  monzoTransactionId   String                     @unique
+  monzoAccountId       String
+  amountMinor          BigInt
+  localAmountMinor     BigInt?
+  currency             String                     @default("GBP")
+  localCurrency        String?
+  direction            BankTransactionDirection
+  status               BankTransactionStatus      @default(UNKNOWN)
+  description          String?
+  merchantName         String?
+  merchantLogoUrl      String?
+  merchantCategory     String?
+  category             String?
+  notes                String?
+  declineReason        String?
+  scheme               String?
+  paymentMethod        String?
+  counterpartyName     String?
+  counterpartyNumber   String?
+  counterpartySortCode String?
+  isLoad               Boolean                    @default(false)
+  includeInSpending    Boolean                    @default(true)
+  matchStatus          BankTransactionMatchStatus @default(UNMATCHED)
+  matchedClientId      String?
+  matchedProjectId     String?
+  matchedInvoiceId     String?
+  matchedAt            DateTime?
+  matchedBy            String?
+  createdAtMonzo       DateTime
+  settledAt            DateTime?
+  declinedAt           DateTime?
+  rawData              Json?
+  importedAt           DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  matchedClient        Client?                    @relation("MonzoTransactionClient", fields: [matchedClientId], references: [id])
+  matchedInvoice       ClientInvoice?             @relation("MonzoTransactionInvoice", fields: [matchedInvoiceId], references: [id])
+  matchedProject       Project?                   @relation("MonzoTransactionProject", fields: [matchedProjectId], references: [id])
+  monzoConnection      MonzoConnection            @relation(fields: [monzoConnectionId], references: [id], onDelete: Cascade)
+
+  @@index([monzoConnectionId])
+  @@index([monzoAccountId])
+  @@index([createdAtMonzo])
+  @@index([settledAt])
+  @@index([direction])
+  @@index([status])
+  @@index([category])
+  @@index([merchantName])
+  @@index([matchStatus])
+  @@index([matchedClientId])
+  @@index([matchedProjectId])
+  @@index([matchedInvoiceId])
+}
+
+model MonzoPot {
+  id                String          @id @default(cuid())
+  monzoConnectionId String
+  monzoPotId        String          @unique
+  name              String
+  style             String?
+  balanceMinor      BigInt
+  currency          String          @default("GBP")
+  deleted           Boolean         @default(false)
+  deletedAt         DateTime?
+  rawData           Json?
+  lastSyncedAt      DateTime        @default(now())
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  monzoConnection   MonzoConnection @relation(fields: [monzoConnectionId], references: [id], onDelete: Cascade)
+
+  @@index([monzoConnectionId])
+  @@index([deleted])
+  @@index([name])
+}
+
+model Client {
+  id                       String             @id @default(cuid())
+  name                     String
+  slug                     String             @unique
+  industry                 String?
+  country                  String?
+  logoUrl                  String?
+  contactName              String?
+  contactEmail             String?
+  contactPhone             String?
+  status                   ClientStatus       @default(ONBOARDING)
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  adminUrl                 String?
+  billingCycle             BillingCycle       @default(ANNUAL)
+  clientRef                String?            @unique
+  contactRole              String?
+  contractValue            Decimal            @default(0) @db.Decimal(18, 2)
+  currency                 CurrencyCode       @default(NGN)
+  domain                   String?
+  integrationKey           String?
+  integrationLive          Boolean            @default(false)
+  liveSince                DateTime?
+  plan                     String?
+  productName              String?
+  renewalAt                DateTime?
+  billing                  ClientBilling?
+  invoices                 ClientInvoice[]
+  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionClient")
+  projects                 Project[]
+  tickets                  SupportTicket[]
+
+  @@index([status])
+  @@index([renewalAt])
+  @@index([integrationKey])
+  @@index([createdAt])
+}
+
+model ClientBilling {
+  id                String         @id @default(cuid())
+  clientId          String         @unique
+  lastInvoiceRef    String?
+  lastInvoiceAt     DateTime?
+  lastInvoiceStatus InvoiceStatus?
+  outstandingAmount Decimal        @default(0) @db.Decimal(18, 2)
+  totalPaid         Decimal        @default(0) @db.Decimal(18, 2)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  client            Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+}
+
+model ClientInvoice {
+  id                       String             @id @default(cuid())
+  clientId                 String
+  invoiceRef               String             @unique
+  status                   InvoiceStatus      @default(DRAFT)
+  description              String?
+  currency                 CurrencyCode       @default(NGN)
+  subtotal                 Decimal            @default(0) @db.Decimal(18, 2)
+  tax                      Decimal            @default(0) @db.Decimal(18, 2)
+  total                    Decimal            @default(0) @db.Decimal(18, 2)
+  paid                     Decimal            @default(0) @db.Decimal(18, 2)
+  balance                  Decimal            @default(0) @db.Decimal(18, 2)
+  issuedAt                 DateTime?
+  dueAt                    DateTime?
+  paidAt                   DateTime?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  client                   Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionInvoice")
+
+  @@index([clientId])
+  @@index([status])
+  @@index([dueAt])
+}
+
+model Project {
+  id                       String             @id @default(cuid())
+  clientId                 String
+  name                     String
+  slug                     String
+  description              String?
+  category                 ProjectCategory
+  status                   ProjectStatus      @default(ACTIVE)
+  productionUrl            String?
+  adminUrl                 String?
+  repositoryUrl            String?
+  hostingProvider          String?
+  databaseType             DatabaseType?
+  framework                String?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  deployments              Deployment[]
+  healthChecks             HealthCheck[]
+  incidents                Incident[]
+  integrations             Integration[]
+  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionProject")
+  client                   Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tickets                  SupportTicket[]
+  snapshots                UsageSnapshot[]
+
+  @@unique([clientId, slug])
+  @@index([clientId])
+  @@index([status])
+  @@index([category])
+}
+
+model Integration {
+  id            String              @id @default(cuid())
+  projectId     String
+  name          String
+  provider      IntegrationProvider
+  status        IntegrationStatus   @default(PENDING)
+  baseUrl       String?
+  credentialKey String?
+  syncEnabled   Boolean             @default(true)
+  lastSyncAt    DateTime?
+  lastSuccessAt DateTime?
+  lastError     String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([provider])
+  @@index([status])
+}
+
+model UsageSnapshot {
+  id             String   @id @default(cuid())
+  projectId      String
+  totalUsers     Int?
+  activeUsers    Int?
+  totalRecords   Int?
+  pendingActions Int?
+  storageBytes   BigInt?
+  metrics        Json
+  recordedAt     DateTime @default(now())
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, recordedAt])
+}
+
+model HealthCheck {
+  id             String       @id @default(cuid())
+  projectId      String
+  status         HealthStatus
+  healthy        Boolean
+  responseTimeMs Int?
+  statusCode     Int?
+  message        String?
+  metadata       Json?
+  checkedAt      DateTime     @default(now())
+  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, checkedAt])
+  @@index([status])
+}
+
+model Deployment {
+  id            String    @id @default(cuid())
+  projectId     String
+  provider      String?
+  environment   String?
+  status        String
+  branch        String?
+  commitHash    String?
+  commitTitle   String?
+  deploymentUrl String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@index([status])
+}
+
+model Incident {
+  id          String    @id @default(cuid())
+  projectId   String
+  title       String
+  description String?
+  severity    String
+  status      String
+  resolved    Boolean   @default(false)
+  startedAt   DateTime  @default(now())
+  resolvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, startedAt])
+  @@index([resolved])
+  @@index([status])
+}
+
+model SupportTicket {
+  id           String         @id @default(cuid())
+  clientId     String
+  projectId    String?
+  assignedToId String?
+  title        String
+  description  String
+  priority     TicketPriority @default(MEDIUM)
+  status       TicketStatus   @default(OPEN)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  resolvedAt   DateTime?
+  assignedTo   AdminUser?     @relation("AssignedTickets", fields: [assignedToId], references: [id])
+  client       Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project      Project?       @relation(fields: [projectId], references: [id])
+
+  @@index([clientId])
+  @@index([projectId])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([priority])
+}
+
+model AuditLog {
+  id         String     @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  clientId   String?
+  projectId  String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime   @default(now())
+  actor      AdminUser? @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([clientId])
+  @@index([projectId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
 
 enum AdminRole {
   OWNER
@@ -89,9 +454,9 @@ enum IntegrationProvider {
   CLOUDINARY
   GITHUB
   NEON
+  CUSTOM_API
   RESEND
   MONZO
-  CUSTOM_API
 }
 
 enum IntegrationStatus {
@@ -155,552 +520,4 @@ enum BankSyncStatus {
   SYNCING
   SUCCESS
   FAILED
-}
-
-/**
- * --------------------------------------------------------------------------
- * Administrative users
- * --------------------------------------------------------------------------
- */
-
-model AdminUser {
-  id         String    @id @default(cuid())
-  authUserId String?   @unique
-  email      String    @unique
-  firstName  String?
-  lastName   String?
-  avatarUrl  String?
-  role       AdminRole @default(VIEWER)
-  active     Boolean   @default(true)
-
-  auditLogs       AuditLog[]
-  tickets         SupportTicket[]  @relation("AssignedTickets")
-  monzoConnection MonzoConnection?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-/**
- * --------------------------------------------------------------------------
- * Monzo Business connection
- * --------------------------------------------------------------------------
- */
-
-model MonzoConnection {
-  id          String @id @default(cuid())
-  adminUserId String @unique
-
-  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
-
-  monzoUserId String
-
-  encryptedAccessToken  String   @db.Text
-  encryptedRefreshToken String?  @db.Text
-  accessTokenExpiresAt  DateTime
-
-  accountId          String?         @unique
-  accountType        BankAccountType @default(UNKNOWN)
-  accountDescription String?
-  accountNumberLast4 String?
-  sortCodeLast4      String?
-  currency           String          @default("GBP")
-
-  availableBalanceMinor BigInt?
-  totalBalanceMinor     BigInt?
-  balanceUpdatedAt      DateTime?
-
-  active           Boolean        @default(true)
-  syncEnabled      Boolean        @default(true)
-  syncStatus       BankSyncStatus @default(IDLE)
-  connectedAt      DateTime       @default(now())
-  lastSyncedAt     DateTime?
-  lastSuccessfulAt DateTime?
-  lastErrorAt      DateTime?
-  lastError        String?        @db.Text
-  disconnectedAt   DateTime?
-
-  transactions MonzoTransaction[]
-  pots         MonzoPot[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([monzoUserId])
-  @@index([active])
-  @@index([syncStatus])
-  @@index([lastSyncedAt])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Imported Monzo transactions
- * --------------------------------------------------------------------------
- */
-
-model MonzoTransaction {
-  id                String @id @default(cuid())
-  monzoConnectionId String
-
-  monzoConnection MonzoConnection @relation(fields: [monzoConnectionId], references: [id], onDelete: Cascade)
-
-  monzoTransactionId String @unique
-  monzoAccountId     String
-
-  amountMinor      BigInt
-  localAmountMinor BigInt?
-  currency         String  @default("GBP")
-  localCurrency    String?
-
-  direction BankTransactionDirection
-  status    BankTransactionStatus    @default(UNKNOWN)
-
-  description          String?
-  merchantName         String?
-  merchantLogoUrl      String?
-  merchantCategory     String?
-  category             String?
-  notes                String? @db.Text
-  declineReason        String?
-  scheme               String?
-  paymentMethod        String?
-  counterpartyName     String?
-  counterpartyNumber   String?
-  counterpartySortCode String?
-
-  isLoad            Boolean @default(false)
-  includeInSpending Boolean @default(true)
-
-  matchStatus BankTransactionMatchStatus @default(UNMATCHED)
-
-  matchedClientId  String?
-  matchedProjectId String?
-  matchedInvoiceId String?
-
-  matchedClient  Client?        @relation("MonzoTransactionClient", fields: [matchedClientId], references: [id], onDelete: SetNull)
-  matchedProject Project?       @relation("MonzoTransactionProject", fields: [matchedProjectId], references: [id], onDelete: SetNull)
-  matchedInvoice ClientInvoice? @relation("MonzoTransactionInvoice", fields: [matchedInvoiceId], references: [id], onDelete: SetNull)
-
-  matchedAt DateTime?
-  matchedBy String?
-
-  createdAtMonzo DateTime
-  settledAt      DateTime?
-  declinedAt     DateTime?
-
-  rawData Json?
-
-  importedAt DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  @@index([monzoConnectionId])
-  @@index([monzoAccountId])
-  @@index([createdAtMonzo])
-  @@index([settledAt])
-  @@index([direction])
-  @@index([status])
-  @@index([category])
-  @@index([merchantName])
-  @@index([matchStatus])
-  @@index([matchedClientId])
-  @@index([matchedProjectId])
-  @@index([matchedInvoiceId])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Monzo Pots
- * --------------------------------------------------------------------------
- */
-
-model MonzoPot {
-  id                String @id @default(cuid())
-  monzoConnectionId String
-
-  monzoConnection MonzoConnection @relation(fields: [monzoConnectionId], references: [id], onDelete: Cascade)
-
-  monzoPotId String  @unique
-  name       String
-  style      String?
-
-  balanceMinor BigInt
-  currency     String @default("GBP")
-
-  deleted   Boolean   @default(false)
-  deletedAt DateTime?
-
-  rawData Json?
-
-  lastSyncedAt DateTime @default(now())
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@index([monzoConnectionId])
-  @@index([deleted])
-  @@index([name])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Clients
- * --------------------------------------------------------------------------
- */
-
-model Client {
-  id String @id @default(cuid())
-
-  clientRef String? @unique
-  name      String
-  slug      String  @unique
-  logoUrl   String?
-
-  productName String?
-  industry    String?
-  country     String?
-
-  status ClientStatus @default(ONBOARDING)
-
-  domain   String?
-  adminUrl String?
-
-  plan          String?
-  billingCycle  BillingCycle @default(ANNUAL)
-  renewalAt     DateTime?
-  liveSince     DateTime?
-  contractValue Decimal      @default(0) @db.Decimal(18, 2)
-  currency      CurrencyCode @default(NGN)
-
-  integrationKey  String?
-  integrationLive Boolean @default(false)
-
-  contactName  String?
-  contactRole  String?
-  contactEmail String?
-  contactPhone String?
-
-  projects Project[]
-  tickets  SupportTicket[]
-  billing  ClientBilling?
-  invoices ClientInvoice[]
-
-  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionClient")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([status])
-  @@index([renewalAt])
-  @@index([integrationKey])
-  @@index([createdAt])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Client billing summary
- * --------------------------------------------------------------------------
- */
-
-model ClientBilling {
-  id       String @id @default(cuid())
-  clientId String @unique
-
-  lastInvoiceRef    String?
-  lastInvoiceAt     DateTime?
-  lastInvoiceStatus InvoiceStatus?
-
-  outstandingAmount Decimal @default(0) @db.Decimal(18, 2)
-  totalPaid         Decimal @default(0) @db.Decimal(18, 2)
-
-  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-/**
- * --------------------------------------------------------------------------
- * Client invoices
- * --------------------------------------------------------------------------
- */
-
-model ClientInvoice {
-  id       String @id @default(cuid())
-  clientId String
-
-  invoiceRef String        @unique
-  status     InvoiceStatus @default(DRAFT)
-
-  description String?
-  currency    CurrencyCode @default(NGN)
-
-  subtotal Decimal @default(0) @db.Decimal(18, 2)
-  tax      Decimal @default(0) @db.Decimal(18, 2)
-  total    Decimal @default(0) @db.Decimal(18, 2)
-  paid     Decimal @default(0) @db.Decimal(18, 2)
-  balance  Decimal @default(0) @db.Decimal(18, 2)
-
-  issuedAt DateTime?
-  dueAt    DateTime?
-  paidAt   DateTime?
-
-  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-
-  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionInvoice")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([clientId])
-  @@index([status])
-  @@index([dueAt])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Projects
- * --------------------------------------------------------------------------
- */
-
-model Project {
-  id       String @id @default(cuid())
-  clientId String
-
-  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-
-  name        String
-  slug        String
-  description String?
-
-  category ProjectCategory
-  status   ProjectStatus   @default(ACTIVE)
-
-  productionUrl String?
-  adminUrl      String?
-  repositoryUrl String?
-
-  hostingProvider String?
-  databaseType    DatabaseType?
-  framework       String?
-
-  integrations Integration[]
-  snapshots    UsageSnapshot[]
-  healthChecks HealthCheck[]
-  deployments  Deployment[]
-  incidents    Incident[]
-  tickets      SupportTicket[]
-
-  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionProject")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([clientId, slug])
-  @@index([clientId])
-  @@index([status])
-  @@index([category])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Integrations
- * --------------------------------------------------------------------------
- */
-
-model Integration {
-  id        String @id @default(cuid())
-  projectId String
-
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  name     String
-  provider IntegrationProvider
-  status   IntegrationStatus   @default(PENDING)
-
-  baseUrl       String?
-  credentialKey String?
-
-  syncEnabled   Boolean   @default(true)
-  lastSyncAt    DateTime?
-  lastSuccessAt DateTime?
-  lastError     String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([projectId])
-  @@index([provider])
-  @@index([status])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Usage snapshots
- * --------------------------------------------------------------------------
- */
-
-model UsageSnapshot {
-  id        String @id @default(cuid())
-  projectId String
-
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  totalUsers     Int?
-  activeUsers    Int?
-  totalRecords   Int?
-  pendingActions Int?
-  storageBytes   BigInt?
-
-  metrics Json
-
-  recordedAt DateTime @default(now())
-
-  @@index([projectId, recordedAt])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Health monitoring
- * --------------------------------------------------------------------------
- */
-
-model HealthCheck {
-  id        String @id @default(cuid())
-  projectId String
-
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  status         HealthStatus
-  healthy        Boolean
-  responseTimeMs Int?
-  statusCode     Int?
-  message        String?
-  metadata       Json?
-
-  checkedAt DateTime @default(now())
-
-  @@index([projectId, checkedAt])
-  @@index([status])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Deployments
- * --------------------------------------------------------------------------
- */
-
-model Deployment {
-  id        String @id @default(cuid())
-  projectId String
-
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  provider      String?
-  environment   String?
-  status        String
-  branch        String?
-  commitHash    String?
-  commitTitle   String?
-  deploymentUrl String?
-
-  startedAt  DateTime?
-  finishedAt DateTime?
-  createdAt  DateTime  @default(now())
-
-  @@index([projectId, createdAt])
-  @@index([status])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Incidents
- * --------------------------------------------------------------------------
- */
-
-model Incident {
-  id        String @id @default(cuid())
-  projectId String
-
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  title       String
-  description String?
-  severity    String
-  status      String
-  resolved    Boolean @default(false)
-
-  startedAt  DateTime  @default(now())
-  resolvedAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-
-  @@index([projectId, startedAt])
-  @@index([resolved])
-  @@index([status])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Support tickets
- * --------------------------------------------------------------------------
- */
-
-model SupportTicket {
-  id       String @id @default(cuid())
-  clientId String
-
-  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-
-  projectId String?
-  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
-
-  assignedToId String?
-  assignedTo   AdminUser? @relation("AssignedTickets", fields: [assignedToId], references: [id], onDelete: SetNull)
-
-  title       String
-  description String
-
-  priority TicketPriority @default(MEDIUM)
-  status   TicketStatus   @default(OPEN)
-
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  resolvedAt DateTime?
-
-  @@index([clientId])
-  @@index([projectId])
-  @@index([assignedToId])
-  @@index([status])
-  @@index([priority])
-}
-
-/**
- * --------------------------------------------------------------------------
- * Audit logs
- * --------------------------------------------------------------------------
- */
-
-model AuditLog {
-  id String @id @default(cuid())
-
-  actorId String?
-  actor   AdminUser? @relation(fields: [actorId], references: [id], onDelete: SetNull)
-
-  action     String
-  entityType String
-  entityId   String?
-
-  clientId  String?
-  projectId String?
-
-  metadata  Json?
-  ipAddress String?
-  userAgent String?
-
-  createdAt DateTime @default(now())
-
-  @@index([actorId])
-  @@index([clientId])
-  @@index([projectId])
-  @@index([entityType, entityId])
-  @@index([createdAt])
 }
