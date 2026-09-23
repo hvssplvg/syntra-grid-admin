@@ -7,52 +7,647 @@ datasource db {
   provider = "postgresql"
 }
 
+/**
+ * =============================================================================
+ * ADMIN USERS
+ * =============================================================================
+ */
+
 model AdminUser {
-  id              String           @id @default(cuid())
-  authUserId      String?          @unique
-  email           String           @unique
-  firstName       String?
-  lastName        String?
-  avatarUrl       String?
-  role            AdminRole        @default(VIEWER)
-  active          Boolean          @default(true)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  id         String    @id @default(cuid())
+  authUserId String?   @unique
+  email      String    @unique
+  firstName  String?
+  lastName   String?
+  avatarUrl  String?
+  role       AdminRole @default(VIEWER)
+  active     Boolean   @default(true)
+
+  departmentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  department     Department?  @relation("DepartmentMembers", fields: [departmentId], references: [id])
+  departmentsLed Department[] @relation("DepartmentLead")
+
+  employee Employee?
+
   auditLogs       AuditLog[]
   monzoConnection MonzoConnection?
   tickets         SupportTicket[]  @relation("AssignedTickets")
+  ownedClients    Client[]         @relation("ClientAccountOwner")
+
+  candidateDocumentsUploaded CandidateDocument[]    @relation("CandidateDocumentUploadedBy")
+  interviewsCreated          Interview[]            @relation("InterviewCreatedBy")
+  interviewFeedback          InterviewFeedback[]    @relation("InterviewFeedbackReviewer")
+  interviewsAssigned         InterviewInterviewer[] @relation("InterviewInterviewerAdmin")
+  applicationsOwned          JobApplication[]       @relation("JobApplicationOwner")
+  jobOpeningsManaged         JobOpening[]           @relation("JobOpeningHiringManager")
+  recruitmentActivities      RecruitmentActivity[]  @relation("RecruitmentActivityActor")
+  recruitmentNotes           RecruitmentNote[]      @relation("RecruitmentNoteAuthor")
+  recruitmentOffersCreated   RecruitmentOffer[]     @relation("RecruitmentOfferCreatedBy")
+
+  @@index([departmentId])
 }
 
+/**
+ * =============================================================================
+ * DEPARTMENTS
+ * =============================================================================
+ */
+
+model Department {
+  id String @id @default(cuid())
+
+  name        String
+  slug        String  @unique
+  code        String? @unique
+  description String?
+
+  status DepartmentStatus @default(ACTIVE)
+
+  icon   String?
+  colour String?
+
+  leadId   String?
+  parentId String?
+
+  displayOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members AdminUser[] @relation("DepartmentMembers")
+  lead    AdminUser?  @relation("DepartmentLead", fields: [leadId], references: [id])
+
+  parent   Department?  @relation("DepartmentHierarchy", fields: [parentId], references: [id])
+  children Department[] @relation("DepartmentHierarchy")
+
+  employees Employee[]
+
+  jobOpenings       JobOpening[]
+  recruitmentOffers RecruitmentOffer[] @relation("RecruitmentOfferDepartment")
+
+  @@index([status])
+  @@index([leadId])
+  @@index([parentId])
+  @@index([displayOrder])
+  @@index([createdAt])
+}
+
+/**
+ * =============================================================================
+ * EMPLOYEES / TEAM
+ * =============================================================================
+ */
+
+model Employee {
+  id          String  @id @default(cuid())
+  employeeRef String? @unique
+
+  firstName     String
+  lastName      String
+  preferredName String?
+
+  personalEmail String?
+  workEmail     String? @unique
+  phone         String?
+
+  avatarUrl String?
+
+  country String?
+  city    String?
+
+  jobTitle String
+
+  status          EmployeeStatus   @default(ONBOARDING)
+  employmentType  EmploymentType   @default(FULL_TIME)
+  workArrangement WorkArrangement?
+
+  startDate DateTime?
+  endDate   DateTime?
+
+  departmentId String?
+  managerId    String?
+  adminUserId  String? @unique
+
+  linkedinUrl String?
+
+  bio   String?
+  notes String?
+
+  emergencyContactName         String?
+  emergencyContactPhone        String?
+  emergencyContactRelationship String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  adminUser  AdminUser?  @relation(fields: [adminUserId], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
+
+  manager       Employee?  @relation("EmployeeManagement", fields: [managerId], references: [id])
+  directReports Employee[] @relation("EmployeeManagement")
+
+  hiredFromApplication JobApplication? @relation("HiredEmployee")
+
+  @@index([createdAt])
+  @@index([departmentId])
+  @@index([employmentType])
+  @@index([firstName, lastName])
+  @@index([managerId])
+  @@index([startDate])
+  @@index([status])
+}
+
+/**
+ * =============================================================================
+ * CLIENTS
+ * =============================================================================
+ */
+
+model Client {
+  id          String  @id @default(cuid())
+  name        String
+  slug        String  @unique
+  displayName String?
+  clientRef   String? @unique
+
+  description String?
+
+  industry String?
+  country  String?
+  city     String?
+
+  logoUrl    String?
+  websiteUrl String?
+
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+  contactRole  String?
+
+  status           ClientStatus           @default(ONBOARDING)
+  priority         ClientPriority         @default(STANDARD)
+  relationshipType ClientRelationshipType @default(CLIENT)
+
+  accountOwnerId String?
+
+  relationshipStartedAt DateTime?
+  liveSince             DateTime?
+
+  notes String?
+
+  adminUrl    String?
+  domain      String?
+  productName String?
+  plan        String?
+
+  billingCycle  BillingCycle @default(ANNUAL)
+  contractValue Decimal      @default(0) @db.Decimal(18, 2)
+  currency      CurrencyCode @default(NGN)
+  renewalAt     DateTime?
+
+  integrationKey  String?
+  integrationLive Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accountOwner AdminUser? @relation("ClientAccountOwner", fields: [accountOwnerId], references: [id])
+
+  billing  ClientBilling?
+  contacts ClientContact[]
+  invoices ClientInvoice[]
+  projects Project[]
+  tickets  SupportTicket[]
+
+  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionClient")
+
+  @@index([status])
+  @@index([priority])
+  @@index([relationshipType])
+  @@index([accountOwnerId])
+  @@index([renewalAt])
+  @@index([integrationKey])
+  @@index([createdAt])
+}
+
+/**
+ * =============================================================================
+ * CLIENT CONTACTS
+ * =============================================================================
+ */
+
+model ClientContact {
+  id       String @id @default(cuid())
+  clientId String
+
+  firstName String
+  lastName  String
+  jobTitle  String?
+
+  email String?
+  phone String?
+
+  role ClientContactRole @default(GENERAL)
+
+  primary Boolean @default(false)
+  active  Boolean @default(true)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([email])
+  @@index([role])
+  @@index([active])
+  @@index([clientId, primary])
+}
+
+/**
+ * =============================================================================
+ * CLIENT BILLING
+ * =============================================================================
+ */
+
+model ClientBilling {
+  id       String @id @default(cuid())
+  clientId String @unique
+
+  lastInvoiceRef    String?
+  lastInvoiceAt     DateTime?
+  lastInvoiceStatus InvoiceStatus?
+
+  outstandingAmount Decimal @default(0) @db.Decimal(18, 2)
+  totalPaid         Decimal @default(0) @db.Decimal(18, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+}
+
+/**
+ * =============================================================================
+ * CLIENT INVOICES
+ * =============================================================================
+ */
+
+model ClientInvoice {
+  id         String @id @default(cuid())
+  clientId   String
+  invoiceRef String @unique
+
+  status      InvoiceStatus @default(DRAFT)
+  description String?
+
+  currency CurrencyCode @default(NGN)
+
+  subtotal Decimal @default(0) @db.Decimal(18, 2)
+  tax      Decimal @default(0) @db.Decimal(18, 2)
+  total    Decimal @default(0) @db.Decimal(18, 2)
+  paid     Decimal @default(0) @db.Decimal(18, 2)
+  balance  Decimal @default(0) @db.Decimal(18, 2)
+
+  issuedAt DateTime?
+  dueAt    DateTime?
+  paidAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionInvoice")
+
+  @@index([clientId])
+  @@index([status])
+  @@index([dueAt])
+}
+
+/**
+ * =============================================================================
+ * PROJECTS
+ * =============================================================================
+ */
+
+model Project {
+  id       String @id @default(cuid())
+  clientId String
+
+  name        String
+  slug        String
+  description String?
+
+  category ProjectCategory
+  status   ProjectStatus   @default(ACTIVE)
+
+  productionUrl String?
+  adminUrl      String?
+  repositoryUrl String?
+
+  hostingProvider String?
+  databaseType    DatabaseType?
+  framework       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  deployments  Deployment[]
+  healthChecks HealthCheck[]
+  incidents    Incident[]
+  integrations Integration[]
+  tickets      SupportTicket[]
+  snapshots    UsageSnapshot[]
+
+  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionProject")
+
+  @@unique([clientId, slug])
+  @@index([clientId])
+  @@index([status])
+  @@index([category])
+}
+
+/**
+ * =============================================================================
+ * INTEGRATIONS
+ * =============================================================================
+ */
+
+model Integration {
+  id        String @id @default(cuid())
+  projectId String
+
+  name     String
+  provider IntegrationProvider
+  status   IntegrationStatus   @default(PENDING)
+
+  baseUrl       String?
+  credentialKey String?
+
+  syncEnabled Boolean @default(true)
+
+  lastSyncAt    DateTime?
+  lastSuccessAt DateTime?
+  lastError     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([provider])
+  @@index([status])
+  @@index([projectId, provider])
+}
+
+/**
+ * =============================================================================
+ * USAGE
+ * =============================================================================
+ */
+
+model UsageSnapshot {
+  id        String @id @default(cuid())
+  projectId String
+
+  totalUsers     Int?
+  activeUsers    Int?
+  totalRecords   Int?
+  pendingActions Int?
+  storageBytes   BigInt?
+
+  metrics Json
+
+  recordedAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, recordedAt])
+}
+
+/**
+ * =============================================================================
+ * HEALTH
+ * =============================================================================
+ */
+
+model HealthCheck {
+  id        String @id @default(cuid())
+  projectId String
+
+  status  HealthStatus
+  healthy Boolean
+
+  responseTimeMs Int?
+  statusCode     Int?
+
+  message  String?
+  metadata Json?
+
+  checkedAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, checkedAt])
+  @@index([status])
+}
+
+/**
+ * =============================================================================
+ * DEPLOYMENTS
+ * =============================================================================
+ */
+
+model Deployment {
+  id        String @id @default(cuid())
+  projectId String
+
+  provider    String?
+  environment String?
+  status      String
+
+  branch      String?
+  commitHash  String?
+  commitTitle String?
+
+  deploymentUrl String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@index([status])
+}
+
+/**
+ * =============================================================================
+ * INCIDENTS
+ * =============================================================================
+ */
+
+model Incident {
+  id        String @id @default(cuid())
+  projectId String
+
+  title       String
+  description String?
+
+  severity String
+  status   String
+
+  resolved Boolean @default(false)
+
+  startedAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, startedAt])
+  @@index([resolved])
+  @@index([status])
+}
+
+/**
+ * =============================================================================
+ * SUPPORT
+ * =============================================================================
+ */
+
+model SupportTicket {
+  id String @id @default(cuid())
+
+  clientId  String
+  projectId String?
+
+  assignedToId String?
+
+  title       String
+  description String
+
+  priority TicketPriority @default(MEDIUM)
+  status   TicketStatus   @default(OPEN)
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  resolvedAt DateTime?
+
+  assignedTo AdminUser? @relation("AssignedTickets", fields: [assignedToId], references: [id])
+  client     Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project    Project?   @relation(fields: [projectId], references: [id])
+
+  @@index([clientId])
+  @@index([projectId])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([priority])
+  @@index([clientId, status])
+}
+
+/**
+ * =============================================================================
+ * AUDIT LOG
+ * =============================================================================
+ */
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  actorId String?
+
+  action     String
+  entityType String
+  entityId   String?
+
+  clientId  String?
+  projectId String?
+
+  metadata Json?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  actor AdminUser? @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([clientId])
+  @@index([projectId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+/**
+ * =============================================================================
+ * MONZO CONNECTION
+ * =============================================================================
+ */
+
 model MonzoConnection {
-  id                    String             @id @default(cuid())
-  adminUserId           String             @unique
-  monzoUserId           String
+  id          String @id @default(cuid())
+  adminUserId String @unique
+
+  monzoUserId String
+
   encryptedAccessToken  String
   encryptedRefreshToken String?
-  accessTokenExpiresAt  DateTime
-  accountId             String?            @unique
-  accountType           BankAccountType    @default(UNKNOWN)
-  accountDescription    String?
-  accountNumberLast4    String?
-  sortCodeLast4         String?
-  currency              String             @default("GBP")
+
+  accessTokenExpiresAt DateTime
+
+  accountId String? @unique
+
+  accountType        BankAccountType @default(UNKNOWN)
+  accountDescription String?
+
+  accountNumberLast4 String?
+  sortCodeLast4      String?
+
+  currency String @default("GBP")
+
   availableBalanceMinor BigInt?
   totalBalanceMinor     BigInt?
-  balanceUpdatedAt      DateTime?
-  active                Boolean            @default(true)
-  syncEnabled           Boolean            @default(true)
-  syncStatus            BankSyncStatus     @default(IDLE)
-  connectedAt           DateTime           @default(now())
-  lastSyncedAt          DateTime?
-  lastSuccessfulAt      DateTime?
-  lastErrorAt           DateTime?
-  lastError             String?
-  disconnectedAt        DateTime?
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
-  adminUser             AdminUser          @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
-  pots                  MonzoPot[]
-  transactions          MonzoTransaction[]
+
+  balanceUpdatedAt DateTime?
+
+  active      Boolean @default(true)
+  syncEnabled Boolean @default(true)
+
+  syncStatus BankSyncStatus @default(IDLE)
+
+  connectedAt DateTime @default(now())
+
+  lastSyncedAt     DateTime?
+  lastSuccessfulAt DateTime?
+
+  lastErrorAt DateTime?
+  lastError   String?
+
+  disconnectedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  pots         MonzoPot[]
+  transactions MonzoTransaction[]
 
   @@index([monzoUserId])
   @@index([active])
@@ -60,47 +655,73 @@ model MonzoConnection {
   @@index([lastSyncedAt])
 }
 
+/**
+ * =============================================================================
+ * MONZO TRANSACTIONS
+ * =============================================================================
+ */
+
 model MonzoTransaction {
-  id                   String                     @id @default(cuid())
-  monzoConnectionId    String
-  monzoTransactionId   String                     @unique
-  monzoAccountId       String
-  amountMinor          BigInt
-  localAmountMinor     BigInt?
-  currency             String                     @default("GBP")
-  localCurrency        String?
-  direction            BankTransactionDirection
-  status               BankTransactionStatus      @default(UNKNOWN)
-  description          String?
-  merchantName         String?
-  merchantLogoUrl      String?
-  merchantCategory     String?
-  category             String?
-  notes                String?
-  declineReason        String?
-  scheme               String?
-  paymentMethod        String?
+  id                String @id @default(cuid())
+  monzoConnectionId String
+
+  monzoTransactionId String @unique
+  monzoAccountId     String
+
+  amountMinor      BigInt
+  localAmountMinor BigInt?
+
+  currency      String  @default("GBP")
+  localCurrency String?
+
+  direction BankTransactionDirection
+  status    BankTransactionStatus    @default(UNKNOWN)
+
+  description String?
+
+  merchantName     String?
+  merchantLogoUrl  String?
+  merchantCategory String?
+
+  category String?
+  notes    String?
+
+  declineReason String?
+
+  scheme        String?
+  paymentMethod String?
+
   counterpartyName     String?
   counterpartyNumber   String?
   counterpartySortCode String?
-  isLoad               Boolean                    @default(false)
-  includeInSpending    Boolean                    @default(true)
-  matchStatus          BankTransactionMatchStatus @default(UNMATCHED)
-  matchedClientId      String?
-  matchedProjectId     String?
-  matchedInvoiceId     String?
-  matchedAt            DateTime?
-  matchedBy            String?
-  createdAtMonzo       DateTime
-  settledAt            DateTime?
-  declinedAt           DateTime?
-  rawData              Json?
-  importedAt           DateTime                   @default(now())
-  updatedAt            DateTime                   @updatedAt
-  matchedClient        Client?                    @relation("MonzoTransactionClient", fields: [matchedClientId], references: [id])
-  matchedInvoice       ClientInvoice?             @relation("MonzoTransactionInvoice", fields: [matchedInvoiceId], references: [id])
-  matchedProject       Project?                   @relation("MonzoTransactionProject", fields: [matchedProjectId], references: [id])
-  monzoConnection      MonzoConnection            @relation(fields: [monzoConnectionId], references: [id], onDelete: Cascade)
+
+  isLoad            Boolean @default(false)
+  includeInSpending Boolean @default(true)
+
+  matchStatus BankTransactionMatchStatus @default(UNMATCHED)
+
+  matchedClientId  String?
+  matchedProjectId String?
+  matchedInvoiceId String?
+
+  matchedAt DateTime?
+  matchedBy String?
+
+  createdAtMonzo DateTime
+
+  settledAt  DateTime?
+  declinedAt DateTime?
+
+  rawData Json?
+
+  importedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  matchedClient  Client?        @relation("MonzoTransactionClient", fields: [matchedClientId], references: [id])
+  matchedInvoice ClientInvoice? @relation("MonzoTransactionInvoice", fields: [matchedInvoiceId], references: [id])
+  matchedProject Project?       @relation("MonzoTransactionProject", fields: [matchedProjectId], references: [id])
+
+  monzoConnection MonzoConnection @relation(fields: [monzoConnectionId], references: [id], onDelete: Cascade)
 
   @@index([monzoConnectionId])
   @@index([monzoAccountId])
@@ -116,267 +737,496 @@ model MonzoTransaction {
   @@index([matchedInvoiceId])
 }
 
+/**
+ * =============================================================================
+ * MONZO POTS
+ * =============================================================================
+ */
+
 model MonzoPot {
-  id                String          @id @default(cuid())
+  id                String @id @default(cuid())
   monzoConnectionId String
-  monzoPotId        String          @unique
-  name              String
-  style             String?
-  balanceMinor      BigInt
-  currency          String          @default("GBP")
-  deleted           Boolean         @default(false)
-  deletedAt         DateTime?
-  rawData           Json?
-  lastSyncedAt      DateTime        @default(now())
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  monzoConnection   MonzoConnection @relation(fields: [monzoConnectionId], references: [id], onDelete: Cascade)
+
+  monzoPotId String @unique
+
+  name  String
+  style String?
+
+  balanceMinor BigInt
+  currency     String @default("GBP")
+
+  deleted   Boolean   @default(false)
+  deletedAt DateTime?
+
+  rawData Json?
+
+  lastSyncedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  monzoConnection MonzoConnection @relation(fields: [monzoConnectionId], references: [id], onDelete: Cascade)
 
   @@index([monzoConnectionId])
   @@index([deleted])
   @@index([name])
 }
 
-model Client {
-  id                       String             @id @default(cuid())
-  name                     String
-  slug                     String             @unique
-  industry                 String?
-  country                  String?
-  logoUrl                  String?
-  contactName              String?
-  contactEmail             String?
-  contactPhone             String?
-  status                   ClientStatus       @default(ONBOARDING)
-  createdAt                DateTime           @default(now())
-  updatedAt                DateTime           @updatedAt
-  adminUrl                 String?
-  billingCycle             BillingCycle       @default(ANNUAL)
-  clientRef                String?            @unique
-  contactRole              String?
-  contractValue            Decimal            @default(0) @db.Decimal(18, 2)
-  currency                 CurrencyCode       @default(NGN)
-  domain                   String?
-  integrationKey           String?
-  integrationLive          Boolean            @default(false)
-  liveSince                DateTime?
-  plan                     String?
-  productName              String?
-  renewalAt                DateTime?
-  billing                  ClientBilling?
-  invoices                 ClientInvoice[]
-  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionClient")
-  projects                 Project[]
-  tickets                  SupportTicket[]
+/**
+ * =============================================================================
+ * RECRUITMENT — CANDIDATES
+ * =============================================================================
+ */
 
+model Candidate {
+  id String @id @default(cuid())
+
+  firstName     String
+  lastName      String
+  preferredName String?
+
+  email String?
+  phone String?
+
+  avatarUrl String?
+
+  country String?
+  city    String?
+
+  linkedinUrl  String?
+  portfolioUrl String?
+  websiteUrl   String?
+
+  currentJobTitle String?
+  currentCompany  String?
+
+  summary String?
+  notes   String?
+
+  source       CandidateSource @default(OTHER)
+  sourceDetail String?
+
+  status CandidateStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  documents    CandidateDocument[]
+  applications JobApplication[]
+  activities   RecruitmentActivity[]
+  notesHistory RecruitmentNote[]
+
+  @@index([createdAt])
+  @@index([email])
+  @@index([firstName, lastName])
+  @@index([phone])
+  @@index([source])
   @@index([status])
-  @@index([renewalAt])
-  @@index([integrationKey])
+}
+
+/**
+ * =============================================================================
+ * RECRUITMENT — DOCUMENTS
+ * =============================================================================
+ */
+
+model CandidateDocument {
+  id String @id @default(cuid())
+
+  candidateId   String
+  applicationId String?
+
+  type CandidateDocumentType
+
+  name String
+  url  String
+
+  mimeType  String?
+  sizeBytes BigInt?
+
+  uploadedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  application JobApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  candidate   Candidate       @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  uploadedBy AdminUser? @relation("CandidateDocumentUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([applicationId])
+  @@index([candidateId])
+  @@index([createdAt])
+  @@index([type])
+  @@index([uploadedById])
+}
+
+/**
+ * =============================================================================
+ * RECRUITMENT — JOB OPENINGS
+ * =============================================================================
+ */
+
+model JobOpening {
+  id String @id @default(cuid())
+
+  jobRef String? @unique
+
+  title String
+
+  departmentId String?
+
+  description      String?
+  responsibilities String?
+  requirements     String?
+  benefits         String?
+
+  employmentType  EmploymentType
+  workArrangement WorkArrangement?
+
+  country String?
+  city    String?
+
+  salaryMin Decimal?      @db.Decimal(18, 2)
+  salaryMax Decimal?      @db.Decimal(18, 2)
+  currency  CurrencyCode?
+
+  vacancies Int @default(1)
+
+  status JobOpeningStatus @default(DRAFT)
+
+  openedAt DateTime?
+  closesAt DateTime?
+  closedAt DateTime?
+
+  targetStartDate DateTime?
+
+  hiringManagerId String?
+
+  published   Boolean   @default(false)
+  publishedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  applications JobApplication[]
+
+  department Department? @relation(fields: [departmentId], references: [id])
+
+  hiringManager AdminUser? @relation("JobOpeningHiringManager", fields: [hiringManagerId], references: [id])
+
+  @@index([closesAt])
+  @@index([createdAt])
+  @@index([departmentId])
+  @@index([employmentType])
+  @@index([hiringManagerId])
+  @@index([openedAt])
+  @@index([published])
+  @@index([status])
+  @@index([workArrangement])
+}
+
+/**
+ * =============================================================================
+ * RECRUITMENT — APPLICATIONS
+ * =============================================================================
+ */
+
+model JobApplication {
+  id String @id @default(cuid())
+
+  applicationRef String? @unique
+
+  candidateId  String
+  jobOpeningId String
+
+  stage  ApplicationStage  @default(APPLIED)
+  status ApplicationStatus @default(ACTIVE)
+
+  ownerId String?
+
+  appliedAt      DateTime @default(now())
+  stageChangedAt DateTime @default(now())
+
+  shortlistedAt DateTime?
+  rejectedAt    DateTime?
+  withdrawnAt   DateTime?
+  hiredAt       DateTime?
+
+  rejectionReason  String?
+  withdrawalReason String?
+
+  rating Int?
+
+  notes String?
+
+  hiredEmployeeId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  candidate Candidate @relation(fields: [candidateId], references: [id])
+
+  jobOpening JobOpening @relation(fields: [jobOpeningId], references: [id])
+
+  owner AdminUser? @relation("JobApplicationOwner", fields: [ownerId], references: [id])
+
+  hiredEmployee Employee? @relation("HiredEmployee", fields: [hiredEmployeeId], references: [id])
+
+  documents    CandidateDocument[]
+  interviews   Interview[]
+  activities   RecruitmentActivity[]
+  notesHistory RecruitmentNote[]
+  offers       RecruitmentOffer[]
+
+  @@unique([candidateId, jobOpeningId])
+  @@index([appliedAt])
+  @@index([candidateId])
+  @@index([createdAt])
+  @@index([jobOpeningId])
+  @@index([ownerId])
+  @@index([stageChangedAt])
+  @@index([stage])
+  @@index([status])
+}
+
+/**
+ * =============================================================================
+ * RECRUITMENT — INTERVIEWS
+ * =============================================================================
+ */
+
+model Interview {
+  id String @id @default(cuid())
+
+  applicationId String
+
+  title String
+
+  type   InterviewType   @default(VIDEO)
+  status InterviewStatus @default(SCHEDULED)
+
+  scheduledAt     DateTime
+  durationMinutes Int?
+
+  timezone String?
+
+  location   String?
+  meetingUrl String?
+
+  instructions String?
+  notes        String?
+
+  completedAt DateTime?
+  cancelledAt DateTime?
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  application JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  createdBy AdminUser? @relation("InterviewCreatedBy", fields: [createdById], references: [id])
+
+  feedback     InterviewFeedback[]
+  interviewers InterviewInterviewer[]
+
+  @@index([applicationId])
+  @@index([createdAt])
+  @@index([createdById])
+  @@index([scheduledAt])
+  @@index([status])
+}
+
+/**
+ * =============================================================================
+ * RECRUITMENT — INTERVIEWERS
+ * =============================================================================
+ */
+
+model InterviewInterviewer {
+  id String @id @default(cuid())
+
+  interviewId String
+  adminUserId String
+
+  createdAt DateTime @default(now())
+
+  adminUser AdminUser @relation("InterviewInterviewerAdmin", fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  @@unique([interviewId, adminUserId])
+  @@index([adminUserId])
+  @@index([interviewId])
+}
+
+/**
+ * =============================================================================
+ * RECRUITMENT — INTERVIEW FEEDBACK
+ * =============================================================================
+ */
+
+model InterviewFeedback {
+  id String @id @default(cuid())
+
+  interviewId String
+  reviewerId  String
+
+  recommendation InterviewRecommendation
+
+  score Int?
+
+  strengths String?
+  concerns  String?
+  notes     String?
+
+  submittedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  reviewer AdminUser @relation("InterviewFeedbackReviewer", fields: [reviewerId], references: [id])
+
+  @@unique([interviewId, reviewerId])
+  @@index([interviewId])
+  @@index([recommendation])
+  @@index([reviewerId])
+  @@index([submittedAt])
+}
+
+/**
+ * =============================================================================
+ * RECRUITMENT — OFFERS
+ * =============================================================================
+ */
+
+model RecruitmentOffer {
+  id String @id @default(cuid())
+
+  applicationId String
+
+  status OfferStatus @default(DRAFT)
+
+  jobTitle String
+
+  departmentId String?
+
+  employmentType  EmploymentType
+  workArrangement WorkArrangement?
+
+  salary   Decimal?      @db.Decimal(18, 2)
+  currency CurrencyCode?
+
+  proposedStartDate DateTime?
+  expiresAt         DateTime?
+
+  documentUrl String?
+
+  notes String?
+
+  createdById String?
+
+  sentAt      DateTime?
+  viewedAt    DateTime?
+  acceptedAt  DateTime?
+  declinedAt  DateTime?
+  withdrawnAt DateTime?
+
+  declineReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  application JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  createdBy AdminUser? @relation("RecruitmentOfferCreatedBy", fields: [createdById], references: [id])
+
+  department Department? @relation("RecruitmentOfferDepartment", fields: [departmentId], references: [id])
+
+  @@index([applicationId])
+  @@index([createdAt])
+  @@index([createdById])
+  @@index([departmentId])
+  @@index([proposedStartDate])
+  @@index([status])
+}
+
+/**
+ * =============================================================================
+ * RECRUITMENT — NOTES
+ * =============================================================================
+ */
+
+model RecruitmentNote {
+  id String @id @default(cuid())
+
+  candidateId   String
+  applicationId String?
+
+  authorId String?
+
+  body String
+
+  private Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  application JobApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  author AdminUser? @relation("RecruitmentNoteAuthor", fields: [authorId], references: [id])
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@index([authorId])
+  @@index([candidateId])
   @@index([createdAt])
 }
 
-model ClientBilling {
-  id                String         @id @default(cuid())
-  clientId          String         @unique
-  lastInvoiceRef    String?
-  lastInvoiceAt     DateTime?
-  lastInvoiceStatus InvoiceStatus?
-  outstandingAmount Decimal        @default(0) @db.Decimal(18, 2)
-  totalPaid         Decimal        @default(0) @db.Decimal(18, 2)
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  client            Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
-}
+/**
+ * =============================================================================
+ * RECRUITMENT — ACTIVITY
+ * =============================================================================
+ */
 
-model ClientInvoice {
-  id                       String             @id @default(cuid())
-  clientId                 String
-  invoiceRef               String             @unique
-  status                   InvoiceStatus      @default(DRAFT)
-  description              String?
-  currency                 CurrencyCode       @default(NGN)
-  subtotal                 Decimal            @default(0) @db.Decimal(18, 2)
-  tax                      Decimal            @default(0) @db.Decimal(18, 2)
-  total                    Decimal            @default(0) @db.Decimal(18, 2)
-  paid                     Decimal            @default(0) @db.Decimal(18, 2)
-  balance                  Decimal            @default(0) @db.Decimal(18, 2)
-  issuedAt                 DateTime?
-  dueAt                    DateTime?
-  paidAt                   DateTime?
-  createdAt                DateTime           @default(now())
-  updatedAt                DateTime           @updatedAt
-  client                   Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionInvoice")
+model RecruitmentActivity {
+  id String @id @default(cuid())
 
-  @@index([clientId])
-  @@index([status])
-  @@index([dueAt])
-}
+  candidateId   String
+  applicationId String?
 
-model Project {
-  id                       String             @id @default(cuid())
-  clientId                 String
-  name                     String
-  slug                     String
-  description              String?
-  category                 ProjectCategory
-  status                   ProjectStatus      @default(ACTIVE)
-  productionUrl            String?
-  adminUrl                 String?
-  repositoryUrl            String?
-  hostingProvider          String?
-  databaseType             DatabaseType?
-  framework                String?
-  createdAt                DateTime           @default(now())
-  updatedAt                DateTime           @updatedAt
-  deployments              Deployment[]
-  healthChecks             HealthCheck[]
-  incidents                Incident[]
-  integrations             Integration[]
-  matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionProject")
-  client                   Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  tickets                  SupportTicket[]
-  snapshots                UsageSnapshot[]
+  actorId String?
 
-  @@unique([clientId, slug])
-  @@index([clientId])
-  @@index([status])
-  @@index([category])
-}
+  type RecruitmentActivityType
 
-model Integration {
-  id            String              @id @default(cuid())
-  projectId     String
-  name          String
-  provider      IntegrationProvider
-  status        IntegrationStatus   @default(PENDING)
-  baseUrl       String?
-  credentialKey String?
-  syncEnabled   Boolean             @default(true)
-  lastSyncAt    DateTime?
-  lastSuccessAt DateTime?
-  lastError     String?
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  @@index([projectId])
-  @@index([provider])
-  @@index([status])
-}
-
-model UsageSnapshot {
-  id             String   @id @default(cuid())
-  projectId      String
-  totalUsers     Int?
-  activeUsers    Int?
-  totalRecords   Int?
-  pendingActions Int?
-  storageBytes   BigInt?
-  metrics        Json
-  recordedAt     DateTime @default(now())
-  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  @@index([projectId, recordedAt])
-}
-
-model HealthCheck {
-  id             String       @id @default(cuid())
-  projectId      String
-  status         HealthStatus
-  healthy        Boolean
-  responseTimeMs Int?
-  statusCode     Int?
-  message        String?
-  metadata       Json?
-  checkedAt      DateTime     @default(now())
-  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  @@index([projectId, checkedAt])
-  @@index([status])
-}
-
-model Deployment {
-  id            String    @id @default(cuid())
-  projectId     String
-  provider      String?
-  environment   String?
-  status        String
-  branch        String?
-  commitHash    String?
-  commitTitle   String?
-  deploymentUrl String?
-  startedAt     DateTime?
-  finishedAt    DateTime?
-  createdAt     DateTime  @default(now())
-  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  @@index([projectId, createdAt])
-  @@index([status])
-}
-
-model Incident {
-  id          String    @id @default(cuid())
-  projectId   String
-  title       String
   description String?
-  severity    String
-  status      String
-  resolved    Boolean   @default(false)
-  startedAt   DateTime  @default(now())
-  resolvedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  metadata    Json?
 
-  @@index([projectId, startedAt])
-  @@index([resolved])
-  @@index([status])
-}
+  createdAt DateTime @default(now())
 
-model SupportTicket {
-  id           String         @id @default(cuid())
-  clientId     String
-  projectId    String?
-  assignedToId String?
-  title        String
-  description  String
-  priority     TicketPriority @default(MEDIUM)
-  status       TicketStatus   @default(OPEN)
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-  resolvedAt   DateTime?
-  assignedTo   AdminUser?     @relation("AssignedTickets", fields: [assignedToId], references: [id])
-  client       Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  project      Project?       @relation(fields: [projectId], references: [id])
+  actor AdminUser? @relation("RecruitmentActivityActor", fields: [actorId], references: [id])
 
-  @@index([clientId])
-  @@index([projectId])
-  @@index([assignedToId])
-  @@index([status])
-  @@index([priority])
-}
+  application JobApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
-model AuditLog {
-  id         String     @id @default(cuid())
-  actorId    String?
-  action     String
-  entityType String
-  entityId   String?
-  clientId   String?
-  projectId  String?
-  metadata   Json?
-  ipAddress  String?
-  userAgent  String?
-  createdAt  DateTime   @default(now())
-  actor      AdminUser? @relation(fields: [actorId], references: [id])
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
   @@index([actorId])
-  @@index([clientId])
-  @@index([projectId])
-  @@index([entityType, entityId])
+  @@index([applicationId])
+  @@index([candidateId])
   @@index([createdAt])
+  @@index([type])
 }
+
+/**
+ * =============================================================================
+ * ENUMS — ADMIN / COMPANY
+ * =============================================================================
+ */
 
 enum AdminRole {
   OWNER
@@ -387,6 +1237,41 @@ enum AdminRole {
   VIEWER
 }
 
+enum DepartmentStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum EmployeeStatus {
+  ONBOARDING
+  ACTIVE
+  ON_LEAVE
+  SUSPENDED
+  OFFBOARDING
+  FORMER
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACTOR
+  INTERN
+  TEMPORARY
+}
+
+enum WorkArrangement {
+  REMOTE
+  HYBRID
+  ONSITE
+}
+
+/**
+ * =============================================================================
+ * ENUMS — CLIENTS
+ * =============================================================================
+ */
+
 enum ClientStatus {
   LEAD
   ONBOARDING
@@ -394,6 +1279,35 @@ enum ClientStatus {
   PAUSED
   ARCHIVED
 }
+
+enum ClientPriority {
+  STANDARD
+  IMPORTANT
+  STRATEGIC
+}
+
+enum ClientRelationshipType {
+  CLIENT
+  PARTNER
+  STRATEGIC_PARTNER
+}
+
+enum ClientContactRole {
+  GENERAL
+  DECISION_MAKER
+  EXECUTIVE
+  OPERATIONS
+  FINANCE
+  TECHNICAL
+  PRODUCT
+  SUPPORT
+}
+
+/**
+ * =============================================================================
+ * ENUMS — BILLING
+ * =============================================================================
+ */
 
 enum BillingCycle {
   MONTHLY
@@ -417,6 +1331,12 @@ enum InvoiceStatus {
   OVERDUE
   CANCELLED
 }
+
+/**
+ * =============================================================================
+ * ENUMS — PROJECTS
+ * =============================================================================
+ */
 
 enum ProjectStatus {
   DEVELOPMENT
@@ -447,6 +1367,12 @@ enum DatabaseType {
   OTHER
 }
 
+/**
+ * =============================================================================
+ * ENUMS — INTEGRATIONS
+ * =============================================================================
+ */
+
 enum IntegrationProvider {
   FIREBASE
   RENTWISE_API
@@ -457,6 +1383,8 @@ enum IntegrationProvider {
   CUSTOM_API
   RESEND
   MONZO
+  MONNIFY
+  PAYSTACK
 }
 
 enum IntegrationStatus {
@@ -465,6 +1393,12 @@ enum IntegrationStatus {
   DEGRADED
   DISCONNECTED
 }
+
+/**
+ * =============================================================================
+ * ENUMS — MONITORING / SUPPORT
+ * =============================================================================
+ */
 
 enum HealthStatus {
   HEALTHY
@@ -487,6 +1421,12 @@ enum TicketPriority {
   HIGH
   URGENT
 }
+
+/**
+ * =============================================================================
+ * ENUMS — BANKING
+ * =============================================================================
+ */
 
 enum BankAccountType {
   UK_RETAIL
@@ -520,4 +1460,139 @@ enum BankSyncStatus {
   SYNCING
   SUCCESS
   FAILED
+}
+
+/**
+ * =============================================================================
+ * ENUMS — RECRUITMENT
+ * =============================================================================
+ */
+
+enum ApplicationStage {
+  APPLIED
+  SCREENING
+  SHORTLISTED
+  INTERVIEW
+  ASSESSMENT
+  FINAL_INTERVIEW
+  OFFER
+  HIRED
+}
+
+enum ApplicationStatus {
+  ACTIVE
+  HIRED
+  REJECTED
+  WITHDRAWN
+  ARCHIVED
+}
+
+enum CandidateDocumentType {
+  CV
+  RESUME
+  COVER_LETTER
+  PORTFOLIO
+  CERTIFICATE
+  ASSESSMENT
+  OFFER
+  OTHER
+}
+
+enum CandidateSource {
+  CAREERS_PAGE
+  LINKEDIN
+  INSTAGRAM
+  REFERRAL
+  DIRECT
+  RECRUITER
+  AGENCY
+  UNIVERSITY
+  EVENT
+  OTHER
+}
+
+enum CandidateStatus {
+  ACTIVE
+  TALENT_POOL
+  HIRED
+  DO_NOT_CONTACT
+  ARCHIVED
+}
+
+enum InterviewRecommendation {
+  STRONG_YES
+  YES
+  MIXED
+  NO
+  STRONG_NO
+}
+
+enum InterviewStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+  RESCHEDULED
+}
+
+enum InterviewType {
+  PHONE
+  VIDEO
+  ONSITE
+  TECHNICAL
+  PORTFOLIO
+  CULTURE
+  FINAL
+  OTHER
+}
+
+enum JobOpeningStatus {
+  DRAFT
+  OPEN
+  PAUSED
+  CLOSED
+  FILLED
+  CANCELLED
+}
+
+enum OfferStatus {
+  DRAFT
+  APPROVAL_PENDING
+  APPROVED
+  SENT
+  VIEWED
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+  EXPIRED
+}
+
+enum RecruitmentActivityType {
+  APPLICATION_RECEIVED
+  APPLICATION_UPDATED
+  STAGE_CHANGED
+  CANDIDATE_UPDATED
+
+  NOTE_ADDED
+  DOCUMENT_ADDED
+
+  INTERVIEW_SCHEDULED
+  INTERVIEW_RESCHEDULED
+  INTERVIEW_COMPLETED
+  INTERVIEW_CANCELLED
+  INTERVIEW_FEEDBACK_SUBMITTED
+
+  OFFER_CREATED
+  OFFER_UPDATED
+  OFFER_SENT
+  OFFER_ACCEPTED
+  OFFER_DECLINED
+  OFFER_WITHDRAWN
+  OFFER_EXPIRED
+
+  CANDIDATE_REJECTED
+  CANDIDATE_WITHDREW
+
+  CANDIDATE_HIRED
+  EMPLOYEE_CREATED
 }

@@ -14,11 +14,14 @@ import {
 
 import {
   Bell,
+  Building2,
   Check,
   ChevronDown,
   Command,
+  LoaderCircle,
   LogOut,
   Moon,
+  RefreshCw,
   Search,
   Settings,
   Sun,
@@ -61,13 +64,6 @@ type SearchResult = {
   section: string;
 };
 
-type CompanyContext =
-  | 'company'
-  | 'rentwise'
-  | 'esteem'
-  | 'meldex'
-  | 'zing';
-
 type ThemeMode =
   | 'light'
   | 'dark';
@@ -79,46 +75,123 @@ type TabIndicatorPosition = {
 };
 
 /* ============================================================================
-   COMPANY CONTEXTS
+   WORKSPACE CONTEXT TYPES
 ============================================================================ */
 
-const COMPANY_CONTEXTS: Array<{
-  id: CompanyContext;
+type WorkspaceContextType =
+  | 'company'
+  | 'client';
+
+type WorkspaceContext = {
+  id: string;
+  type: WorkspaceContextType;
+
+  /**
+   * Database Client.id when type === "client".
+   *
+   * Company-wide Syntra Grid context has no entityId.
+   */
+  entityId: string | null;
+
   label: string;
   shortLabel: string;
   description: string;
-}> = [
+
+  logoUrl?: string | null;
+
+  status?:
+    | string
+    | null;
+};
+
+/* ============================================================================
+   CLIENT API TYPES
+
+   Keep this deliberately small.
+
+   AdminHeader only needs enough information to render the workspace selector.
+   It does not need the entire Client model.
+============================================================================ */
+
+type ClientApiRecord = {
+  id: string;
+
+  name: string;
+
+  displayName?:
+    | string
+    | null;
+
+  slug?:
+    | string
+    | null;
+
+  industry?:
+    | string
+    | null;
+
+  description?:
+    | string
+    | null;
+
+  logo?:
+    | string
+    | null;
+
+  logoUrl?:
+    | string
+    | null;
+
+  status:
+    | string;
+
+  productName?:
+    | string
+    | null;
+};
+
+type ClientsApiResponse = {
+  clients?: ClientApiRecord[];
+
+  data?: ClientApiRecord[];
+
+  items?: ClientApiRecord[];
+
+  error?: string;
+
+  message?: string;
+};
+
+/* ============================================================================
+   CONSTANTS
+============================================================================ */
+
+const WORKSPACE_STORAGE_KEY =
+  'syntragrid.workspace-context';
+
+const OPERATIONAL_CLIENT_STATUSES =
+  new Set([
+    'ACTIVE',
+    'ONBOARDING',
+    'PAUSED',
+  ]);
+
+const COMPANY_CONTEXT: WorkspaceContext =
   {
     id: 'company',
+    type: 'company',
+    entityId: null,
+
     label: 'Syntra Grid',
     shortLabel: 'SG',
-    description: 'Company-wide view',
-  },
-  {
-    id: 'rentwise',
-    label: 'RentWise',
-    shortLabel: 'RW',
-    description: 'Property technology',
-  },
-  {
-    id: 'esteem',
-    label: 'Esteem Learning Centre',
-    shortLabel: 'EL',
-    description: 'Education platform',
-  },
-  {
-    id: 'meldex',
-    label: 'Meldex Industries',
-    shortLabel: 'MI',
-    description: 'Corporate platform',
-  },
-  {
-    id: 'zing',
-    label: 'Zing',
-    shortLabel: 'ZG',
-    description: 'Mobility product',
-  },
-];
+
+    description:
+      'Company-wide view',
+
+    logoUrl: null,
+
+    status: 'ACTIVE',
+  };
 
 /* ============================================================================
    COMPONENT
@@ -213,38 +286,422 @@ export default function AdminHeader({
   ] = useState(false);
 
   const [
-    selectedContext,
-    setSelectedContext,
+    signingOut,
+    setSigningOut,
+  ] = useState(false);
+
+  /* --------------------------------------------------------------------------
+     WORKSPACE CONTEXT STATE
+  -------------------------------------------------------------------------- */
+
+  const [
+    clients,
+    setClients,
   ] =
-    useState<CompanyContext>(
-      'company',
+    useState<ClientApiRecord[]>(
+      [],
     );
 
   const [
-    signingOut,
-    setSigningOut,
+    clientsLoading,
+    setClientsLoading,
+  ] = useState(true);
+
+  const [
+    clientsError,
+    setClientsError,
+  ] =
+    useState<string | null>(
+      null,
+    );
+
+  const [
+    selectedContextId,
+    setSelectedContextId,
+  ] =
+    useState<string>(
+      COMPANY_CONTEXT.id,
+    );
+
+  const [
+    contextHydrated,
+    setContextHydrated,
   ] = useState(false);
 
   const ActiveSectionIcon =
     activeSection.icon;
 
   /* --------------------------------------------------------------------------
-     CURRENT CONTEXT
+     LOAD SAVED WORKSPACE CONTEXT
+  -------------------------------------------------------------------------- */
+
+  useEffect(() => {
+    try {
+      const stored =
+        window.localStorage.getItem(
+          WORKSPACE_STORAGE_KEY,
+        );
+
+      if (stored) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setSelectedContextId(
+          stored,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        'Could not restore workspace context:',
+        error,
+      );
+    } finally {
+      setContextHydrated(
+        true,
+      );
+    }
+  }, []);
+
+  /* --------------------------------------------------------------------------
+     LOAD CLIENTS
+
+     Reuses:
+       GET /api/admin/clients
+
+     No Prisma is imported into this client component.
+  -------------------------------------------------------------------------- */
+
+  const loadClients =
+    useCallback(async () => {
+      setClientsLoading(
+        true,
+      );
+
+      setClientsError(
+        null,
+      );
+
+      try {
+        const response =
+          await fetch(
+            '/api/admin/clients',
+            {
+              method:
+                'GET',
+
+              credentials:
+                'include',
+
+              cache:
+                'no-store',
+
+              headers: {
+                Accept:
+                  'application/json',
+              },
+            },
+          );
+
+        const payload =
+          (await response
+            .json()
+            .catch(
+              () => null,
+            )) as
+            | ClientsApiResponse
+            | ClientApiRecord[]
+            | null;
+
+        if (
+          !response.ok
+        ) {
+          const message =
+            !Array.isArray(
+              payload,
+            )
+              ? payload?.error ??
+                payload?.message
+              : null;
+
+          throw new Error(
+            message ||
+              `Could not load clients (${response.status}).`,
+          );
+        }
+
+        /*
+         * Support the common response shapes so this header remains resilient:
+         *
+         * { clients: [...] }
+         * { data: [...] }
+         * { items: [...] }
+         * [...]
+         */
+
+        let records:
+          ClientApiRecord[] =
+          [];
+
+        if (
+          Array.isArray(
+            payload,
+          )
+        ) {
+          records =
+            payload;
+        } else if (
+          Array.isArray(
+            payload?.clients,
+          )
+        ) {
+          records =
+            payload.clients;
+        } else if (
+          Array.isArray(
+            payload?.data,
+          )
+        ) {
+          records =
+            payload.data;
+        } else if (
+          Array.isArray(
+            payload?.items,
+          )
+        ) {
+          records =
+            payload.items;
+        }
+
+        setClients(
+          records,
+        );
+      } catch (error) {
+        console.error(
+          'Could not load workspace clients:',
+          error,
+        );
+
+        setClients(
+          [],
+        );
+
+        setClientsError(
+          error instanceof
+            Error
+            ? error.message
+            : 'Could not load clients.',
+        );
+      } finally {
+        setClientsLoading(
+          false,
+        );
+      }
+    }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadClients();
+  }, [
+    loadClients,
+  ]);
+
+  /* --------------------------------------------------------------------------
+     CLIENT WORKSPACE CONTEXTS
+  -------------------------------------------------------------------------- */
+
+  const clientContexts =
+    useMemo<
+      WorkspaceContext[]
+    >(() => {
+      return clients
+        .filter(
+          (client) =>
+            OPERATIONAL_CLIENT_STATUSES.has(
+              client.status
+                .trim()
+                .toUpperCase(),
+            ),
+        )
+        .map(
+          (client) => {
+            const label =
+              cleanText(
+                client.displayName,
+              ) ||
+              cleanText(
+                client.name,
+              ) ||
+              'Unnamed client';
+
+            return {
+              id: `client:${client.id}`,
+
+              type:
+                'client' as const,
+
+              entityId:
+                client.id,
+
+              label,
+
+              shortLabel:
+                createShortLabel(
+                  label,
+                ),
+
+              description:
+                getClientContextDescription(
+                  client,
+                ),
+
+              logoUrl:
+                cleanText(
+                  client.logoUrl,
+                ) ||
+                cleanText(
+                  client.logo,
+                ) ||
+                null,
+
+              status:
+                client.status,
+            };
+          },
+        )
+        .sort((a, b) =>
+          a.label.localeCompare(
+            b.label,
+            undefined,
+            {
+              sensitivity:
+                'base',
+            },
+          ),
+        );
+    }, [
+      clients,
+    ]);
+
+  /* --------------------------------------------------------------------------
+     ALL WORKSPACE CONTEXTS
+  -------------------------------------------------------------------------- */
+
+  const workspaceContexts =
+    useMemo<
+      WorkspaceContext[]
+    >(() => {
+      return [
+        COMPANY_CONTEXT,
+        ...clientContexts,
+      ];
+    }, [
+      clientContexts,
+    ]);
+
+  /* --------------------------------------------------------------------------
+     CURRENT WORKSPACE CONTEXT
   -------------------------------------------------------------------------- */
 
   const currentContext =
-    useMemo(() => {
+    useMemo<
+      WorkspaceContext
+    >(() => {
       return (
-        COMPANY_CONTEXTS.find(
+        workspaceContexts.find(
           (context) =>
             context.id ===
-            selectedContext,
+            selectedContextId,
         ) ??
-        COMPANY_CONTEXTS[0]
+        COMPANY_CONTEXT
       );
     }, [
-      selectedContext,
+      selectedContextId,
+      workspaceContexts,
     ]);
+
+  /* --------------------------------------------------------------------------
+     VALIDATE SAVED CONTEXT
+
+     If the selected client was archived/deleted/no longer returned by the API,
+     automatically return to the company-wide Syntra Grid context.
+  -------------------------------------------------------------------------- */
+
+  useEffect(() => {
+    if (
+      !contextHydrated ||
+      clientsLoading
+    ) {
+      return;
+    }
+
+    const exists =
+      workspaceContexts.some(
+        (context) =>
+          context.id ===
+          selectedContextId,
+      );
+
+    if (exists) {
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedContextId(
+      COMPANY_CONTEXT.id,
+    );
+
+    try {
+      window.localStorage.setItem(
+        WORKSPACE_STORAGE_KEY,
+        COMPANY_CONTEXT.id,
+      );
+    } catch {
+      // Storage may be unavailable.
+    }
+  }, [
+    clientsLoading,
+    contextHydrated,
+    selectedContextId,
+    workspaceContexts,
+  ]);
+
+  /* --------------------------------------------------------------------------
+     SELECT WORKSPACE CONTEXT
+  -------------------------------------------------------------------------- */
+
+  const selectWorkspaceContext =
+    useCallback(
+      (
+        contextId: string,
+      ) => {
+        setSelectedContextId(
+          contextId,
+        );
+
+        setContextOpen(
+          false,
+        );
+
+        try {
+          window.localStorage.setItem(
+            WORKSPACE_STORAGE_KEY,
+            contextId,
+          );
+        } catch (error) {
+          console.warn(
+            'Could not persist workspace context:',
+            error,
+          );
+        }
+
+        /*
+         * For now the selection is persisted locally.
+         *
+         * The next architectural step is moving this state into a
+         * WorkspaceContextProvider so every admin tab can consume the same
+         * selected context.
+         */
+      },
+      [],
+    );
 
   /* --------------------------------------------------------------------------
      SEARCH INDEX
@@ -258,12 +715,16 @@ export default function AdminHeader({
             section.items.map(
               (item) => ({
                 id: `${section.id}-${item.tab}`,
+
                 label:
                   item.title,
+
                 description:
                   item.description,
+
                 tab:
                   item.tab,
+
                 section:
                   section.label,
               }),
@@ -339,12 +800,6 @@ export default function AdminHeader({
 
   /* --------------------------------------------------------------------------
      UPDATE TAB INDICATOR
-
-     The underline lives inside the scrollable tab row.
-
-     We calculate its position from the active button's offsetLeft rather than
-     viewport coordinates. This means the indicator remains correctly attached
-     to the tab even while the tab row itself scrolls horizontally.
   -------------------------------------------------------------------------- */
 
   const updateTabIndicator =
@@ -364,7 +819,8 @@ export default function AdminHeader({
         return;
       }
 
-      const horizontalInset = 8;
+      const horizontalInset =
+        8;
 
       setTabIndicator({
         left:
@@ -374,22 +830,18 @@ export default function AdminHeader({
         width:
           Math.max(
             button.offsetWidth -
-              horizontalInset * 2,
+              horizontalInset *
+                2,
             12,
           ),
 
-        ready: true,
+        ready:
+          true,
       });
     }, [
       activeTab,
     ]);
 
-  /*
-   * Measure before paint whenever the active tab or active workspace changes.
-   *
-   * Workspace changes replace the set of header tabs, so activeSection.id is
-   * intentionally part of the dependency list.
-   */
   useLayoutEffect(() => {
     updateTabIndicator();
   }, [
@@ -398,9 +850,6 @@ export default function AdminHeader({
     updateTabIndicator,
   ]);
 
-  /*
-   * Recalculate on viewport resize.
-   */
   useEffect(() => {
     const handleResize =
       () => {
@@ -422,10 +871,6 @@ export default function AdminHeader({
     updateTabIndicator,
   ]);
 
-  /*
-   * Keep the selected tab visible if a workspace has enough tabs to overflow
-   * horizontally.
-   */
   useEffect(() => {
     const button =
       tabButtonRefs.current.get(
@@ -446,8 +891,12 @@ export default function AdminHeader({
         reduceMotion
           ? 'auto'
           : 'smooth',
-      block: 'nearest',
-      inline: 'nearest',
+
+      block:
+        'nearest',
+
+      inline:
+        'nearest',
     });
   }, [
     activeTab,
@@ -676,49 +1125,47 @@ export default function AdminHeader({
   /* --------------------------------------------------------------------------
      SIGN OUT
   -------------------------------------------------------------------------- */
+const signOut =
+  useCallback(async () => {
+    if (signingOut) {
+      return;
+    }
 
-  const signOut =
-    useCallback(async () => {
-      if (signingOut) {
-        return;
-      }
+    setSigningOut(true);
 
-      setSigningOut(
-        true,
+    try {
+      const response = await fetch(
+        '/api/admin/signout',
+        {
+          method: 'POST',
+          credentials: 'include',
+          cache: 'no-store',
+        },
       );
 
-      try {
-        const response =
-          await fetch(
-            '/api/auth/signout',
-            {
-              method:
-                'POST',
-            },
-          );
+      const payload = await response
+        .json()
+        .catch(() => null);
 
-        if (
-          !response.ok
-        ) {
-          console.warn(
-            'Sign-out endpoint returned',
-            response.status,
-          );
-        }
-      } catch (error) {
-        console.error(
-          'Could not sign out:',
-          error,
-        );
-      } finally {
-        window.location.assign(
-          '/login',
+      if (!response.ok || !payload?.ok) {
+        throw new Error(
+          payload?.error ||
+            'Could not sign out.',
         );
       }
-    }, [
-      signingOut,
-    ]);
 
+      window.location.replace(
+        '/login',
+      );
+    } catch (error) {
+      console.error(
+        'Could not sign out:',
+        error,
+      );
+
+      setSigningOut(false);
+    }
+  }, [signingOut]);
   /* --------------------------------------------------------------------------
      RENDER
   -------------------------------------------------------------------------- */
@@ -813,7 +1260,7 @@ export default function AdminHeader({
           <div className="flex-1" />
 
           {/* ---------------------------------------------------------------
-              COMPANY CONTEXT
+              WORKSPACE CONTEXT
           --------------------------------------------------------------- */}
 
           <div
@@ -841,6 +1288,7 @@ export default function AdminHeader({
               aria-expanded={
                 contextOpen
               }
+              aria-label={`Workspace context: ${currentContext.label}`}
               className="
                 hidden
                 h-10
@@ -860,32 +1308,18 @@ export default function AdminHeader({
                 xl:flex
               "
             >
-              <span
-                className="
-                  flex
-                  h-7
-                  w-7
-                  shrink-0
-                  items-center
-                  justify-center
-                  rounded-full
-                  bg-[var(--primary)]
-                  text-[8px]
-                  font-bold
-                  tracking-[0.02em]
-                  text-[var(--primary-foreground)]
-                "
-              >
-                {
-                  currentContext.shortLabel
+              <WorkspaceAvatar
+                context={
+                  currentContext
                 }
-              </span>
+                size="small"
+              />
 
               <span className="min-w-0">
                 <span
                   className="
                     block
-                    max-w-[130px]
+                    max-w-[145px]
                     truncate
                     text-[10px]
                     font-semibold
@@ -900,7 +1334,7 @@ export default function AdminHeader({
                 <span
                   className="
                     block
-                    max-w-[130px]
+                    max-w-[145px]
                     truncate
                     text-[8px]
                     text-[var(--text-subtle)]
@@ -912,37 +1346,52 @@ export default function AdminHeader({
                 </span>
               </span>
 
-              <ChevronDown
-                size={13}
-                className={`
-                  text-[var(--text-subtle)]
-                  transition-transform
-                  duration-150
-                  ${
-                    contextOpen
-                      ? 'rotate-180'
-                      : ''
-                  }
-                `}
-              />
+              {clientsLoading ? (
+                <LoaderCircle
+                  size={13}
+                  className="
+                    animate-spin
+                    text-[var(--text-subtle)]
+                  "
+                />
+              ) : (
+                <ChevronDown
+                  size={13}
+                  className={`
+                    text-[var(--text-subtle)]
+                    transition-transform
+                    duration-150
+
+                    ${
+                      contextOpen
+                        ? 'rotate-180'
+                        : ''
+                    }
+                  `}
+                />
+              )}
             </button>
 
             {contextOpen && (
               <ContextMenu
-                current={
-                  selectedContext
+                currentContextId={
+                  currentContext.id
                 }
-                onSelect={(
-                  context,
-                ) => {
-                  setSelectedContext(
-                    context,
-                  );
-
-                  setContextOpen(
-                    false,
-                  );
+                contexts={
+                  workspaceContexts
+                }
+                loading={
+                  clientsLoading
+                }
+                error={
+                  clientsError
+                }
+                onRetry={() => {
+                  void loadClients();
                 }}
+                onSelect={
+                  selectWorkspaceContext
+                }
               />
             )}
           </div>
@@ -1178,6 +1627,7 @@ export default function AdminHeader({
                   transition-transform
                   duration-150
                   xl:block
+
                   ${
                     profileOpen
                       ? 'rotate-180'
@@ -1229,11 +1679,6 @@ export default function AdminHeader({
 
         {/* ==================================================================
             WORKSPACE TAB ROW
-
-            One persistent underline lives here.
-
-            Individual tab buttons no longer create/destroy their own
-            underline.
         ================================================================== */}
 
         <div
@@ -1254,9 +1699,7 @@ export default function AdminHeader({
           "
           aria-label={`${activeSection.label} tabs`}
         >
-          {/* ---------------------------------------------------------------
-              MOVING ACTIVE INDICATOR
-          --------------------------------------------------------------- */}
+          {/* Moving indicator */}
 
           <span
             aria-hidden="true"
@@ -1269,25 +1712,17 @@ export default function AdminHeader({
               bottom-0
               left-0
               z-20
-
               h-[2px]
-
               rounded-full
-
               bg-[var(--primary)]
-
               transition-[transform,width,opacity]
               duration-[300ms]
-
               ease-[cubic-bezier(0.22,1,0.36,1)]
-
               motion-reduce:transition-none
             "
           />
 
-          {/* ---------------------------------------------------------------
-              TAB BUTTONS
-          --------------------------------------------------------------- */}
+          {/* Tab buttons */}
 
           {activeSection.items.map(
             (item) => {
@@ -1324,18 +1759,14 @@ export default function AdminHeader({
                     group
                     relative
                     z-10
-
                     flex
                     h-[45px]
                     shrink-0
                     items-center
                     gap-2
-
                     px-3
-
                     text-[11px]
                     font-semibold
-
                     transition-[color,transform]
                     duration-200
 
@@ -1427,20 +1858,124 @@ export default function AdminHeader({
 }
 
 /* ============================================================================
+   WORKSPACE AVATAR
+============================================================================ */
+
+function WorkspaceAvatar({
+  context,
+  size = 'medium',
+}: {
+  context: WorkspaceContext;
+
+  size?:
+    | 'small'
+    | 'medium';
+}) {
+  const sizeClass =
+    size === 'small'
+      ? 'h-7 w-7 rounded-full text-[8px]'
+      : 'h-9 w-9 rounded-xl text-[9px]';
+
+  if (
+    context.logoUrl
+  ) {
+    return (
+      <span
+        className={`
+          relative
+          flex
+          shrink-0
+          items-center
+          justify-center
+          overflow-hidden
+          border
+          border-[var(--line)]
+          bg-white
+          ${sizeClass}
+        `}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={
+            context.logoUrl
+          }
+          alt=""
+          className="
+            h-full
+            w-full
+            object-cover
+          "
+        />
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={`
+        flex
+        shrink-0
+        items-center
+        justify-center
+        bg-[var(--primary)]
+        font-bold
+        tracking-[0.02em]
+        text-[var(--primary-foreground)]
+        ${sizeClass}
+      `}
+    >
+      {
+        context.shortLabel
+      }
+    </span>
+  );
+}
+
+/* ============================================================================
    CONTEXT MENU
 ============================================================================ */
 
 function ContextMenu({
-  current,
+  currentContextId,
+  contexts,
+  loading,
+  error,
+  onRetry,
   onSelect,
 }: {
-  current:
-    CompanyContext;
+  currentContextId: string;
+
+  contexts:
+    WorkspaceContext[];
+
+  loading: boolean;
+
+  error:
+    | string
+    | null;
+
+  onRetry:
+    () => void;
 
   onSelect: (
-    context: CompanyContext,
+    contextId: string,
   ) => void;
 }) {
+  const companyContext =
+    contexts.find(
+      (context) =>
+        context.type ===
+        'company',
+    ) ??
+    COMPANY_CONTEXT;
+
+  const clientContexts =
+    contexts.filter(
+      (context) =>
+        context.type ===
+        'client',
+    );
+
   return (
     <div
       className="
@@ -1448,21 +1983,26 @@ function ContextMenu({
         right-0
         top-[calc(100%+10px)]
         z-[80]
-        w-[270px]
+        w-[300px]
         overflow-hidden
         rounded-[20px]
         border
         border-[var(--line)]
         bg-[var(--surface-elevated)]
-        p-2
         shadow-[var(--shadow-popover)]
       "
     >
+      {/* ---------------------------------------------------------------
+          HEADER
+      --------------------------------------------------------------- */}
+
       <div
         className="
-          px-2.5
-          pb-2
-          pt-1.5
+          border-b
+          border-[var(--line)]
+          px-4
+          pb-3
+          pt-3.5
         "
       >
         <p
@@ -1485,119 +2025,504 @@ function ContextMenu({
             text-[var(--text-muted)]
           "
         >
-          Choose the company or
-          product you are working
-          with.
+          Choose whose operation
+          you are working with.
         </p>
       </div>
 
-      <div className="space-y-0.5">
-        {COMPANY_CONTEXTS.map(
-          (context) => {
-            const selected =
-              context.id ===
-              current;
+      <div
+        className="
+          no-scrollbar
+          max-h-[390px]
+          overflow-y-auto
+          p-2
+        "
+      >
+        {/* ---------------------------------------------------------------
+            SYNTRA GRID
+        --------------------------------------------------------------- */}
 
-            return (
+        <ContextMenuItem
+          context={
+            companyContext
+          }
+          selected={
+            companyContext.id ===
+            currentContextId
+          }
+          onSelect={
+            onSelect
+          }
+        />
+
+        {/* ---------------------------------------------------------------
+            CLIENT DIVIDER
+        --------------------------------------------------------------- */}
+
+        <div
+          className="
+            mb-1
+            mt-2
+            flex
+            items-center
+            gap-2
+            px-2.5
+          "
+        >
+          <Building2
+            size={10}
+            className="
+              text-[var(--text-subtle)]
+            "
+          />
+
+          <span
+            className="
+              text-[8px]
+              font-bold
+              uppercase
+              tracking-[0.12em]
+              text-[var(--text-subtle)]
+            "
+          >
+            Clients
+          </span>
+
+          {!loading &&
+            !error && (
+              <span
+                className="
+                  ml-auto
+                  rounded-full
+                  bg-[var(--surface-muted)]
+                  px-1.5
+                  py-0.5
+                  text-[7px]
+                  font-bold
+                  text-[var(--text-subtle)]
+                "
+              >
+                {
+                  clientContexts.length
+                }
+              </span>
+            )}
+        </div>
+
+        {/* ---------------------------------------------------------------
+            LOADING
+        --------------------------------------------------------------- */}
+
+        {loading && (
+          <div
+            className="
+              flex
+              items-center
+              gap-3
+              rounded-xl
+              px-3
+              py-4
+            "
+          >
+            <span
+              className="
+                flex
+                h-8
+                w-8
+                shrink-0
+                items-center
+                justify-center
+                rounded-xl
+                bg-[var(--surface-muted)]
+              "
+            >
+              <LoaderCircle
+                size={14}
+                className="
+                  animate-spin
+                  text-[var(--text-subtle)]
+                "
+              />
+            </span>
+
+            <div>
+              <p
+                className="
+                  text-[10px]
+                  font-semibold
+                  text-[var(--text)]
+                "
+              >
+                Loading clients
+              </p>
+
+              <p
+                className="
+                  mt-0.5
+                  text-[8px]
+                  text-[var(--text-muted)]
+                "
+              >
+                Syncing workspace
+                contexts…
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ---------------------------------------------------------------
+            ERROR
+        --------------------------------------------------------------- */}
+
+        {!loading &&
+          error && (
+            <div
+              className="
+                rounded-xl
+                border
+                border-red-500/15
+                bg-red-500/[0.05]
+                p-3
+              "
+            >
+              <p
+                className="
+                  text-[10px]
+                  font-semibold
+                  text-red-500
+                "
+              >
+                Clients unavailable
+              </p>
+
+              <p
+                className="
+                  mt-1
+                  line-clamp-2
+                  text-[8px]
+                  leading-4
+                  text-[var(--text-muted)]
+                "
+              >
+                {error}
+              </p>
+
               <button
+                type="button"
+                onClick={
+                  onRetry
+                }
+                className="
+                  mt-2.5
+                  inline-flex
+                  items-center
+                  gap-1.5
+                  rounded-lg
+                  border
+                  border-[var(--line)]
+                  bg-[var(--surface)]
+                  px-2.5
+                  py-1.5
+                  text-[8px]
+                  font-semibold
+                  text-[var(--text)]
+                  transition-colors
+                  hover:bg-[var(--surface-muted)]
+                "
+              >
+                <RefreshCw
+                  size={10}
+                />
+
+                Try again
+              </button>
+            </div>
+          )}
+
+        {/* ---------------------------------------------------------------
+            CLIENTS
+        --------------------------------------------------------------- */}
+
+        {!loading &&
+          !error &&
+          clientContexts.map(
+            (context) => (
+              <ContextMenuItem
                 key={
                   context.id
                 }
-                type="button"
-                onClick={() =>
-                  onSelect(
-                    context.id,
-                  )
+                context={
+                  context
                 }
-                className={`
-                  flex
-                  w-full
-                  items-center
-                  gap-3
-                  rounded-xl
-                  px-2.5
-                  py-2.5
-                  text-left
-                  transition-colors
-                  duration-150
-                  hover:bg-[var(--surface-muted)]
-                  ${
-                    selected
-                      ? 'bg-[var(--surface-muted)]'
-                      : ''
-                  }
-                `}
+                selected={
+                  context.id ===
+                  currentContextId
+                }
+                onSelect={
+                  onSelect
+                }
+              />
+            ),
+          )}
+
+        {/* ---------------------------------------------------------------
+            EMPTY
+        --------------------------------------------------------------- */}
+
+        {!loading &&
+          !error &&
+          clientContexts.length ===
+            0 && (
+            <div
+              className="
+                rounded-xl
+                border
+                border-dashed
+                border-[var(--line)]
+                px-4
+                py-5
+                text-center
+              "
+            >
+              <Building2
+                size={17}
+                className="
+                  mx-auto
+                  text-[var(--text-subtle)]
+                "
+              />
+
+              <p
+                className="
+                  mt-2
+                  text-[10px]
+                  font-semibold
+                  text-[var(--text)]
+                "
               >
-                <span
-                  className={`
-                    flex
-                    h-8
-                    w-8
-                    shrink-0
-                    items-center
-                    justify-center
-                    rounded-xl
-                    text-[8px]
-                    font-bold
-                    ${
-                      selected
-                        ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
-                        : 'bg-[var(--surface)] text-[var(--text-muted)] ring-1 ring-[var(--line)]'
-                    }
-                  `}
-                >
-                  {
-                    context.shortLabel
-                  }
-                </span>
+                No operational
+                clients
+              </p>
 
-                <span
-                  className="
-                    min-w-0
-                    flex-1
-                  "
-                >
-                  <span
-                    className="
-                      block
-                      truncate
-                      text-[11px]
-                      font-semibold
-                      text-[var(--text)]
-                    "
-                  >
-                    {
-                      context.label
-                    }
-                  </span>
+              <p
+                className="
+                  mt-1
+                  text-[8px]
+                  leading-4
+                  text-[var(--text-muted)]
+                "
+              >
+                Active, onboarding
+                and paused clients
+                will appear here
+                automatically.
+              </p>
+            </div>
+          )}
+      </div>
 
-                  <span
-                    className="
-                      mt-0.5
-                      block
-                      truncate
-                      text-[9px]
-                      text-[var(--text-muted)]
-                    "
-                  >
-                    {
-                      context.description
-                    }
-                  </span>
-                </span>
+      {/* ---------------------------------------------------------------
+          FOOTER
+      --------------------------------------------------------------- */}
 
-                {selected && (
-                  <Check
-                    size={14}
-                    className="text-[var(--accent)]"
-                  />
-                )}
-              </button>
-            );
-          },
-        )}
+      <div
+        className="
+          border-t
+          border-[var(--line)]
+          px-4
+          py-2.5
+        "
+      >
+        <p
+          className="
+            text-[8px]
+            leading-4
+            text-[var(--text-subtle)]
+          "
+        >
+          Client workspaces are
+          connected to the Syntra
+          Grid client directory.
+        </p>
       </div>
     </div>
+  );
+}
+
+/* ============================================================================
+   CONTEXT MENU ITEM
+============================================================================ */
+
+function ContextMenuItem({
+  context,
+  selected,
+  onSelect,
+}: {
+  context:
+    WorkspaceContext;
+
+  selected:
+    boolean;
+
+  onSelect: (
+    contextId: string,
+  ) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        onSelect(
+          context.id,
+        )
+      }
+      className={`
+        flex
+        w-full
+        items-center
+        gap-3
+        rounded-xl
+        px-2.5
+        py-2.5
+        text-left
+        transition-colors
+        duration-150
+        hover:bg-[var(--surface-muted)]
+
+        ${
+          selected
+            ? 'bg-[var(--surface-muted)]'
+            : ''
+        }
+      `}
+    >
+      <WorkspaceAvatar
+        context={
+          context
+        }
+      />
+
+      <span
+        className="
+          min-w-0
+          flex-1
+        "
+      >
+        <span
+          className="
+            flex
+            items-center
+            gap-2
+          "
+        >
+          <span
+            className="
+              block
+              min-w-0
+              truncate
+              text-[11px]
+              font-semibold
+              text-[var(--text)]
+            "
+          >
+            {
+              context.label
+            }
+          </span>
+
+          {context.type ===
+            'client' &&
+            context.status && (
+              <ClientStatusDot
+                status={
+                  context.status
+                }
+              />
+            )}
+        </span>
+
+        <span
+          className="
+            mt-0.5
+            block
+            truncate
+            text-[9px]
+            text-[var(--text-muted)]
+          "
+        >
+          {
+            context.description
+          }
+        </span>
+      </span>
+
+      {selected && (
+        <Check
+          size={14}
+          className="
+            shrink-0
+            text-[var(--accent)]
+          "
+        />
+      )}
+    </button>
+  );
+}
+
+/* ============================================================================
+   CLIENT STATUS DOT
+============================================================================ */
+
+function ClientStatusDot({
+  status,
+}: {
+  status: string;
+}) {
+  const normalized =
+    status
+      .trim()
+      .toUpperCase();
+
+  let className =
+    'bg-[var(--text-subtle)]';
+
+  if (
+    normalized ===
+    'ACTIVE'
+  ) {
+    className =
+      'bg-[var(--success)]';
+  }
+
+  if (
+    normalized ===
+    'ONBOARDING'
+  ) {
+    className =
+      'bg-[var(--info)]';
+  }
+
+  if (
+    normalized ===
+    'PAUSED'
+  ) {
+    className =
+      'bg-[var(--warning)]';
+  }
+
+  return (
+    <span
+      title={formatRole(
+        normalized,
+      )}
+      className={`
+        h-1.5
+        w-1.5
+        shrink-0
+        rounded-full
+        ${className}
+      `}
+    />
   );
 }
 
@@ -1679,7 +2604,7 @@ function NotificationsMenu({
       <div className="p-2">
         <NotificationItem
           title="Deployment completed"
-          description="RentWise production deployment completed successfully."
+          description="A production deployment completed successfully."
           time="18m"
           tone="success"
         />
@@ -2056,6 +2981,7 @@ function ProfileMenu({
               text-[9px]
               font-semibold
               transition-colors
+
               ${
                 theme ===
                 'light'
@@ -2088,6 +3014,7 @@ function ProfileMenu({
               text-[9px]
               font-semibold
               transition-colors
+
               ${
                 theme ===
                 'dark'
@@ -2545,6 +3472,7 @@ function SearchPalette({
                     text-left
                     transition-colors
                     duration-100
+
                     ${
                       index ===
                       selectedIndex
@@ -2669,6 +3597,77 @@ function SearchPalette({
 /* ============================================================================
    HELPERS
 ============================================================================ */
+
+function cleanText(
+  value:
+    | string
+    | null
+    | undefined,
+) {
+  if (
+    typeof value !==
+    'string'
+  ) {
+    return '';
+  }
+
+  return value.trim();
+}
+
+function createShortLabel(
+  value: string,
+) {
+  const words =
+    value
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+
+  if (
+    words.length === 0
+  ) {
+    return 'CL';
+  }
+
+  if (
+    words.length === 1
+  ) {
+    return words[0]
+      .slice(0, 2)
+      .toUpperCase();
+  }
+
+  return (
+    words[0]
+      .charAt(0) +
+    words[1]
+      .charAt(0)
+  ).toUpperCase();
+}
+
+function getClientContextDescription(
+  client: ClientApiRecord,
+) {
+  const productName =
+    cleanText(
+      client.productName,
+    );
+
+  if (productName) {
+    return productName;
+  }
+
+  const industry =
+    cleanText(
+      client.industry,
+    );
+
+  if (industry) {
+    return industry;
+  }
+
+  return 'Client workspace';
+}
 
 function initials(
   value: string,

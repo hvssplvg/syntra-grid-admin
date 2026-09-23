@@ -15,7 +15,6 @@ import {
 } from 'lucide-react';
 
 import AdminHeader from './AdminHeader';
-import AdminPageIdentity from './AdminPageIdentity';
 import AdminSidebar from './AdminSidebar';
 
 import {
@@ -250,7 +249,7 @@ export default function AdminShell({
     }
 
     /*
-     * Respect reduced-motion preferences.
+     * Respect reduced motion preferences.
      */
     const reduceMotion =
       window.matchMedia(
@@ -604,23 +603,11 @@ export default function AdminShell({
               "
             >
               {/* -----------------------------------------------------------
-                  PAGE IDENTITY
-
-                  We keep this outside the sliding content region so the
-                  application feels anchored while modules change.
-              ----------------------------------------------------------- */}
-
-              <AdminPageIdentity
-                section={
-                  activeSection
-                }
-                tab={
-                  activeDefinition
-                }
-              />
-
-              {/* -----------------------------------------------------------
                   CONTENT
+
+                  Content starts directly under the header. The section and
+                  tab names already appear in the header pills, so there is
+                  no separate page title block here.
 
                   Stable wrapper.
 
@@ -635,10 +622,8 @@ export default function AdminShell({
 
               <div
                 className="
-                  mt-6
                   min-w-0
                   overflow-x-hidden
-                  xl:mt-7
                 "
               >
                 <div
@@ -691,6 +676,9 @@ export default function AdminShell({
         >
           {/* ---------------------------------------------------------------
               MOBILE HEADER
+
+              On mobile this bar is the only place the section and tab name
+              appear, so it stays.
           --------------------------------------------------------------- */}
 
           <div
@@ -877,22 +865,10 @@ export default function AdminShell({
                 sm:pt-6
               "
             >
-              <AdminPageIdentity
-                section={
-                  activeSection
-                }
-                tab={
-                  activeDefinition
-                }
-                compact
-              />
-
               <div
                 className="
-                  mt-5
                   min-w-0
                   overflow-x-hidden
-                  sm:mt-6
                 "
               >
                 <div

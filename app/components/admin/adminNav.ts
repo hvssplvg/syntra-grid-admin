@@ -144,9 +144,7 @@ export type AdminSectionLabel =
   | 'Governance'
   | 'System';
 
-export type AdminModuleStatus =
-  | 'live'
-  | 'planned';
+export type AdminModuleStatus = 'live' | 'planned';
 
 export type AdminUser = {
   id: string;
@@ -176,15 +174,13 @@ export type AdminSection = {
    TAB DEFINITIONS
 ============================================================================ */
 
-export const ADMIN_TABS: Record<
-  AdminTab,
-  AdminTabDefinition
-> = {
+export const ADMIN_TABS: Record<AdminTab, AdminTabDefinition> = {
+
   overview: {
     tab: 'overview',
     title: 'Overview',
     description:
-      'Company-wide operations, performance and anything requiring attention.',
+      'Operations, performance and anything needing attention across the company.',
     section: 'Command',
     icon: LayoutDashboard,
     status: 'live',
@@ -204,7 +200,7 @@ export const ADMIN_TABS: Record<
     tab: 'activity',
     title: 'Activity',
     description:
-      'A company-wide timeline of important actions and changes.',
+      'A timeline of important actions and changes across the company.',
     section: 'Command',
     icon: Activity,
     status: 'planned',
@@ -244,7 +240,7 @@ export const ADMIN_TABS: Record<
     tab: 'contacts',
     title: 'Contacts',
     description:
-      'People and decision-makers across client organisations.',
+      'People and decision makers across client organisations.',
     section: 'CRM',
     icon: Users,
     status: 'planned',
@@ -324,7 +320,7 @@ export const ADMIN_TABS: Record<
     tab: 'roadmaps',
     title: 'Roadmaps',
     description:
-      'Long-term delivery plans across products and client systems.',
+      'Delivery plans for the months ahead across products and client systems.',
     section: 'Delivery',
     icon: Network,
     status: 'planned',
@@ -344,7 +340,7 @@ export const ADMIN_TABS: Record<
     tab: 'requirements',
     title: 'Requirements',
     description:
-      'Functional and non-functional requirements across projects.',
+      'Functional, performance and security requirements across projects.',
     section: 'Delivery',
     icon: FileCheck2,
     status: 'planned',
@@ -404,7 +400,7 @@ export const ADMIN_TABS: Record<
     tab: 'expenses',
     title: 'Expenses',
     description:
-      'Operational and project-related company expenditure.',
+      'Operational and project expenditure across the company.',
     section: 'Commercial',
     icon: ReceiptText,
     status: 'planned',
@@ -484,7 +480,7 @@ export const ADMIN_TABS: Record<
     tab: 'meetings',
     title: 'Meetings',
     description:
-      'Client meetings, notes and follow-up actions.',
+      'Client meetings, notes and follow up actions.',
     section: 'Client Success',
     icon: CalendarDays,
     status: 'planned',
@@ -674,7 +670,7 @@ export const ADMIN_TABS: Record<
     tab: 'team',
     title: 'Team',
     description:
-      'Syntra Grid administrators, people and access.',
+      'Everyone who works with Syntra Grid, their roles, reporting lines and dashboard access.',
     section: 'Company',
     icon: Users,
     status: 'live',
@@ -684,10 +680,10 @@ export const ADMIN_TABS: Record<
     tab: 'departments',
     title: 'Departments',
     description:
-      'Company structure, departments and responsibilities.',
+      'Company structure, department leadership and team ownership.',
     section: 'Company',
     icon: Building2,
-    status: 'planned',
+    status: 'live',
   },
 
   workload: {
@@ -874,120 +870,103 @@ export const ADMIN_TABS: Record<
     tab: 'settings',
     title: 'Settings',
     description:
-      'Company-wide Syntra Grid configuration.',
+      'Configuration for the whole of Syntra Grid.',
     section: 'System',
     icon: Settings,
     status: 'live',
   },
 };
 
+
 /* ============================================================================
    SECTION DEFINITIONS
 ============================================================================ */
 
-type SectionBase = Omit<
-  AdminSection,
-  'items'
->;
+type SectionBase = Omit<AdminSection, 'items'>;
 
 const SECTION_BASES: SectionBase[] = [
   {
     id: 'command',
     label: 'Command',
-    description:
-      'Company overview and operational intelligence.',
+    description: 'Company overview and operational intelligence.',
     icon: LayoutDashboard,
   },
   {
     id: 'crm',
     label: 'CRM',
-    description:
-      'Clients, contacts and commercial opportunities.',
+    description: 'Clients, contacts and commercial opportunities.',
     icon: Building2,
   },
   {
     id: 'delivery',
     label: 'Delivery',
-    description:
-      'Projects, work and delivery management.',
+    description: 'Projects, work and delivery management.',
     icon: FolderKanban,
   },
   {
     id: 'commercial',
     label: 'Commercial',
-    description:
-      'Contracts, billing and financial operations.',
+    description: 'Contracts, billing and financial operations.',
     icon: CircleDollarSign,
   },
   {
     id: 'client-success',
     label: 'Client Success',
-    description:
-      'Support, communication and client relationships.',
+    description: 'Support, communication and client relationships.',
     icon: Headphones,
   },
   {
     id: 'engineering',
     label: 'Engineering',
-    description:
-      'Infrastructure, deployments and production systems.',
+    description: 'Infrastructure, deployments and production systems.',
     icon: Wrench,
   },
   {
     id: 'products',
     label: 'Products',
-    description:
-      'Syntra Grid products, releases and development.',
+    description: 'Syntra Grid products, releases and development.',
     icon: Boxes,
   },
   {
     id: 'growth',
     label: 'Growth',
-    description:
-      'Website, brand, marketing and acquisition.',
+    description: 'Website, brand, marketing and acquisition.',
     icon: Megaphone,
   },
   {
     id: 'company',
     label: 'Company',
-    description:
-      'People, teams and internal operations.',
+    description: 'People, teams and internal operations.',
     icon: Users,
   },
   {
     id: 'knowledge',
     label: 'Knowledge',
-    description:
-      'Documents, procedures and company knowledge.',
+    description: 'Documents, procedures and company knowledge.',
     icon: BookOpen,
   },
   {
     id: 'governance',
     label: 'Governance',
-    description:
-      'Security, compliance, risk and oversight.',
+    description: 'Security, compliance, risk and oversight.',
     icon: ShieldCheck,
   },
   {
     id: 'system',
     label: 'System',
-    description:
-      'Integrations, access and platform configuration.',
+    description: 'Integrations, access and platform configuration.',
     icon: Settings,
   },
 ];
 
-export const ADMIN_SECTIONS: AdminSection[] =
-  SECTION_BASES.map((section) => ({
+export const ADMIN_SECTIONS: AdminSection[] = SECTION_BASES.map(
+  (section) => ({
     ...section,
-    items: Object.values(
-      ADMIN_TABS,
-    ).filter(
-      (tab) =>
-        tab.section ===
-        section.label,
+    items: Object.values(ADMIN_TABS).filter(
+      (tab) => tab.section === section.label,
     ),
-  }));
+  }),
+);
 
 /* ============================================================================
    HELPERS
@@ -1000,29 +979,19 @@ export function isAdminTab(
     return false;
   }
 
-  return Object.prototype.hasOwnProperty.call(
-    ADMIN_TABS,
-    value,
-  );
+  return Object.prototype.hasOwnProperty.call(ADMIN_TABS, value);
 }
 
 export function adminTabFromSearchParam(
   value: string | null | undefined,
 ): AdminTab {
-  return isAdminTab(value)
-    ? value
-    : 'overview';
+  return isAdminTab(value) ? value : 'overview';
 }
 
-export function findSectionForTab(
-  tab: AdminTab,
-): AdminSection {
+export function findSectionForTab(tab: AdminTab): AdminSection {
   return (
     ADMIN_SECTIONS.find((section) =>
-      section.items.some(
-        (item) =>
-          item.tab === tab,
-      ),
+      section.items.some((item) => item.tab === tab),
     ) ?? ADMIN_SECTIONS[0]
   );
 }

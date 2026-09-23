@@ -1,13 +1,22 @@
 'use server';
 
-import { redirect } from 'next/navigation';
-
 import { auth } from '@/lib/auth/server';
 import { prisma } from '@/lib/prisma';
 
 export type AuthActionState = {
   error?: string;
   success?: string;
+
+  /**
+   * Set once authentication has fully succeeded and the session cookie is
+   * written. The client plays the welcome sequence and then navigates, so
+   * these actions deliberately do not redirect.
+   */
+  ok?: boolean;
+  mode?: 'signIn' | 'setup';
+  firstName?: string;
+  /** Lets the client tell two consecutive successes apart. */
+  at?: number;
 };
 
 function getText(formData: FormData, key: string): string {
@@ -95,7 +104,12 @@ export async function signInAction(
     },
   });
 
-  redirect('/dashboard');
+  return {
+    ok: true,
+    mode: 'signIn',
+    firstName: admin.firstName ?? '',
+    at: Date.now(),
+  };
 }
 
 export async function setupOwnerAction(
@@ -261,5 +275,10 @@ export async function setupOwnerAction(
     },
   });
 
-  redirect('/dashboard');
+  return {
+    ok: true,
+    mode: 'setup',
+    firstName,
+    at: Date.now(),
+  };
 }

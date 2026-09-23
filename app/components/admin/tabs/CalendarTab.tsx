@@ -926,6 +926,7 @@ export default function CalendarTab() {
 
   const shortcutRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
 
+  // eslint-disable-next-line react-hooks/refs
   shortcutRef.current = (event: KeyboardEvent) => {
     if (draft || selectedEvent) return;
 
@@ -1836,6 +1837,7 @@ function MiniCalendar({
   );
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMonth((current) =>
       isSameMonth(current, selectedDate)
         ? current
@@ -2609,6 +2611,7 @@ function EventDrawer({
 
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setConfirmDelete(false), [event.id]);
 
   const meta = EVENT_TYPES[event.type];
