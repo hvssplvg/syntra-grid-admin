@@ -688,7 +688,7 @@ export async function PATCH(
 
           await tx.auditLog.create({
             data: {
-              adminUserId:
+              actorId:
                 admin.id,
 
               action:
@@ -834,7 +834,7 @@ export async function DELETE(
 
         await tx.auditLog.create({
           data: {
-            adminUserId:
+            actorId:
               admin.id,
 
             action:

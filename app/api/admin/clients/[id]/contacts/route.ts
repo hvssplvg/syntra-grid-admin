@@ -652,7 +652,7 @@ export async function POST(
 
           await tx.auditLog.create({
             data: {
-              adminUserId:
+              actorId:
                 admin.id,
 
               action:
