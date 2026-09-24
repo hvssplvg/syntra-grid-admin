@@ -1277,7 +1277,7 @@ export default function ClientsTab() {
       </>
     );
   }
-
+  
   return (
     <PortalTheme.Provider value={theme.vars}>
       <div ref={theme.ref} className="mx-auto w-full min-w-0 max-w-[1600px]">

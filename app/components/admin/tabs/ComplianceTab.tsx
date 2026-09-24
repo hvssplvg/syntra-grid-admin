@@ -16,7 +16,7 @@ export default function ComplianceTab() {
             strokeWidth={1.7}
           />
         </div>
-
+   
         <div className="mt-5 flex items-center justify-center gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--surface-muted)] px-2.5 py-1 text-[8px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
             <Clock3
