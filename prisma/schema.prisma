@@ -48,6 +48,27 @@ model AdminUser {
   recruitmentNotes           RecruitmentNote[]      @relation("RecruitmentNoteAuthor")
   recruitmentOffersCreated   RecruitmentOffer[]     @relation("RecruitmentOfferCreatedBy")
 
+  // Leave
+  leaveRequestsReviewed LeaveRequest[]  @relation("LeaveRequestReviewer")
+  leaveActivities       LeaveActivity[] @relation("LeaveActivityActor")
+  leavePoliciesCreated  LeavePolicy[]   @relation("LeavePolicyCreatedBy")
+  leavePoliciesUpdated  LeavePolicy[]   @relation("LeavePolicyUpdatedBy")
+  leaveBalancesAdjusted LeaveBalance[]  @relation("LeaveBalanceAdjustedBy")
+
+  // Calendar
+  calendarEventsCreated CalendarEvent[] @relation("CalendarEventCreatedBy")
+  calendarEventsUpdated CalendarEvent[] @relation("CalendarEventUpdatedBy")
+
+  // Workload
+  workSchedulesCreated       EmployeeWorkSchedule[] @relation("EmployeeWorkScheduleCreatedBy")
+  workloadAllocationsCreated WorkloadAllocation[]   @relation("WorkloadAllocationCreatedBy")
+  workloadAllocationsUpdated WorkloadAllocation[]   @relation("WorkloadAllocationUpdatedBy")
+
+  // Timesheets
+  timesheetsReviewed  Timesheet[]         @relation("TimesheetReviewedBy")
+  timesheetsLocked    Timesheet[]         @relation("TimesheetLockedBy")
+  timesheetActivities TimesheetActivity[] @relation("TimesheetActivityActor")
+
   @@index([departmentId])
 }
 
@@ -88,6 +109,12 @@ model Department {
 
   jobOpenings       JobOpening[]
   recruitmentOffers RecruitmentOffer[] @relation("RecruitmentOfferDepartment")
+
+  // Calendar
+  calendarEvents CalendarEvent[]
+
+  // Workload
+  workloadAllocations WorkloadAllocation[]
 
   @@index([status])
   @@index([leadId])
@@ -142,7 +169,7 @@ model Employee {
   emergencyContactRelationship String?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   adminUser  AdminUser?  @relation(fields: [adminUserId], references: [id])
   department Department? @relation(fields: [departmentId], references: [id])
@@ -151,6 +178,24 @@ model Employee {
   directReports Employee[] @relation("EmployeeManagement")
 
   hiredFromApplication JobApplication? @relation("HiredEmployee")
+
+  // Leave
+  leaveRequests   LeaveRequest[]
+  leaveBalances   LeaveBalance[]
+  leaveActivities LeaveActivity[]
+
+  // Calendar
+  calendarEventsOwned CalendarEvent[]         @relation("CalendarEventOwner")
+  calendarAttendance  CalendarEventAttendee[]
+
+  // Workload
+  workSchedules       EmployeeWorkSchedule[]
+  workloadAllocations WorkloadAllocation[]
+
+  // Timesheets
+  timesheets          Timesheet[]
+  timesheetEntries    TimesheetEntry[]
+  timesheetActivities TimesheetActivity[]
 
   @@index([createdAt])
   @@index([departmentId])
@@ -224,6 +269,13 @@ model Client {
   tickets  SupportTicket[]
 
   matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionClient")
+
+  // Calendar
+  calendarEvents CalendarEvent[]
+
+  // Workload and timesheets
+  workloadAllocations WorkloadAllocation[]
+  timesheetEntries    TimesheetEntry[]
 
   @@index([status])
   @@index([priority])
@@ -326,6 +378,9 @@ model ClientInvoice {
 
   matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionInvoice")
 
+  // Billable timesheet entries that have been billed on this invoice.
+  timesheetEntries TimesheetEntry[]
+
   @@index([clientId])
   @@index([status])
   @@index([dueAt])
@@ -369,6 +424,13 @@ model Project {
   snapshots    UsageSnapshot[]
 
   matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionProject")
+
+  // Calendar
+  calendarEvents CalendarEvent[]
+
+  // Workload and timesheets
+  workloadAllocations WorkloadAllocation[]
+  timesheetEntries    TimesheetEntry[]
 
   @@unique([clientId, slug])
   @@index([clientId])
@@ -774,7 +836,7 @@ model MonzoPot {
 
 /**
  * =============================================================================
- * RECRUITMENT — CANDIDATES
+ * RECRUITMENT: CANDIDATES
  * =============================================================================
  */
 
@@ -809,7 +871,7 @@ model Candidate {
   status CandidateStatus @default(ACTIVE)
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   documents    CandidateDocument[]
   applications JobApplication[]
@@ -826,7 +888,7 @@ model Candidate {
 
 /**
  * =============================================================================
- * RECRUITMENT — DOCUMENTS
+ * RECRUITMENT: DOCUMENTS
  * =============================================================================
  */
 
@@ -847,7 +909,7 @@ model CandidateDocument {
   uploadedById String?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   application JobApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   candidate   Candidate       @relation(fields: [candidateId], references: [id], onDelete: Cascade)
@@ -863,7 +925,7 @@ model CandidateDocument {
 
 /**
  * =============================================================================
- * RECRUITMENT — JOB OPENINGS
+ * RECRUITMENT: JOB OPENINGS
  * =============================================================================
  */
 
@@ -907,7 +969,7 @@ model JobOpening {
   publishedAt DateTime?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   applications JobApplication[]
 
@@ -928,7 +990,7 @@ model JobOpening {
 
 /**
  * =============================================================================
- * RECRUITMENT — APPLICATIONS
+ * RECRUITMENT: APPLICATIONS
  * =============================================================================
  */
 
@@ -963,7 +1025,7 @@ model JobApplication {
   hiredEmployeeId String? @unique
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   candidate Candidate @relation(fields: [candidateId], references: [id])
 
@@ -992,7 +1054,7 @@ model JobApplication {
 
 /**
  * =============================================================================
- * RECRUITMENT — INTERVIEWS
+ * RECRUITMENT: INTERVIEWS
  * =============================================================================
  */
 
@@ -1023,7 +1085,7 @@ model Interview {
   createdById String?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   application JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
@@ -1041,7 +1103,7 @@ model Interview {
 
 /**
  * =============================================================================
- * RECRUITMENT — INTERVIEWERS
+ * RECRUITMENT: INTERVIEWERS
  * =============================================================================
  */
 
@@ -1064,7 +1126,7 @@ model InterviewInterviewer {
 
 /**
  * =============================================================================
- * RECRUITMENT — INTERVIEW FEEDBACK
+ * RECRUITMENT: INTERVIEW FEEDBACK
  * =============================================================================
  */
 
@@ -1085,7 +1147,7 @@ model InterviewFeedback {
   submittedAt DateTime @default(now())
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
 
@@ -1100,7 +1162,7 @@ model InterviewFeedback {
 
 /**
  * =============================================================================
- * RECRUITMENT — OFFERS
+ * RECRUITMENT: OFFERS
  * =============================================================================
  */
 
@@ -1139,7 +1201,7 @@ model RecruitmentOffer {
   declineReason String?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   application JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
@@ -1157,7 +1219,7 @@ model RecruitmentOffer {
 
 /**
  * =============================================================================
- * RECRUITMENT — NOTES
+ * RECRUITMENT: NOTES
  * =============================================================================
  */
 
@@ -1174,7 +1236,7 @@ model RecruitmentNote {
   private Boolean @default(true)
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   application JobApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
@@ -1190,7 +1252,7 @@ model RecruitmentNote {
 
 /**
  * =============================================================================
- * RECRUITMENT — ACTIVITY
+ * RECRUITMENT: ACTIVITY
  * =============================================================================
  */
 
@@ -1224,7 +1286,676 @@ model RecruitmentActivity {
 
 /**
  * =============================================================================
- * ENUMS — ADMIN / COMPANY
+ * LEAVE: POLICIES
+ * =============================================================================
+ */
+
+model LeavePolicy {
+  id String @id @default(cuid())
+
+  name        String
+  code        String  @unique
+  description String?
+
+  type LeaveType
+
+  active Boolean @default(true)
+
+  // Null means this policy does not use a fixed annual allowance.
+  annualAllowance Decimal? @db.Decimal(6, 2)
+
+  carryOverEnabled Boolean  @default(false)
+  maxCarryOverDays Decimal? @db.Decimal(6, 2)
+
+  requiresApproval Boolean @default(true)
+  allowBackdated   Boolean @default(false)
+  reasonRequired   Boolean @default(false)
+
+  countWeekends Boolean @default(false)
+  paid          Boolean @default(true)
+
+  minimumNoticeDays     Int?
+  maximumDaysPerRequest Decimal? @db.Decimal(6, 2)
+
+  displayOrder Int @default(0)
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdBy AdminUser? @relation("LeavePolicyCreatedBy", fields: [createdById], references: [id])
+  updatedBy AdminUser? @relation("LeavePolicyUpdatedBy", fields: [updatedById], references: [id])
+
+  balances LeaveBalance[]
+  requests LeaveRequest[]
+
+  @@index([active])
+  @@index([type])
+  @@index([displayOrder])
+  @@index([createdById])
+  @@index([updatedById])
+}
+
+/**
+ * =============================================================================
+ * LEAVE: BALANCES
+ * =============================================================================
+ */
+
+model LeaveBalance {
+  id String @id @default(cuid())
+
+  employeeId String
+  policyId   String
+
+  year Int
+
+  entitlement Decimal @default(0) @db.Decimal(6, 2)
+  carriedOver Decimal @default(0) @db.Decimal(6, 2)
+  adjustment  Decimal @default(0) @db.Decimal(6, 2)
+
+  used   Decimal @default(0) @db.Decimal(6, 2)
+  booked Decimal @default(0) @db.Decimal(6, 2)
+
+  adjustedById     String?
+  adjustmentReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  policy   LeavePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  adjustedBy AdminUser? @relation("LeaveBalanceAdjustedBy", fields: [adjustedById], references: [id])
+
+  @@unique([employeeId, policyId, year])
+  @@index([employeeId])
+  @@index([policyId])
+  @@index([year])
+  @@index([employeeId, year])
+  @@index([adjustedById])
+}
+
+/**
+ * =============================================================================
+ * LEAVE: REQUESTS
+ * =============================================================================
+ */
+
+model LeaveRequest {
+  id String @id @default(cuid())
+
+  requestRef String? @unique
+
+  employeeId String
+  policyId   String
+
+  status LeaveRequestStatus @default(PENDING)
+
+  startDate DateTime
+  endDate   DateTime
+
+  startPortion LeaveDayPortion @default(FULL_DAY)
+  endPortion   LeaveDayPortion @default(FULL_DAY)
+
+  // Calculated by the server when the request is submitted.
+  totalDays Decimal @db.Decimal(6, 2)
+
+  reason String?
+
+  // Visible to the employee.
+  employeeNote String?
+
+  // Management only note.
+  internalNote String?
+
+  reviewedById String?
+  reviewedAt   DateTime?
+
+  rejectionReason String?
+
+  cancelledAt        DateTime?
+  cancellationReason String?
+
+  // Used when leave is recorded without an independent approval flow,
+  // for example the current Super Admin's own leave.
+  recordedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  policy   LeavePolicy @relation(fields: [policyId], references: [id])
+
+  reviewedBy AdminUser? @relation("LeaveRequestReviewer", fields: [reviewedById], references: [id])
+
+  activities LeaveActivity[]
+
+  @@index([employeeId])
+  @@index([policyId])
+  @@index([status])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([createdAt])
+  @@index([reviewedById])
+  @@index([employeeId, status])
+  @@index([startDate, endDate])
+}
+
+/**
+ * =============================================================================
+ * LEAVE: ACTIVITY
+ * =============================================================================
+ */
+
+model LeaveActivity {
+  id String @id @default(cuid())
+
+  leaveRequestId String
+  employeeId     String
+  actorId        String?
+
+  type LeaveActivityType
+
+  description String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  leaveRequest LeaveRequest @relation(fields: [leaveRequestId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  actor        AdminUser?   @relation("LeaveActivityActor", fields: [actorId], references: [id])
+
+  @@index([leaveRequestId])
+  @@index([employeeId])
+  @@index([actorId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+/**
+ * =============================================================================
+ * CALENDAR: EVENTS
+ * =============================================================================
+ * Stores events created directly inside Syntra Grid.
+ * System owned records such as approved or recorded LeaveRequest records,
+ * recruitment interviews and deployments remain in their own source tables.
+ * The Calendar API aggregates those sources into one calendar feed.
+ * =============================================================================
+ */
+
+model CalendarEvent {
+  id String @id @default(cuid())
+
+  title       String
+  description String?
+
+  type     CalendarEventType
+  scope    CalendarEventScope    @default(PERSONAL)
+  priority CalendarEventPriority @default(NORMAL)
+  status   CalendarEventStatus   @default(SCHEDULED)
+
+  startAt DateTime
+  endAt   DateTime?
+
+  allDay Boolean @default(false)
+
+  // IANA timezone, e.g. Europe/London or Africa/Lagos.
+  timezone String?
+
+  // Private event details can be masked by the API for unauthorised viewers.
+  private Boolean @default(false)
+
+  location   String?
+  meetingUrl String?
+
+  // Employee whose calendar owns this event.
+  ownerId String
+
+  // Admin actor who created the event.
+  createdById String
+
+  // Last admin actor who modified the event.
+  updatedById String?
+
+  // Optional organisational context.
+  departmentId String?
+
+  // Optional real client or project context.
+  clientId  String?
+  projectId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner      Employee    @relation("CalendarEventOwner", fields: [ownerId], references: [id])
+  createdBy  AdminUser   @relation("CalendarEventCreatedBy", fields: [createdById], references: [id])
+  updatedBy  AdminUser?  @relation("CalendarEventUpdatedBy", fields: [updatedById], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
+  client     Client?     @relation(fields: [clientId], references: [id])
+  project    Project?    @relation(fields: [projectId], references: [id])
+
+  attendees CalendarEventAttendee[]
+
+  @@index([ownerId])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([departmentId])
+  @@index([clientId])
+  @@index([projectId])
+  @@index([type])
+  @@index([scope])
+  @@index([priority])
+  @@index([status])
+  @@index([startAt])
+  @@index([endAt])
+  @@index([startAt, endAt])
+  @@index([ownerId, startAt])
+  @@index([departmentId, startAt])
+  @@index([clientId, startAt])
+  @@index([projectId, startAt])
+  @@index([scope, startAt])
+  @@index([status, startAt])
+}
+
+/**
+ * =============================================================================
+ * CALENDAR: ATTENDEES
+ * =============================================================================
+ */
+
+model CalendarEventAttendee {
+  id String @id @default(cuid())
+
+  eventId    String
+  employeeId String
+
+  status CalendarAttendanceStatus @default(PENDING)
+
+  respondedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event    CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  employee Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, employeeId])
+  @@index([eventId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([employeeId, status])
+}
+
+/**
+ * =============================================================================
+ * WORKLOAD: EMPLOYEE WORK SCHEDULES
+ * =============================================================================
+ * An employee's normal working capacity.
+ * Allocations are planned work. This model is how much time the employee
+ * has available before allocations and approved leave are considered.
+ * Schedules are versioned rather than one per employee, so a change such as
+ * "part time from 1 January" keeps the history intact for past reports.
+ * The API picks the schedule whose effective window contains the date being
+ * calculated. A schedule with no effectiveUntil is open ended.
+ * Leave is not duplicated here. The Workload API subtracts APPROVED and
+ * RECORDED LeaveRequest days from capacity.
+ * =============================================================================
+ */
+
+model EmployeeWorkSchedule {
+  id String @id @default(cuid())
+
+  employeeId String
+
+  /**
+   * Cached weekly total of the daily hours below.
+   * The server recalculates it whenever the daily hours change.
+   * Examples: full time 40, part time 20.
+   */
+  weeklyHours Decimal @default(40) @db.Decimal(6, 2)
+
+  /**
+   * Daily working hours. These make capacity accurate for part time
+   * staff and people who do not work a standard Monday to Friday week.
+   */
+  mondayHours    Decimal @default(8) @db.Decimal(5, 2)
+  tuesdayHours   Decimal @default(8) @db.Decimal(5, 2)
+  wednesdayHours Decimal @default(8) @db.Decimal(5, 2)
+  thursdayHours  Decimal @default(8) @db.Decimal(5, 2)
+  fridayHours    Decimal @default(8) @db.Decimal(5, 2)
+  saturdayHours  Decimal @default(0) @db.Decimal(5, 2)
+  sundayHours    Decimal @default(0) @db.Decimal(5, 2)
+
+  /**
+   * Share of capacity the business expects to be billable, e.g. 75 = 75%.
+   * Lets Workload compare planned and actual billable utilisation.
+   * Null means no target is set.
+   */
+  billableTargetPercent Decimal? @db.Decimal(5, 2)
+
+  // IANA timezone used for working days and timesheet periods.
+  timezone String?
+
+  active Boolean @default(true)
+
+  effectiveFrom  DateTime?
+  effectiveUntil DateTime?
+
+  notes String?
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdBy AdminUser? @relation("EmployeeWorkScheduleCreatedBy", fields: [createdById], references: [id])
+
+  @@index([employeeId])
+  @@index([active])
+  @@index([effectiveFrom])
+  @@index([effectiveUntil])
+  @@index([createdById])
+  @@index([employeeId, active])
+  @@index([employeeId, effectiveFrom])
+}
+
+/**
+ * =============================================================================
+ * WORKLOAD: ALLOCATIONS
+ * =============================================================================
+ * Planned use of an employee's capacity.
+ * Examples:
+ * Hassan on RentWise, 1 to 30 September, 20 hours a week
+ * Developer A on Esteem Learning Centre, 15 September to 31 October, 50%
+ * Internal work can exist without a client or project.
+ * =============================================================================
+ */
+
+model WorkloadAllocation {
+  id String @id @default(cuid())
+
+  employeeId String
+
+  /**
+   * Optional context. Client and project work should normally set
+   * projectId (clientId is kept for fast filtering and for client work
+   * that is not tied to one project). Internal work may use departmentId
+   * or no context at all.
+   */
+  departmentId String?
+  clientId     String?
+  projectId    String?
+
+  title       String
+  description String?
+
+  type     WorkloadAllocationType   @default(PROJECT)
+  status   WorkloadAllocationStatus @default(PLANNED)
+  priority WorkloadPriority         @default(NORMAL)
+
+  startDate DateTime
+  endDate   DateTime
+
+  /**
+   * Allocation is either planned hours or a share of capacity.
+   * The API validates that the field matching allocationMode is set.
+   * HOURS:      hoursPerWeek, planned hours per week.
+   * PERCENTAGE: allocationPercent, e.g. 50 = 50% of weekly capacity.
+   */
+  allocationMode WorkloadAllocationMode @default(HOURS)
+
+  hoursPerWeek      Decimal? @db.Decimal(6, 2)
+  allocationPercent Decimal? @db.Decimal(5, 2)
+
+  /**
+   * Optional total budget for the whole allocation, e.g. a 60 hour
+   * fixed scope piece of work. Timesheet entries linked to this
+   * allocation show how much of the budget has been used.
+   */
+  budgetHours Decimal? @db.Decimal(8, 2)
+
+  billable Boolean @default(true)
+
+  notes String?
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee   Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id])
+  client     Client?     @relation(fields: [clientId], references: [id])
+  project    Project?    @relation(fields: [projectId], references: [id])
+
+  createdBy AdminUser? @relation("WorkloadAllocationCreatedBy", fields: [createdById], references: [id])
+  updatedBy AdminUser? @relation("WorkloadAllocationUpdatedBy", fields: [updatedById], references: [id])
+
+  // Actual time logged against this plan.
+  timesheetEntries TimesheetEntry[]
+
+  @@index([employeeId])
+  @@index([departmentId])
+  @@index([clientId])
+  @@index([projectId])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([type])
+  @@index([status])
+  @@index([priority])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([startDate, endDate])
+  @@index([employeeId, status])
+  @@index([employeeId, startDate, endDate])
+  @@index([projectId, startDate, endDate])
+  @@index([clientId, startDate, endDate])
+}
+
+/**
+ * =============================================================================
+ * TIMESHEETS
+ * =============================================================================
+ * One timesheet is one employee's reporting period, for example:
+ * Hassan, week of 21 September 2026, Submitted
+ * The app starts with weekly periods, and the schema supports other
+ * periods later. The individual work records live in TimesheetEntry.
+ * =============================================================================
+ */
+
+model Timesheet {
+  id String @id @default(cuid())
+
+  employeeId String
+
+  timesheetRef String? @unique
+
+  status TimesheetStatus @default(DRAFT)
+
+  periodStart DateTime
+  periodEnd   DateTime
+
+  /**
+   * Cached totals keep dashboard and reporting queries cheap.
+   * The server recalculates them whenever entries change.
+   * expectedHours is the employee's capacity for the period, taken from
+   * their work schedule minus approved leave, so the review screen can
+   * show "32 of 40 hours logged" without recalculating.
+   */
+  totalHours    Decimal  @default(0) @db.Decimal(8, 2)
+  billableHours Decimal  @default(0) @db.Decimal(8, 2)
+  expectedHours Decimal? @db.Decimal(8, 2)
+
+  employeeNote String?
+
+  // Manager or admin review.
+  reviewedById String?
+  reviewedAt   DateTime?
+
+  reviewNote      String?
+  rejectionReason String?
+
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  rejectedAt  DateTime?
+
+  /**
+   * Locked timesheets cannot be edited, for example once billable hours
+   * have been invoiced or payroll has run. Unlocking is an audited action.
+   */
+  lockedAt   DateTime?
+  lockedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  reviewedBy AdminUser? @relation("TimesheetReviewedBy", fields: [reviewedById], references: [id])
+  lockedBy   AdminUser? @relation("TimesheetLockedBy", fields: [lockedById], references: [id])
+
+  entries    TimesheetEntry[]
+  activities TimesheetActivity[]
+
+  @@unique([employeeId, periodStart, periodEnd])
+  @@index([employeeId])
+  @@index([status])
+  @@index([periodStart])
+  @@index([periodEnd])
+  @@index([submittedAt])
+  @@index([reviewedById])
+  @@index([lockedById])
+  @@index([employeeId, status])
+  @@index([employeeId, periodStart])
+  @@index([status, periodStart])
+}
+
+/**
+ * =============================================================================
+ * TIMESHEETS: ENTRIES
+ * =============================================================================
+ * Actual work performed.
+ * Entries may be linked to a real client or project, to the workload
+ * allocation they were planned under, or be internal, admin, training or
+ * support work.
+ * employeeId is duplicated from the parent timesheet on purpose, so
+ * per person reports do not need a join. The API keeps it in sync.
+ * =============================================================================
+ */
+
+model TimesheetEntry {
+  id String @id @default(cuid())
+
+  timesheetId String
+  employeeId  String
+
+  clientId     String?
+  projectId    String?
+  allocationId String?
+
+  // Calendar date on which the work happened.
+  workDate DateTime
+
+  type TimesheetEntryType @default(PROJECT)
+
+  title       String
+  description String?
+
+  /**
+   * Duration in decimal hours.
+   * 1.50 = 1 hour 30 minutes
+   * 0.25 = 15 minutes
+   */
+  hours Decimal @db.Decimal(6, 2)
+
+  billable Boolean @default(false)
+
+  /**
+   * Optional clock times. Not required, because people often just
+   * record "3 hours on RentWise".
+   */
+  startedAt DateTime?
+  endedAt   DateTime?
+
+  /**
+   * Billing. When billable hours are invoiced, the entry is linked to the
+   * invoice so the same hours are never billed twice.
+   */
+  invoiceId String?
+  billedAt  DateTime?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  timesheet  Timesheet           @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  employee   Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  client     Client?             @relation(fields: [clientId], references: [id])
+  project    Project?            @relation(fields: [projectId], references: [id])
+  allocation WorkloadAllocation? @relation(fields: [allocationId], references: [id], onDelete: SetNull)
+  invoice    ClientInvoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([timesheetId])
+  @@index([employeeId])
+  @@index([clientId])
+  @@index([projectId])
+  @@index([allocationId])
+  @@index([invoiceId])
+  @@index([workDate])
+  @@index([type])
+  @@index([billable])
+  @@index([employeeId, workDate])
+  @@index([projectId, workDate])
+  @@index([clientId, workDate])
+  @@index([timesheetId, workDate])
+  @@index([allocationId, workDate])
+  @@index([clientId, billable, invoiceId])
+}
+
+/**
+ * =============================================================================
+ * TIMESHEETS: ACTIVITY
+ * =============================================================================
+ * Audit trail for a timesheet: submitted, approved, rejected, reopened,
+ * locked and so on. Mirrors LeaveActivity.
+ * =============================================================================
+ */
+
+model TimesheetActivity {
+  id String @id @default(cuid())
+
+  timesheetId String
+  employeeId  String
+  actorId     String?
+
+  type TimesheetActivityType
+
+  description String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  timesheet Timesheet  @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  employee  Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  actor     AdminUser? @relation("TimesheetActivityActor", fields: [actorId], references: [id])
+
+  @@index([timesheetId])
+  @@index([employeeId])
+  @@index([actorId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+/**
+ * =============================================================================
+ * ENUMS: ADMIN AND COMPANY
  * =============================================================================
  */
 
@@ -1268,7 +1999,7 @@ enum WorkArrangement {
 
 /**
  * =============================================================================
- * ENUMS — CLIENTS
+ * ENUMS: CLIENTS
  * =============================================================================
  */
 
@@ -1305,7 +2036,7 @@ enum ClientContactRole {
 
 /**
  * =============================================================================
- * ENUMS — BILLING
+ * ENUMS: BILLING
  * =============================================================================
  */
 
@@ -1334,7 +2065,7 @@ enum InvoiceStatus {
 
 /**
  * =============================================================================
- * ENUMS — PROJECTS
+ * ENUMS: PROJECTS
  * =============================================================================
  */
 
@@ -1369,7 +2100,7 @@ enum DatabaseType {
 
 /**
  * =============================================================================
- * ENUMS — INTEGRATIONS
+ * ENUMS: INTEGRATIONS
  * =============================================================================
  */
 
@@ -1396,7 +2127,7 @@ enum IntegrationStatus {
 
 /**
  * =============================================================================
- * ENUMS — MONITORING / SUPPORT
+ * ENUMS: MONITORING AND SUPPORT
  * =============================================================================
  */
 
@@ -1424,7 +2155,7 @@ enum TicketPriority {
 
 /**
  * =============================================================================
- * ENUMS — BANKING
+ * ENUMS: BANKING
  * =============================================================================
  */
 
@@ -1464,7 +2195,7 @@ enum BankSyncStatus {
 
 /**
  * =============================================================================
- * ENUMS — RECRUITMENT
+ * ENUMS: RECRUITMENT
  * =============================================================================
  */
 
@@ -1595,4 +2326,187 @@ enum RecruitmentActivityType {
 
   CANDIDATE_HIRED
   EMPLOYEE_CREATED
+}
+
+/**
+ * =============================================================================
+ * ENUMS: LEAVE
+ * =============================================================================
+ */
+
+enum LeaveType {
+  ANNUAL
+  SICK
+  PERSONAL
+  COMPASSIONATE
+  PARENTAL
+  UNPAID
+  STUDY
+  OTHER
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  RECORDED
+}
+
+enum LeaveDayPortion {
+  FULL_DAY
+  FIRST_HALF
+  SECOND_HALF
+}
+
+enum LeaveActivityType {
+  REQUEST_CREATED
+  REQUEST_UPDATED
+  REQUEST_APPROVED
+  REQUEST_REJECTED
+  REQUEST_CANCELLED
+  REQUEST_RECORDED
+
+  BALANCE_ADJUSTED
+  NOTE_ADDED
+}
+
+/**
+ * =============================================================================
+ * ENUMS: CALENDAR
+ * =============================================================================
+ */
+
+enum CalendarEventType {
+  MEETING
+  DEADLINE
+  MILESTONE
+  DEPLOYMENT
+  RELEASE
+  FINANCE
+  SUPPORT
+  MAINTENANCE
+  COMPANY
+  PERSONAL
+  FOCUS
+  REMINDER
+  OTHER
+}
+
+enum CalendarEventScope {
+  PERSONAL
+  TEAM
+  DEPARTMENT
+  COMPANY
+  WORKSPACE
+}
+
+enum CalendarEventPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum CalendarEventStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum CalendarAttendanceStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  TENTATIVE
+}
+
+/**
+ * =============================================================================
+ * ENUMS: WORKLOAD
+ * =============================================================================
+ */
+
+enum WorkloadAllocationType {
+  PROJECT
+  CLIENT_SUPPORT
+  MAINTENANCE
+  INTERNAL
+  PRODUCT
+  SALES
+  RECRUITMENT
+  TRAINING
+  ADMIN
+  OTHER
+}
+
+enum WorkloadAllocationStatus {
+  // Pencilled in, not yet agreed.
+  PLANNED
+  // Agreed with the employee and their manager.
+  CONFIRMED
+  // Work is under way.
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum WorkloadPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+enum WorkloadAllocationMode {
+  HOURS
+  PERCENTAGE
+}
+
+/**
+ * =============================================================================
+ * ENUMS: TIMESHEETS
+ * =============================================================================
+ */
+
+enum TimesheetStatus {
+  // Being filled in by the employee.
+  DRAFT
+  // Waiting for review.
+  SUBMITTED
+  APPROVED
+  // Sent back to the employee for changes. They can edit and resubmit.
+  REJECTED
+  // Approved and frozen, e.g. after invoicing or payroll.
+  LOCKED
+}
+
+enum TimesheetEntryType {
+  PROJECT
+  CLIENT_SUPPORT
+  MAINTENANCE
+  MEETING
+  INTERNAL
+  PRODUCT
+  SALES
+  RECRUITMENT
+  TRAINING
+  ADMIN
+  TRAVEL
+  OTHER
+}
+
+enum TimesheetActivityType {
+  TIMESHEET_CREATED
+  ENTRY_ADDED
+  ENTRY_UPDATED
+  ENTRY_REMOVED
+  SUBMITTED
+  APPROVED
+  REJECTED
+  REOPENED
+  LOCKED
+  UNLOCKED
+  NOTE_ADDED
 }

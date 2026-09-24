@@ -1,14 +1,28 @@
-"use client";
+/* eslint-disable react-hooks/refs */
+/* eslint-disable react-hooks/set-state-in-effect */
+'use client';
 
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
+  type CSSProperties,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
-} from "react";
+} from 'react';
+import { createPortal } from 'react-dom';
+import {
+  AnimatePresence,
+  motion,
+  useReducedMotion,
+} from 'framer-motion';
 import {
   AlertCircle,
   ArrowLeft,
@@ -23,7 +37,6 @@ import {
   Copy,
   Download,
   ExternalLink,
-  Filter,
   Globe2,
   Grid2X2,
   LayoutList,
@@ -35,48 +48,43 @@ import {
   Phone,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
   UserRound,
   Users,
+  Wand2,
   X,
-} from "lucide-react";
+  type LucideIcon,
+} from 'lucide-react';
 
-import ClientWorkspace from "../../clients/ClientWorkspace";
+import ClientWorkspace from '../../clients/ClientWorkspace';
 
 /* =============================================================================
-   TYPES
-============================================================================= */
+ * TYPES
+ * =============================================================================
+ */
 
-type ClientStatus =
-  | "LEAD"
-  | "ONBOARDING"
-  | "ACTIVE"
-  | "PAUSED"
-  | "ARCHIVED";
+type ClientStatus = 'LEAD' | 'ONBOARDING' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
 
-type ClientPriority = "STANDARD" | "IMPORTANT" | "STRATEGIC";
+type ClientPriority = 'STANDARD' | 'IMPORTANT' | 'STRATEGIC';
 
-type ClientRelationship =
-  | "CLIENT"
-  | "PARTNER"
-  | "STRATEGIC_PARTNER";
+type ClientRelationship = 'CLIENT' | 'PARTNER' | 'STRATEGIC_PARTNER';
 
-type BillingCycle = "MONTHLY" | "QUARTERLY" | "ANNUAL" | "CUSTOM";
+type BillingCycle = 'MONTHLY' | 'QUARTERLY' | 'ANNUAL' | 'CUSTOM';
 
-type Currency = "NGN" | "GBP" | "USD" | "EUR";
+type Currency = 'NGN' | 'GBP' | 'USD' | 'EUR';
 
 type ContactRole =
-  | "GENERAL"
-  | "DECISION_MAKER"
-  | "EXECUTIVE"
-  | "OPERATIONS"
-  | "FINANCE"
-  | "TECHNICAL"
-  | "PRODUCT"
-  | "SUPPORT";
+  | 'GENERAL'
+  | 'DECISION_MAKER'
+  | 'EXECUTIVE'
+  | 'OPERATIONS'
+  | 'FINANCE'
+  | 'TECHNICAL'
+  | 'PRODUCT'
+  | 'SUPPORT';
 
 type AccountOwner = {
   id: string;
@@ -112,128 +120,78 @@ type ClientRecord = {
   displayName: string | null;
   slug: string;
   clientRef: string | null;
-
   description: string | null;
   industry: string | null;
   country: string | null;
   city: string | null;
-
   logoUrl: string | null;
   websiteUrl: string | null;
-
   status: ClientStatus;
   priority: ClientPriority;
   relationshipType: ClientRelationship;
-
   relationshipStartedAt: string | null;
   liveSince: string | null;
-
   domain: string | null;
   adminUrl: string | null;
-
   billingCycle: BillingCycle;
   contractValue: string;
   currency: Currency;
   renewalAt: string | null;
-
   integrationLive: boolean;
-
   createdAt: string;
   updatedAt: string;
-
   accountOwner: AccountOwner | null;
   contacts: ClientContact[];
   projects: ClientProject[];
-
   _count: {
     contacts: number;
     projects: number;
     tickets: number;
     invoices: number;
   };
-
   openSupportCount: number;
 };
 
 type ClientsResponse = {
   ok: boolean;
   clients?: ClientRecord[];
-  meta?: {
-    total: number;
-    active: number;
-    onboarding: number;
-    archived: number;
-  };
   error?: string;
-};
-
-type SelectOption = {
-  value: string;
-  label: string;
 };
 
 type ClientOptionsResponse = {
   ok: boolean;
   accountOwners?: AccountOwner[];
-  options?: {
-    statuses: SelectOption[];
-    priorities: SelectOption[];
-    relationshipTypes: SelectOption[];
-    contactRoles: SelectOption[];
-    billingCycles: SelectOption[];
-    currencies: SelectOption[];
-  };
   error?: string;
 };
 
-type ViewMode = "grid" | "list";
+type ViewMode = 'grid' | 'list';
 
-type SortKey =
-  | "RECENT"
-  | "NAME"
-  | "PROJECTS"
-  | "VALUE"
-  | "ATTENTION";
+type SortKey = 'RECENT' | 'NAME' | 'PROJECTS' | 'VALUE' | 'ATTENTION';
 
-type QuickFilter =
-  | "ALL"
-  | "ATTENTION"
-  | "RENEWALS"
-  | "UNASSIGNED"
-  | "SUPPORT";
-
-type ToastTone = "success" | "error" | "info";
-
-type ToastMessage = {
-  id: number;
-  tone: ToastTone;
-  message: string;
-};
+type QuickFilter = 'ALL' | 'ATTENTION' | 'RENEWALS' | 'UNASSIGNED' | 'SUPPORT';
 
 type ClientForm = {
   name: string;
   displayName: string;
   industry: string;
   description: string;
-
   country: string;
   city: string;
   websiteUrl: string;
   domain: string;
-
+  domainAuto: boolean;
   status: ClientStatus;
+  statusAuto: boolean;
   priority: ClientPriority;
   relationshipType: ClientRelationship;
   accountOwnerId: string;
-
   relationshipStartedAt: string;
   liveSince: string;
-
   billingCycle: BillingCycle;
   currency: Currency;
+  currencyAuto: boolean;
   contractValue: string;
   renewalAt: string;
-
   contactFirstName: string;
   contactLastName: string;
   contactJobTitle: string;
@@ -242,13 +200,7 @@ type ClientForm = {
   contactRole: ContactRole;
 };
 
-type FormIssue = {
-  field?: keyof ClientForm;
-  step: AddClientStep;
-  message: string;
-};
-
-type AddClientStep = 1 | 2 | 3 | 4;
+type FieldErrors = Partial<Record<keyof ClientForm, string>>;
 
 type MenuItem = {
   key: string;
@@ -260,124 +212,146 @@ type MenuItem = {
   disabled?: boolean;
 };
 
-/* =============================================================================
-   BRAND
-============================================================================= */
+type ToastState = {
+  id: number;
+  tone: 'success' | 'error';
+  message: string;
+} | null;
 
-const GOLD_GRADIENT =
-  "linear-gradient(135deg,#F3DFA2,#D4AF37 60%,#C79A2A)";
+type Notify = (tone: 'success' | 'error', message: string) => void;
 
-const BRAND_WASH =
-  "linear-gradient(135deg, rgba(212,175,55,0.16), rgba(20,184,166,0.11))";
-
-const BRAND_WASH_SOFT =
-  "linear-gradient(135deg, rgba(212,175,55,0.09), rgba(20,184,166,0.06))";
-
-const GOLD_SHADOW = "0 10px 26px rgba(212,175,55,0.28)";
-const GOLD_INK = "#241A05";
-
-const FOCUS_RING =
-  "outline-none focus-visible:ring-2 focus-visible:ring-[#D4AF37]/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--card)]";
-
-const INPUT_BASE =
-  "w-full rounded-xl border border-[var(--border)] bg-[var(--card)] text-sm text-[var(--text)] outline-none transition placeholder:text-[var(--muted)] focus:border-[#D4AF37]/55 focus:ring-2 focus:ring-[#D4AF37]/15";
+type DropdownOption<T extends string> = {
+  value: T;
+  label: string;
+  hint?: string;
+  keywords?: string;
+  leading?: ReactNode;
+  trailing?: ReactNode;
+  disabled?: boolean;
+};
 
 /* =============================================================================
-   CONSTANTS
-============================================================================= */
+ * CONSTANTS
+ * =============================================================================
+ */
 
-const STORAGE_PREFIX = "syntragrid.clients";
+const STORAGE_PREFIX = 'syntragrid.clients';
 const DRAFT_KEY = `${STORAGE_PREFIX}.draft`;
 const REFRESH_AFTER_MS = 60_000;
 const RENEWAL_WINDOW_DAYS = 60;
 
 const DEFAULT_FORM: ClientForm = {
-  name: "",
-  displayName: "",
-  industry: "",
-  description: "",
-  country: "Nigeria",
-  city: "",
-  websiteUrl: "",
-  domain: "",
-  status: "ONBOARDING",
-  priority: "STANDARD",
-  relationshipType: "CLIENT",
-  accountOwnerId: "",
-  relationshipStartedAt: "",
-  liveSince: "",
-  billingCycle: "ANNUAL",
-  currency: "NGN",
-  contractValue: "",
-  renewalAt: "",
-  contactFirstName: "",
-  contactLastName: "",
-  contactJobTitle: "",
-  contactEmail: "",
-  contactPhone: "",
-  contactRole: "GENERAL",
+  name: '',
+  displayName: '',
+  industry: '',
+  description: '',
+  country: 'Nigeria',
+  city: '',
+  websiteUrl: '',
+  domain: '',
+  domainAuto: true,
+  status: 'ONBOARDING',
+  statusAuto: true,
+  priority: 'STANDARD',
+  relationshipType: 'CLIENT',
+  accountOwnerId: '',
+  relationshipStartedAt: '',
+  liveSince: '',
+  billingCycle: 'ANNUAL',
+  currency: 'NGN',
+  currencyAuto: true,
+  contractValue: '',
+  renewalAt: '',
+  contactFirstName: '',
+  contactLastName: '',
+  contactJobTitle: '',
+  contactEmail: '',
+  contactPhone: '',
+  contactRole: 'GENERAL',
 };
 
-const STATUS_OPTIONS = [
-  { value: "LEAD", label: "Lead" },
-  { value: "ONBOARDING", label: "Onboarding" },
-  { value: "ACTIVE", label: "Active" },
-  { value: "PAUSED", label: "Paused" },
-  { value: "ARCHIVED", label: "Archived" },
-] satisfies Array<{ value: ClientStatus; label: string }>;
+const STATUS_OPTIONS: Array<{ value: ClientStatus; label: string; hint: string }> = [
+  { value: 'LEAD', label: 'Lead', hint: 'Talking, not signed' },
+  { value: 'ONBOARDING', label: 'Onboarding', hint: 'Signed, setting up' },
+  { value: 'ACTIVE', label: 'Active', hint: 'Live and working' },
+  { value: 'PAUSED', label: 'Paused', hint: 'Work on hold' },
+  { value: 'ARCHIVED', label: 'Archived', hint: 'No longer a client' },
+];
 
-const PRIORITY_OPTIONS = [
-  { value: "STANDARD", label: "Standard" },
-  { value: "IMPORTANT", label: "Important" },
-  { value: "STRATEGIC", label: "Strategic" },
-] satisfies Array<{ value: ClientPriority; label: string }>;
+const PRIORITY_OPTIONS: Array<{ value: ClientPriority; label: string }> = [
+  { value: 'STANDARD', label: 'Standard' },
+  { value: 'IMPORTANT', label: 'Important' },
+  { value: 'STRATEGIC', label: 'Strategic' },
+];
 
-const RELATIONSHIP_OPTIONS = [
-  { value: "CLIENT", label: "Client" },
-  { value: "PARTNER", label: "Partner" },
-  { value: "STRATEGIC_PARTNER", label: "Strategic partner" },
-] satisfies Array<{ value: ClientRelationship; label: string }>;
+const RELATIONSHIP_OPTIONS: Array<{ value: ClientRelationship; label: string }> = [
+  { value: 'CLIENT', label: 'Client' },
+  { value: 'PARTNER', label: 'Partner' },
+  { value: 'STRATEGIC_PARTNER', label: 'Strategic partner' },
+];
 
-const BILLING_OPTIONS = [
-  { value: "MONTHLY", label: "Monthly" },
-  { value: "QUARTERLY", label: "Quarterly" },
-  { value: "ANNUAL", label: "Annual" },
-  { value: "CUSTOM", label: "Custom" },
-] satisfies Array<{ value: BillingCycle; label: string }>;
+const BILLING_OPTIONS: Array<{ value: BillingCycle; label: string }> = [
+  { value: 'MONTHLY', label: 'Monthly' },
+  { value: 'QUARTERLY', label: 'Quarterly' },
+  { value: 'ANNUAL', label: 'Annual' },
+  { value: 'CUSTOM', label: 'Custom' },
+];
 
-const CURRENCY_OPTIONS = [
-  { value: "NGN", label: "NGN · Nigerian Naira" },
-  { value: "GBP", label: "GBP · British Pound" },
-  { value: "USD", label: "USD · US Dollar" },
-  { value: "EUR", label: "EUR · Euro" },
-] satisfies Array<{ value: Currency; label: string }>;
+const CURRENCY_OPTIONS: Array<DropdownOption<Currency>> = [
+  { value: 'NGN', label: 'NGN', hint: 'Nigerian naira' },
+  { value: 'GBP', label: 'GBP', hint: 'British pound' },
+  { value: 'USD', label: 'USD', hint: 'US dollar' },
+  { value: 'EUR', label: 'EUR', hint: 'Euro' },
+];
 
-const CONTACT_ROLE_OPTIONS = [
-  { value: "GENERAL", label: "General" },
-  { value: "DECISION_MAKER", label: "Decision maker" },
-  { value: "EXECUTIVE", label: "Executive" },
-  { value: "OPERATIONS", label: "Operations" },
-  { value: "FINANCE", label: "Finance" },
-  { value: "TECHNICAL", label: "Technical" },
-  { value: "PRODUCT", label: "Product" },
-  { value: "SUPPORT", label: "Support" },
-] satisfies Array<{ value: ContactRole; label: string }>;
+const CONTACT_ROLE_OPTIONS: Array<DropdownOption<ContactRole>> = [
+  { value: 'GENERAL', label: 'General' },
+  { value: 'DECISION_MAKER', label: 'Decision maker' },
+  { value: 'EXECUTIVE', label: 'Executive' },
+  { value: 'OPERATIONS', label: 'Operations' },
+  { value: 'FINANCE', label: 'Finance' },
+  { value: 'TECHNICAL', label: 'Technical' },
+  { value: 'PRODUCT', label: 'Product' },
+  { value: 'SUPPORT', label: 'Support' },
+];
 
-const SORT_OPTIONS = [
-  { value: "RECENT", label: "Recently updated" },
-  { value: "NAME", label: "Name A to Z" },
-  { value: "PROJECTS", label: "Most projects" },
-  { value: "VALUE", label: "Highest value" },
-  { value: "ATTENTION", label: "Needs attention" },
-] satisfies Array<{ value: SortKey; label: string }>;
+const SORT_OPTIONS: Array<DropdownOption<SortKey>> = [
+  { value: 'RECENT', label: 'Recently updated' },
+  { value: 'NAME', label: 'Name A to Z' },
+  { value: 'PROJECTS', label: 'Most projects' },
+  { value: 'VALUE', label: 'Highest value' },
+  { value: 'ATTENTION', label: 'Needs attention' },
+];
+
+const QUICK_FILTERS: Array<{ value: QuickFilter; label: string }> = [
+  { value: 'ALL', label: 'Everyone' },
+  { value: 'ATTENTION', label: 'Needs attention' },
+  { value: 'RENEWALS', label: 'Renewing soon' },
+  { value: 'UNASSIGNED', label: 'No owner' },
+  { value: 'SUPPORT', label: 'Open support' },
+];
+
+const COUNTRY_CURRENCY: Array<{ currency: Currency; words: string[] }> = [
+  { currency: 'NGN', words: ['nigeria', 'ng'] },
+  { currency: 'GBP', words: ['united kingdom', 'uk', 'england', 'scotland', 'wales', 'northern ireland', 'great britain', 'britain', 'gb'] },
+  { currency: 'USD', words: ['united states', 'usa', 'us', 'america'] },
+  {
+    currency: 'EUR',
+    words: ['ireland', 'germany', 'france', 'spain', 'italy', 'netherlands', 'belgium', 'portugal', 'austria', 'finland', 'greece', 'luxembourg'],
+  },
+];
+
+const WIZARD_STEPS = [
+  { id: 1, label: 'Company' },
+  { id: 2, label: 'Relationship' },
+  { id: 3, label: 'Contact' },
+  { id: 4, label: 'Review' },
+] as const;
 
 /* =============================================================================
-   HELPERS
-============================================================================= */
-
-function cx(...values: Array<string | false | null | undefined>) {
-  return values.filter(Boolean).join(" ");
-}
+ * HELPERS
+ * =============================================================================
+ */
 
 function initials(value: string) {
   return value
@@ -385,25 +359,23 @@ function initials(value: string) {
     .filter(Boolean)
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
-    .join("");
+    .join('');
 }
 
 function formatEnum(value: string) {
   return value
     .toLowerCase()
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    .replace(/_/g, ' ')
+    .replace(/^\w/, (letter) => letter.toUpperCase());
 }
 
 function personName(person: AccountOwner | null | undefined) {
-  if (!person) return "Unassigned";
+  if (!person) return 'No owner';
+  return [person.firstName, person.lastName].filter(Boolean).join(' ').trim() || person.email;
+}
 
-  const value = [person.firstName, person.lastName]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-
-  return value || person.email;
+function clientTitle(client: Pick<ClientRecord, 'displayName' | 'name'>) {
+  return client.displayName || client.name;
 }
 
 function timeOf(value: string | null | undefined) {
@@ -413,25 +385,24 @@ function timeOf(value: string | null | undefined) {
 }
 
 function formatDate(value: string | null | undefined) {
-  if (!value) return "Not set";
-
+  if (!value) return 'Not set';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Not set";
+  if (Number.isNaN(date.getTime())) return 'Not set';
 
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
+  return new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
   }).format(date);
 }
 
 function formatMoney(value: string | number, currency: Currency) {
   const amount = Number(value);
-  if (!Number.isFinite(amount)) return "Not set";
+  if (!Number.isFinite(amount)) return 'Not set';
 
   try {
-    return new Intl.NumberFormat("en-GB", {
-      style: "currency",
+    return new Intl.NumberFormat('en-GB', {
+      style: 'currency',
       currency,
       maximumFractionDigits: 0,
     }).format(amount);
@@ -442,14 +413,13 @@ function formatMoney(value: string | number, currency: Currency) {
 
 function formatCompactMoney(value: string | number, currency: Currency) {
   const amount = Number(value);
-
-  if (!Number.isFinite(amount) || amount === 0) return "No value set";
+  if (!Number.isFinite(amount) || amount === 0) return null;
 
   try {
-    return new Intl.NumberFormat("en-GB", {
-      style: "currency",
+    return new Intl.NumberFormat('en-GB', {
+      style: 'currency',
       currency,
-      notation: "compact",
+      notation: 'compact',
       maximumFractionDigits: 1,
     }).format(amount);
   } catch {
@@ -459,22 +429,18 @@ function formatCompactMoney(value: string | number, currency: Currency) {
 
 function daysUntil(value: string | null | undefined) {
   if (!value) return null;
-
   const target = new Date(value).getTime();
   if (Number.isNaN(target)) return null;
-
   return Math.ceil((target - Date.now()) / 86_400_000);
 }
 
 function renewalLabel(value: string | null | undefined) {
   const days = daysUntil(value);
-
   if (days === null) return null;
-  if (days < 0) return "Renewal overdue";
-  if (days === 0) return "Renews today";
-  if (days === 1) return "Renews tomorrow";
+  if (days < 0) return 'Renewal overdue';
+  if (days === 0) return 'Renews today';
+  if (days === 1) return 'Renews tomorrow';
   if (days <= RENEWAL_WINDOW_DAYS) return `Renews in ${days} days`;
-
   return `Renews ${formatDate(value)}`;
 }
 
@@ -487,19 +453,14 @@ function attentionReasons(client: ClientRecord) {
   const reasons: string[] = [];
 
   if (client.openSupportCount > 0) {
-    reasons.push(
-      `${client.openSupportCount} open support ${
-        client.openSupportCount === 1 ? "ticket" : "tickets"
-      }`,
-    );
+    reasons.push(`${client.openSupportCount} open support ${client.openSupportCount === 1 ? 'ticket' : 'tickets'}`);
   }
 
-  if (client.status === "PAUSED") reasons.push("Relationship paused");
-  if (!client.accountOwner) reasons.push("No account owner");
+  if (client.status === 'PAUSED') reasons.push('Relationship paused');
+  if (!client.accountOwner) reasons.push('No account owner');
 
   const days = daysUntil(client.renewalAt);
-
-  if (days !== null && days < 0) reasons.push("Renewal date has passed");
+  if (days !== null && days < 0) reasons.push('Renewal date has passed');
   else if (days !== null && days <= 30) reasons.push(`Renews in ${days} days`);
 
   return reasons;
@@ -510,7 +471,7 @@ function attentionScore(client: ClientRecord) {
 
   return (
     client.openSupportCount * 3 +
-    (client.status === "PAUSED" ? 2 : 0) +
+    (client.status === 'PAUSED' ? 2 : 0) +
     (client.accountOwner ? 0 : 2) +
     (days !== null && days < 0 ? 3 : 0) +
     (days !== null && days >= 0 && days <= 30 ? 1 : 0)
@@ -527,17 +488,15 @@ function isValidEmail(value: string) {
 
 function normaliseUrl(value: string) {
   const trimmed = value.trim();
-
-  if (!trimmed) return "";
+  if (!trimmed) return '';
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
-
   return `https://${trimmed}`;
 }
 
 function isValidUrl(value: string) {
   try {
     const url = new URL(normaliseUrl(value));
-    return Boolean(url.hostname) && url.hostname.includes(".");
+    return Boolean(url.hostname) && url.hostname.includes('.');
   } catch {
     return false;
   }
@@ -545,130 +504,211 @@ function isValidUrl(value: string) {
 
 function domainFromUrl(value: string) {
   try {
-    const url = new URL(normaliseUrl(value));
-    return url.hostname.replace(/^www\./i, "");
+    return new URL(normaliseUrl(value)).hostname.replace(/^www\./i, '');
   } catch {
-    return "";
+    return '';
   }
 }
 
-function relativeTime(value: Date | null) {
-  if (!value) return "Not synced yet";
+function currencyForCountry(country: string): Currency | null {
+  const key = country.trim().toLowerCase();
+  if (!key) return null;
 
+  for (const group of COUNTRY_CURRENCY) {
+    if (group.words.includes(key)) return group.currency;
+  }
+
+  return null;
+}
+
+function todayInput() {
+  const date = new Date();
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+}
+
+function statusFromLiveDate(liveSince: string): ClientStatus {
+  if (liveSince && liveSince <= todayInput()) return 'ACTIVE';
+  return 'ONBOARDING';
+}
+
+function effective(form: ClientForm) {
+  return {
+    domain: form.domainAuto ? domainFromUrl(form.websiteUrl) || form.domain : form.domain,
+    status: form.statusAuto ? statusFromLiveDate(form.liveSince) : form.status,
+    currency: form.currencyAuto ? (currencyForCountry(form.country) ?? form.currency) : form.currency,
+  };
+}
+
+function suggestRenewal(form: ClientForm) {
+  const base = form.liveSince || form.relationshipStartedAt;
+  if (!base || form.billingCycle === 'CUSTOM') return null;
+
+  const date = new Date(`${base}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const months = form.billingCycle === 'MONTHLY' ? 1 : form.billingCycle === 'QUARTERLY' ? 3 : 12;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let guard = 0;
+  do {
+    date.setMonth(date.getMonth() + months);
+    guard += 1;
+  } while (date <= today && guard < 240);
+
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+}
+
+function relativeSync(value: Date | null) {
+  if (!value) return 'Not synced yet';
   const seconds = Math.round((Date.now() - value.getTime()) / 1000);
-
-  if (seconds < 45) return "Synced just now";
-
+  if (seconds < 45) return 'Synced just now';
   const minutes = Math.round(seconds / 60);
-
-  if (minutes < 60) {
-    return `Synced ${minutes} ${minutes === 1 ? "minute" : "minutes"} ago`;
-  }
-
+  if (minutes < 60) return `Synced ${minutes}m ago`;
   const hours = Math.round(minutes / 60);
-
-  if (hours < 24) {
-    return `Synced ${hours} ${hours === 1 ? "hour" : "hours"} ago`;
-  }
-
+  if (hours < 24) return `Synced ${hours}h ago`;
   return `Synced ${formatDate(value.toISOString())}`;
 }
 
-function statusClasses(status: ClientStatus) {
+function statusStyle(status: ClientStatus) {
   switch (status) {
-    case "ACTIVE":
-      return "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
-    case "ONBOARDING":
-      return "border-teal-500/25 bg-teal-500/10 text-teal-700 dark:text-teal-300";
-    case "LEAD":
-      return "border-violet-500/20 bg-violet-500/10 text-violet-700 dark:text-violet-300";
-    case "PAUSED":
-      return "border-orange-500/20 bg-orange-500/10 text-orange-700 dark:text-orange-300";
-    case "ARCHIVED":
-      return "border-[var(--border)] bg-[var(--soft)] text-[var(--muted)]";
-  }
-}
-
-function priorityClasses(priority: ClientPriority) {
-  switch (priority) {
-    case "STRATEGIC":
-      return "border-[#D4AF37]/35 bg-[#D4AF37]/12 text-[#8A6A12] dark:text-[#F3DFA2]";
-    case "IMPORTANT":
-      return "border-[#D4AF37]/20 bg-[#D4AF37]/[0.07] text-[#8A6A12] dark:text-[#E7CE84]";
-    default:
-      return "border-[var(--border)] bg-[var(--soft)] text-[var(--muted)]";
+    case 'ACTIVE':
+      return {
+        badge: 'border-[color:var(--success-border,rgba(16,185,129,0.25))] bg-[var(--success-soft,rgba(16,185,129,0.1))] text-[var(--success,#047857)]',
+        dot: 'bg-[var(--success,#10b981)]',
+      };
+    case 'ONBOARDING':
+      return { badge: 'border-blue-500/20 bg-blue-500/10 text-blue-700', dot: 'bg-blue-500' };
+    case 'LEAD':
+      return { badge: 'border-violet-500/20 bg-violet-500/10 text-violet-700', dot: 'bg-violet-500' };
+    case 'PAUSED':
+      return {
+        badge: 'border-[color:var(--warning-border,rgba(245,158,11,0.25))] bg-[var(--warning-soft,rgba(245,158,11,0.1))] text-[var(--warning,#b45309)]',
+        dot: 'bg-[var(--warning,#f59e0b)]',
+      };
+    case 'ARCHIVED':
+      return { badge: 'border-[var(--line)] bg-[var(--surface-muted)] text-[var(--text-subtle)]', dot: 'bg-[var(--text-subtle)]' };
   }
 }
 
 function buildCsv(clients: ClientRecord[]) {
   const headers = [
-    "Reference",
-    "Name",
-    "Display name",
-    "Status",
-    "Priority",
-    "Relationship",
-    "Industry",
-    "City",
-    "Country",
-    "Domain",
-    "Account owner",
-    "Projects",
-    "Contacts",
-    "Open support",
-    "Billing cycle",
-    "Currency",
-    "Contract value",
-    "Renewal",
+    'Reference',
+    'Name',
+    'Display name',
+    'Status',
+    'Priority',
+    'Relationship',
+    'Industry',
+    'City',
+    'Country',
+    'Domain',
+    'Account owner',
+    'Projects',
+    'Contacts',
+    'Open support',
+    'Billing cycle',
+    'Currency',
+    'Contract value',
+    'Renewal',
   ];
 
   const rows = clients.map((client) => [
-    client.clientRef ?? "",
+    client.clientRef ?? '',
     client.name,
-    client.displayName ?? "",
+    client.displayName ?? '',
     formatEnum(client.status),
     formatEnum(client.priority),
     formatEnum(client.relationshipType),
-    client.industry ?? "",
-    client.city ?? "",
-    client.country ?? "",
-    client.domain ?? "",
-    personName(client.accountOwner),
+    client.industry ?? '',
+    client.city ?? '',
+    client.country ?? '',
+    client.domain ?? '',
+    client.accountOwner ? personName(client.accountOwner) : '',
     client._count.projects,
     client._count.contacts,
     client.openSupportCount,
     formatEnum(client.billingCycle),
     client.currency,
     client.contractValue,
-    client.renewalAt ? formatDate(client.renewalAt) : "",
+    client.renewalAt ? formatDate(client.renewalAt) : '',
   ]);
 
   return [headers, ...rows]
-    .map((row) =>
-      row
-        .map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`)
-        .join(","),
-    )
-    .join("\n");
+    .map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
+    .join('\n');
 }
 
 function downloadCsv(filename: string, contents: string) {
-  const blob = new Blob([contents], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob([contents], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-
+  const link = document.createElement('a');
   link.href = url;
   link.download = filename;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-
   URL.revokeObjectURL(url);
 }
 
+function loadDraft(ownerFallback: string): { form: ClientForm; restored: boolean } {
+  try {
+    const raw = window.localStorage.getItem(DRAFT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<ClientForm>;
+      if (parsed && typeof parsed === 'object' && parsed.name?.trim()) {
+        return {
+          form: { ...DEFAULT_FORM, ...parsed, accountOwnerId: parsed.accountOwnerId || ownerFallback },
+          restored: true,
+        };
+      }
+    }
+  } catch {
+    // Storage is optional.
+  }
+
+  return { form: { ...DEFAULT_FORM, accountOwnerId: ownerFallback }, restored: false };
+}
+
+function validateStep(step: number, form: ClientForm, hasOwners: boolean): FieldErrors {
+  const errors: FieldErrors = {};
+
+  if (step === 1) {
+    if (!form.name.trim()) errors.name = 'Enter the company or organisation name.';
+    if (form.websiteUrl.trim() && !isValidUrl(form.websiteUrl)) errors.websiteUrl = 'Enter a real web address, e.g. syntragrid.com';
+  }
+
+  if (step === 2) {
+    if (!form.accountOwnerId && hasOwners) errors.accountOwnerId = 'Choose who owns this relationship.';
+    if (form.contractValue.trim() && Number(form.contractValue) < 0) errors.contractValue = 'Cannot be negative.';
+    if (form.relationshipStartedAt && form.liveSince && form.liveSince < form.relationshipStartedAt) {
+      errors.liveSince = 'Cannot be before the relationship started.';
+    }
+  }
+
+  if (step === 3) {
+    const anyContact = Boolean(
+      form.contactFirstName.trim() ||
+        form.contactLastName.trim() ||
+        form.contactEmail.trim() ||
+        form.contactPhone.trim() ||
+        form.contactJobTitle.trim(),
+    );
+
+    if (anyContact) {
+      if (!form.contactFirstName.trim()) errors.contactFirstName = 'Enter a first name.';
+      if (!form.contactLastName.trim()) errors.contactLastName = 'Enter a last name.';
+      if (form.contactEmail.trim() && !isValidEmail(form.contactEmail)) errors.contactEmail = 'Enter a valid email.';
+    }
+  }
+
+  return errors;
+}
+
 /* =============================================================================
-   HOOKS
-============================================================================= */
+ * HOOKS
+ * =============================================================================
+ */
 
 function usePersistentState<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(initial);
@@ -677,21 +717,15 @@ function usePersistentState<T>(key: string, initial: T) {
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(key);
-
-      if (raw !== null) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setValue(JSON.parse(raw) as T);
-      }
+      if (raw !== null) setValue(JSON.parse(raw) as T);
     } catch {
       // Defaults are fine.
     }
-
     setReady(true);
   }, [key]);
 
   useEffect(() => {
     if (!ready) return;
-
     try {
       window.localStorage.setItem(key, JSON.stringify(value));
     } catch {
@@ -713,34 +747,15 @@ function useDebouncedValue<T>(value: T, delay = 180) {
   return debounced;
 }
 
-function useToasts() {
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const counter = useRef(0);
-
-  const dismissToast = useCallback((id: number) => {
-    setToasts((current) => current.filter((toast) => toast.id !== id));
-  }, []);
-
-  const pushToast = useCallback(
-    (tone: ToastTone, message: string) => {
-      counter.current += 1;
-      const id = counter.current;
-
-      setToasts((current) => [...current.slice(-2), { id, tone, message }]);
-
-      setTimeout(() => dismissToast(id), 4200);
-    },
-    [dismissToast],
-  );
-
-  return { toasts, pushToast, dismissToast };
-}
-
 /* =============================================================================
-   CLIENTS TAB
-============================================================================= */
+ * CLIENTS TAB
+ * =============================================================================
+ */
 
 export default function ClientsTab() {
+  const reduceMotion = useReducedMotion();
+  const theme = useThemeBridge();
+
   const [clients, setClients] = useState<ClientRecord[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [accountOwners, setAccountOwners] = useState<AccountOwner[]>([]);
@@ -750,271 +765,198 @@ export default function ClientsTab() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [clockTick, setClockTick] = useState(0);
-
   const [error, setError] = useState<string | null>(null);
 
-  const [searchInput, setSearchInput] = useState("");
+  const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput);
 
-  const [statusFilter, setStatusFilter] = usePersistentState<
-    "ALL" | ClientStatus
-  >(`${STORAGE_PREFIX}.status`, "ALL");
+  const [statusFilter, setStatusFilter] = usePersistentState<'ALL' | ClientStatus>(`${STORAGE_PREFIX}.status`, 'ALL');
+  const [priorityFilter, setPriorityFilter] = usePersistentState<'ALL' | ClientPriority>(`${STORAGE_PREFIX}.priority`, 'ALL');
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>('ALL');
+  const [sortKey, setSortKey] = usePersistentState<SortKey>(`${STORAGE_PREFIX}.sort`, 'RECENT');
+  const [viewMode, setViewMode] = usePersistentState<ViewMode>(`${STORAGE_PREFIX}.view`, 'grid');
 
-  const [priorityFilter, setPriorityFilter] = usePersistentState<
-    "ALL" | ClientPriority
-  >(`${STORAGE_PREFIX}.priority`, "ALL");
-
-  const [quickFilter, setQuickFilter] = useState<QuickFilter>("ALL");
-
-  const [sortKey, setSortKey] = usePersistentState<SortKey>(
-    `${STORAGE_PREFIX}.sort`,
-    "RECENT",
-  );
-
-  const [viewMode, setViewMode] = usePersistentState<ViewMode>(
-    `${STORAGE_PREFIX}.view`,
-    "grid",
-  );
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [step, setStep] = useState<AddClientStep>(1);
-  const [form, setForm] = useState<ClientForm>(DEFAULT_FORM);
-  const [draftRestored, setDraftRestored] = useState(false);
-
-  const [creating, setCreating] = useState(false);
-  const [formIssue, setFormIssue] = useState<FormIssue | null>(null);
-  const [createdClient, setCreatedClient] = useState<ClientRecord | null>(null);
-
-  const { toasts, pushToast, dismissToast } = useToasts();
+  const [addOpen, setAddOpen] = useState(false);
+  const [addKey, setAddKey] = useState(0);
+  const [toast, setToast] = useState<ToastState>(null);
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const syncRef = useRef<Date | null>(null);
 
-  /* ==========================================================================
-     OPEN CLIENT WORKSPACE
-  ========================================================================== */
-
-  const openClient = useCallback((clientId: string) => {
-    setDrawerOpen(false);
-    setCreatedClient(null);
-    setFormIssue(null);
-    setSelectedClientId(clientId);
+  const notify = useCallback<Notify>((tone, message) => {
+    setToast({ id: Date.now(), tone, message });
   }, []);
 
-  const closeClientWorkspace = useCallback(() => {
-    setSelectedClientId(null);
-  }, []);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
-  /* ==========================================================================
-     DATA
-  ========================================================================== */
+  /* ---------- Data ---------- */
 
   const loadClients = useCallback(
     async (silent = false) => {
       requestRef.current?.abort();
-
       const controller = new AbortController();
       requestRef.current = controller;
 
       if (silent) setRefreshing(true);
       else setLoading(true);
-
       setError(null);
 
       try {
-        const response = await fetch("/api/admin/clients", {
-          method: "GET",
-          cache: "no-store",
+        const response = await fetch('/api/admin/clients', {
+          method: 'GET',
+          cache: 'no-store',
+          credentials: 'include',
           signal: controller.signal,
-          headers: {
-            Accept: "application/json",
-          },
+          headers: { Accept: 'application/json' },
         });
 
-        const payload = (await response.json()) as ClientsResponse;
+        const payload = (await response.json().catch(() => ({ ok: false }))) as ClientsResponse;
 
         if (!response.ok || !payload.ok) {
-          throw new Error(payload.error || "Clients could not be loaded.");
+          throw new Error(payload.error || 'Clients could not be loaded.');
         }
 
         setClients(payload.clients ?? []);
-
         const now = new Date();
-
         syncRef.current = now;
         setLastSyncedAt(now);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-
-        const message =
-          err instanceof Error
-            ? err.message
-            : "The client portfolio could not be loaded.";
-
-        if (silent) pushToast("error", message);
+      } catch (cause) {
+        if (cause instanceof DOMException && cause.name === 'AbortError') return;
+        const message = cause instanceof Error ? cause.message : 'Clients could not be loaded.';
+        if (silent) notify('error', message);
         else setError(message);
       } finally {
         if (requestRef.current === controller) requestRef.current = null;
-
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [pushToast],
+    [notify],
   );
 
   const loadOptions = useCallback(async () => {
     setOptionsLoading(true);
 
     try {
-      const response = await fetch("/api/admin/client-options", {
-        method: "GET",
-        cache: "no-store",
-        headers: {
-          Accept: "application/json",
-        },
+      const response = await fetch('/api/admin/client-options', {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
       });
 
-      const payload = (await response.json()) as ClientOptionsResponse;
+      const payload = (await response.json().catch(() => ({ ok: false }))) as ClientOptionsResponse;
 
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Client options could not be loaded.");
+        throw new Error(payload.error || 'Client options could not be loaded.');
       }
 
-      const owners = payload.accountOwners ?? [];
-
-      setAccountOwners(owners);
-
-      setForm((current) => {
-        if (current.accountOwnerId || owners.length === 0) return current;
-
-        return {
-          ...current,
-          accountOwnerId: owners[0].id,
-        };
-      });
-    } catch (err) {
-      console.error("[ClientsTab/client-options]", err);
+      setAccountOwners(payload.accountOwners ?? []);
+    } catch (cause) {
+      console.error('[ClientsTab/client-options]', cause);
     } finally {
       setOptionsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadClients();
     void loadOptions();
-
     return () => requestRef.current?.abort();
   }, [loadClients, loadOptions]);
 
   useEffect(() => {
     const timer = setInterval(() => setClockTick((value) => value + 1), 30_000);
-
     return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
     const maybeRefresh = () => {
-      if (document.visibilityState !== "visible") return;
-
+      if (document.visibilityState !== 'visible') return;
       const last = syncRef.current?.getTime() ?? 0;
-
       if (Date.now() - last < REFRESH_AFTER_MS) return;
-
       void loadClients(true);
     };
 
-    window.addEventListener("focus", maybeRefresh);
-    document.addEventListener("visibilitychange", maybeRefresh);
+    window.addEventListener('focus', maybeRefresh);
+    document.addEventListener('visibilitychange', maybeRefresh);
 
     return () => {
-      window.removeEventListener("focus", maybeRefresh);
-      document.removeEventListener("visibilitychange", maybeRefresh);
+      window.removeEventListener('focus', maybeRefresh);
+      document.removeEventListener('visibilitychange', maybeRefresh);
     };
   }, [loadClients]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (drawerOpen || selectedClientId) return;
+  /* ---------- Actions ---------- */
 
-      const target = event.target as HTMLElement | null;
-
-      const typing =
-        !!target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT" ||
-          target.isContentEditable);
-
-      const shortcut =
-        (event.key === "/" && !typing) ||
-        ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k");
-
-      if (!shortcut) return;
-
-      event.preventDefault();
-      searchRef.current?.focus();
-      searchRef.current?.select();
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [drawerOpen, selectedClientId]);
-
-  useEffect(() => {
-    if (!drawerOpen || createdClient) return;
-
-    const timer = setTimeout(() => {
-      try {
-        window.localStorage.setItem(DRAFT_KEY, JSON.stringify(form));
-      } catch {
-        // Ignore.
-      }
-    }, 400);
-
-    return () => clearTimeout(timer);
-  }, [createdClient, drawerOpen, form]);
-
-  const clearDraft = useCallback(() => {
-    try {
-      window.localStorage.removeItem(DRAFT_KEY);
-    } catch {
-      // Ignore.
-    }
+  const openAdd = useCallback(() => {
+    setAddKey((key) => key + 1);
+    setAddOpen(true);
   }, []);
 
-  /* ==========================================================================
-     DERIVED
-  ========================================================================== */
+  const openClient = useCallback((clientId: string) => {
+    setAddOpen(false);
+    setSelectedClientId(clientId);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  const copyValue = useCallback(
+    async (value: string, message: string) => {
+      try {
+        await navigator.clipboard.writeText(value);
+        notify('success', message);
+      } catch {
+        notify('error', 'Copy failed. Check clipboard permissions.');
+      }
+    },
+    [notify],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (addOpen || selectedClientId || event.defaultPrevented) return;
+
+      const target = event.target as HTMLElement | null;
+      const typing =
+        !!target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable);
+
+      if ((event.key === '/' && !typing) || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k')) {
+        event.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+
+      if (!typing && !event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        openAdd();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [addOpen, openAdd, selectedClientId]);
+
+  /* ---------- Derived ---------- */
 
   const visibleClients = useMemo(() => {
     const query = search.trim().toLowerCase();
 
     const filtered = clients.filter((client) => {
-      if (statusFilter !== "ALL" && client.status !== statusFilter) return false;
-
-      if (priorityFilter !== "ALL" && client.priority !== priorityFilter) {
-        return false;
-      }
-
-      if (quickFilter === "ATTENTION" && !needsAttention(client)) return false;
-
-      if (quickFilter === "RENEWALS" && !isRenewalDue(client.renewalAt)) {
-        return false;
-      }
-
-      if (quickFilter === "UNASSIGNED" && client.accountOwner) return false;
-
-      if (quickFilter === "SUPPORT" && client.openSupportCount === 0) {
-        return false;
-      }
-
+      if (statusFilter !== 'ALL' && client.status !== statusFilter) return false;
+      if (priorityFilter !== 'ALL' && client.priority !== priorityFilter) return false;
+      if (quickFilter === 'ATTENTION' && !needsAttention(client)) return false;
+      if (quickFilter === 'RENEWALS' && !isRenewalDue(client.renewalAt)) return false;
+      if (quickFilter === 'UNASSIGNED' && client.accountOwner) return false;
+      if (quickFilter === 'SUPPORT' && client.openSupportCount === 0) return false;
       if (!query) return true;
 
-      const haystack = [
+      return [
         client.name,
         client.displayName,
         client.clientRef,
@@ -1022,36 +964,26 @@ export default function ClientsTab() {
         client.country,
         client.city,
         client.domain,
-        personName(client.accountOwner),
+        client.accountOwner ? personName(client.accountOwner) : '',
         ...client.projects.map((project) => project.name),
-        ...client.contacts.map(
-          (contact) =>
-            `${contact.firstName} ${contact.lastName} ${contact.email ?? ""}`,
-        ),
+        ...client.contacts.map((contact) => `${contact.firstName} ${contact.lastName} ${contact.email ?? ''}`),
       ]
         .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-
-      return haystack.includes(query);
+        .join(' ')
+        .toLowerCase()
+        .includes(query);
     });
 
     return filtered.sort((a, b) => {
       switch (sortKey) {
-        case "NAME":
-          return (a.displayName || a.name).localeCompare(
-            b.displayName || b.name,
-          );
-
-        case "PROJECTS":
+        case 'NAME':
+          return clientTitle(a).localeCompare(clientTitle(b));
+        case 'PROJECTS':
           return b._count.projects - a._count.projects;
-
-        case "VALUE":
+        case 'VALUE':
           return Number(b.contractValue || 0) - Number(a.contractValue || 0);
-
-        case "ATTENTION":
+        case 'ATTENTION':
           return attentionScore(b) - attentionScore(a);
-
         default:
           return timeOf(b.updatedAt) - timeOf(a.updatedAt);
       }
@@ -1059,318 +991,1214 @@ export default function ClientsTab() {
   }, [clients, priorityFilter, quickFilter, search, sortKey, statusFilter]);
 
   const metrics = useMemo(() => {
-    const active = clients.filter((client) => client.status === "ACTIVE").length;
-
-    const onboarding = clients.filter(
-      (client) => client.status === "ONBOARDING",
-    ).length;
-
-    const projects = clients.reduce(
-      (total, client) => total + client._count.projects,
-      0,
-    );
-
-    const attention = clients.filter(needsAttention).length;
-
-    const renewals = clients.filter((client) =>
-      isRenewalDue(client.renewalAt),
-    ).length;
+    const byStatus = (status: ClientStatus) => clients.filter((client) => client.status === status).length;
 
     return {
       total: clients.length,
-      active,
-      onboarding,
-      projects,
-      attention,
-      renewals,
+      active: byStatus('ACTIVE'),
+      onboarding: byStatus('ONBOARDING'),
+      projects: clients.reduce((total, client) => total + client._count.projects, 0),
+      attention: clients.filter(needsAttention).length,
+      renewals: clients.filter((client) => isRenewalDue(client.renewalAt)).length,
+      unassigned: clients.filter((client) => !client.accountOwner).length,
+      support: clients.filter((client) => client.openSupportCount > 0).length,
+      byStatus,
     };
   }, [clients]);
 
-  const selectedOwner = useMemo(
-    () =>
-      accountOwners.find((owner) => owner.id === form.accountOwnerId) ?? null,
-    [accountOwners, form.accountOwnerId],
-  );
-
   const filtersActive =
-    Boolean(searchInput) ||
-    statusFilter !== "ALL" ||
-    priorityFilter !== "ALL" ||
-    quickFilter !== "ALL";
+    Boolean(searchInput) || statusFilter !== 'ALL' || priorityFilter !== 'ALL' || quickFilter !== 'ALL';
 
   const syncedLabel = useMemo(
-    () => relativeTime(lastSyncedAt),
+    () => relativeSync(lastSyncedAt),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [lastSyncedAt, clockTick],
   );
 
-  /* ==========================================================================
-     ACTIONS
-  ========================================================================== */
-
   const resetFilters = useCallback(() => {
-    setSearchInput("");
-    setStatusFilter("ALL");
-    setPriorityFilter("ALL");
-    setQuickFilter("ALL");
+    setSearchInput('');
+    setStatusFilter('ALL');
+    setPriorityFilter('ALL');
+    setQuickFilter('ALL');
   }, [setPriorityFilter, setStatusFilter]);
-
-  const copyValue = useCallback(
-    async (value: string, message: string) => {
-      try {
-        await navigator.clipboard.writeText(value);
-        pushToast("success", message);
-      } catch {
-        pushToast("error", "Copy failed. Check clipboard permissions.");
-      }
-    },
-    [pushToast],
-  );
 
   const exportCsv = useCallback(() => {
     if (visibleClients.length === 0) {
-      pushToast("info", "Nothing to export in this view.");
+      notify('error', 'Nothing to export in this view.');
       return;
     }
 
-    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(`syntra_grid_clients_${new Date().toISOString().slice(0, 10)}.csv`, buildCsv(visibleClients));
+    notify('success', `Exported ${visibleClients.length} ${visibleClients.length === 1 ? 'client' : 'clients'}`);
+  }, [notify, visibleClients]);
 
-    downloadCsv(`syntra_grid_clients_${stamp}.csv`, buildCsv(visibleClients));
+  const statusOptions = useMemo<Array<DropdownOption<'ALL' | ClientStatus>>>(
+    () => [
+      {
+        value: 'ALL',
+        label: 'All statuses',
+        leading: <span className="h-2 w-2 rounded-full border border-[var(--text-subtle)]" />,
+        trailing: <CountPill value={clients.length} />,
+      },
+      ...STATUS_OPTIONS.map((option) => ({
+        value: option.value,
+        label: option.label,
+        leading: <span className={cx('h-2 w-2 rounded-full', statusStyle(option.value).dot)} />,
+        trailing: <CountPill value={metrics.byStatus(option.value)} />,
+      })),
+    ],
+    [clients.length, metrics],
+  );
 
-    pushToast("success", `Exported ${visibleClients.length} client records.`);
-  }, [pushToast, visibleClients]);
+  const priorityOptions: Array<DropdownOption<'ALL' | ClientPriority>> = [
+    { value: 'ALL', label: 'All priorities' },
+    ...PRIORITY_OPTIONS.map((option) => ({
+      value: option.value,
+      label: option.label,
+      leading: <PriorityStars priority={option.value} />,
+    })),
+  ];
 
-  /* ==========================================================================
-     DRAWER
-  ========================================================================== */
+  const quickCounts: Record<QuickFilter, number | undefined> = {
+    ALL: undefined,
+    ATTENTION: metrics.attention,
+    RENEWALS: metrics.renewals,
+    UNASSIGNED: metrics.unassigned,
+    SUPPORT: metrics.support,
+  };
 
-  const openDrawer = () => {
-    const defaultOwner = accountOwners[0]?.id ?? "";
+  /* ---------- Render ---------- */
 
-    let draft: Partial<ClientForm> | null = null;
+  let content: ReactNode;
 
-    try {
-      const raw = window.localStorage.getItem(DRAFT_KEY);
+  if (selectedClientId) {
+    content = <ClientWorkspace clientId={selectedClientId} onBack={() => setSelectedClientId(null)} />;
+  } else {
+    content = (
+      <>
+        <section className="overflow-hidden rounded-[26px] border border-[var(--line)] bg-[var(--surface)] shadow-sm">
+          <MetricsGrid
+            columns="grid-cols-2 sm:grid-cols-3 2xl:grid-cols-6"
+            items={[
+              { label: 'Clients', value: metrics.total, helper: 'In the portfolio', icon: Building2 },
+              {
+                label: 'Active',
+                value: metrics.active,
+                helper: 'Live and working',
+                icon: CheckCircle2,
+                active: statusFilter === 'ACTIVE',
+                onClick: () => setStatusFilter((current) => (current === 'ACTIVE' ? 'ALL' : 'ACTIVE')),
+              },
+              {
+                label: 'Onboarding',
+                value: metrics.onboarding,
+                helper: 'Setting up',
+                icon: Sparkles,
+                active: statusFilter === 'ONBOARDING',
+                onClick: () => setStatusFilter((current) => (current === 'ONBOARDING' ? 'ALL' : 'ONBOARDING')),
+              },
+              { label: 'Projects', value: metrics.projects, helper: 'Across all clients', icon: BriefcaseBusiness },
+              {
+                label: 'Renewals',
+                value: metrics.renewals,
+                helper: `Next ${RENEWAL_WINDOW_DAYS} days`,
+                icon: CalendarClock,
+                highlight: metrics.renewals > 0,
+                active: quickFilter === 'RENEWALS',
+                onClick: () => setQuickFilter((current) => (current === 'RENEWALS' ? 'ALL' : 'RENEWALS')),
+              },
+              {
+                label: 'Attention',
+                value: metrics.attention,
+                helper: 'Need a look',
+                icon: AlertCircle,
+                highlight: metrics.attention > 0,
+                active: quickFilter === 'ATTENTION',
+                onClick: () => setQuickFilter((current) => (current === 'ATTENTION' ? 'ALL' : 'ATTENTION')),
+              },
+            ]}
+          />
 
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<ClientForm>;
+          <div className="border-t border-[var(--line)] px-4 py-4 sm:px-5 lg:px-6">
+            <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center">
+              <div className="relative min-w-0 flex-1 2xl:max-w-[400px]">
+                <Search size={15} strokeWidth={1.8} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]" />
+                <input
+                  ref={searchRef}
+                  value={searchInput}
+                  onChange={(event) => setSearchInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setSearchInput('');
+                  }}
+                  placeholder="Search clients, people, projects or places"
+                  aria-label="Search clients"
+                  className="h-10 w-full rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] pl-10 pr-12 text-[11px] text-[var(--text)] outline-none transition placeholder:text-[var(--text-subtle)] focus:border-[var(--accent)] focus:bg-[var(--surface)]"
+                />
+                {searchInput ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchInput('');
+                      searchRef.current?.focus();
+                    }}
+                    aria-label="Clear search"
+                    className={cx('absolute right-2.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[var(--text-subtle)] transition hover:bg-[var(--surface)] hover:text-[var(--text)]', focusRing)}
+                  >
+                    <X size={12} />
+                  </button>
+                ) : (
+                  <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md border border-[var(--line)] bg-[var(--surface)] px-1.5 py-0.5 text-[8px] font-semibold text-[var(--text-subtle)] sm:inline-flex">
+                    /
+                  </span>
+                )}
+              </div>
 
-        if (parsed && typeof parsed === "object" && parsed.name?.trim()) {
-          draft = parsed;
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                <Dropdown value={statusFilter} onChange={setStatusFilter} options={statusOptions} ariaLabel="Filter by status" triggerClassName="sm:w-[150px]" minWidth={210} />
+                <Dropdown value={priorityFilter} onChange={setPriorityFilter} options={priorityOptions} ariaLabel="Filter by priority" triggerClassName="sm:w-[150px]" minWidth={190} />
+                <Dropdown value={sortKey} onChange={setSortKey} options={SORT_OPTIONS} ariaLabel="Sort clients" triggerClassName="col-span-2 sm:col-span-1 sm:w-[170px]" minWidth={200} />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 2xl:ml-auto">
+                <ViewToggle value={viewMode} onChange={setViewMode} />
+
+                <ToolbarIcon label="Export this view as CSV" onClick={exportCsv}>
+                  <Download size={14} strokeWidth={1.9} />
+                </ToolbarIcon>
+
+                <ToolbarIcon label="Refresh clients" onClick={() => void loadClients(true)} disabled={refreshing}>
+                  <RefreshCw size={14} strokeWidth={1.9} className={cx(refreshing && 'animate-spin')} />
+                </ToolbarIcon>
+
+                <button
+                  type="button"
+                  onClick={openAdd}
+                  className={cx('inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--accent)] pl-4 pr-2.5 text-[11px] font-semibold text-white shadow-sm transition hover:opacity-90', focusRing)}
+                >
+                  <Plus size={15} strokeWidth={2} />
+                  Add client
+                  <kbd className="ml-1 hidden h-5 min-w-5 items-center justify-center rounded-md bg-white/15 px-1.5 text-[9px] font-semibold text-white/90 sm:inline-flex">N</kbd>
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-[var(--line)] pt-3">
+              {QUICK_FILTERS.map((item) => {
+                const active = quickFilter === item.value;
+                const count = quickCounts[item.value];
+
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setQuickFilter((current) => (current === item.value && item.value !== 'ALL' ? 'ALL' : item.value))}
+                    className={cx(
+                      'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold transition-colors',
+                      active
+                        ? 'border-[var(--accent)] bg-[var(--surface)] text-[var(--text)]'
+                        : 'border-[var(--line)] text-[var(--text-muted)] hover:bg-[var(--surface-muted)]',
+                      focusRing,
+                    )}
+                  >
+                    {item.label}
+                    {typeof count === 'number' && count > 0 ? <span className="tabular-nums text-[var(--text-subtle)]">{count}</span> : null}
+                  </button>
+                );
+              })}
+
+              <div className="ml-auto flex items-center gap-3 text-[10px] text-[var(--text-subtle)]">
+                <span aria-live="polite">
+                  <span className="font-semibold text-[var(--text)]">{visibleClients.length}</span>
+                  {filtersActive && clients.length > 0 ? ` of ${clients.length}` : ''} {visibleClients.length === 1 ? 'client' : 'clients'}
+                </span>
+                <span className="hidden sm:inline">·</span>
+                <span className="hidden sm:inline">{syncedLabel}</span>
+                {filtersActive ? (
+                  <button type="button" onClick={resetFilters} className={cx('rounded font-semibold text-[var(--accent)] hover:opacity-80', focusRing)}>
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div className="mt-5">
+          {loading ? (
+            <LoadingState view={viewMode} />
+          ) : error ? (
+            <ErrorState title="Clients could not be loaded" message={error} onRetry={() => void loadClients()} />
+          ) : clients.length === 0 ? (
+            <EmptyState
+              icon={<Building2 size={21} strokeWidth={1.7} />}
+              title="Build your client portfolio"
+              description="Add the organisations Syntra Grid works with. Projects, systems, support and commercial activity all connect back to one client record."
+              action={
+                <PrimaryButton onClick={openAdd}>
+                  <Plus size={13} />
+                  Add first client
+                </PrimaryButton>
+              }
+            />
+          ) : visibleClients.length === 0 ? (
+            <EmptyState
+              icon={<Search size={20} strokeWidth={1.7} />}
+              title={searchInput ? `Nothing matches "${searchInput}"` : 'No clients match these filters'}
+              description="Try a different search, or clear the filters to see the whole portfolio."
+              action={
+                <SecondaryButton onClick={resetFilters}>
+                  <X size={13} />
+                  Clear filters
+                </SecondaryButton>
+              }
+            />
+          ) : viewMode === 'grid' ? (
+            <div className={cx('grid gap-3 md:grid-cols-2 2xl:grid-cols-3', refreshing && 'opacity-80 transition-opacity')}>
+              <AnimatePresence mode="popLayout" initial={false}>
+                {visibleClients.map((client) => (
+                  <motion.div
+                    key={client.id}
+                    layout={!reduceMotion}
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.98 }}
+                    transition={reduceMotion ? { duration: 0.12 } : { type: 'spring', stiffness: 380, damping: 34 }}
+                  >
+                    <ClientCard client={client} onCopy={copyValue} onOpen={openClient} />
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          ) : (
+            <ClientList clients={visibleClients} onCopy={copyValue} onOpen={openClient} />
+          )}
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <PortalTheme.Provider value={theme.vars}>
+      <div ref={theme.ref} className="mx-auto w-full min-w-0 max-w-[1600px]">
+        {content}
+
+        <AddClientModal
+          open={addOpen}
+          formKey={addKey}
+          accountOwners={accountOwners}
+          optionsLoading={optionsLoading}
+          onClose={() => setAddOpen(false)}
+          onCreated={(client) => {
+            setClients((current) => [client, ...current.filter((item) => item.id !== client.id)]);
+            notify('success', `${clientTitle(client)} added to the portfolio`);
+            void loadClients(true);
+          }}
+          onOpen={openClient}
+          onAddAnother={() => setAddKey((key) => key + 1)}
+        />
+
+        <Toast toast={toast} onDismiss={() => setToast(null)} />
+      </div>
+    </PortalTheme.Provider>
+  );
+}
+
+/* =============================================================================
+ * METRICS
+ * =============================================================================
+ */
+
+function MetricsGrid({
+  items,
+  columns,
+}: {
+  items: Array<{
+    label: string;
+    value: string | number;
+    helper: string;
+    icon: LucideIcon;
+    onClick?: () => void;
+    active?: boolean;
+    highlight?: boolean;
+  }>;
+  columns: string;
+}) {
+  return (
+    <div className={cx('grid gap-px bg-[var(--line)]', columns)}>
+      {items.map((metric) => {
+        const Icon = metric.icon;
+
+        const inner = (
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">{metric.label}</p>
+              <p className="mt-1.5 text-[22px] font-semibold tabular-nums tracking-[-0.04em] text-[var(--text)]">{metric.value}</p>
+              <p className="mt-0.5 truncate text-[9px] text-[var(--text-subtle)]">{metric.helper}</p>
+            </div>
+            <div
+              className={cx(
+                'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors',
+                metric.highlight || metric.active
+                  ? 'border-[color:var(--accent)]/40 bg-[color:var(--accent)]/10 text-[var(--accent)]'
+                  : 'border-[var(--line)] bg-[var(--surface-muted)] text-[var(--text-muted)] group-hover:text-[var(--accent)]',
+              )}
+            >
+              <Icon size={15} strokeWidth={1.8} />
+            </div>
+          </div>
+        );
+
+        if (!metric.onClick) {
+          return (
+            <div key={metric.label} className="min-w-0 bg-[var(--surface)] px-4 py-4 sm:px-5">
+              {inner}
+            </div>
+          );
         }
-      }
-    } catch {
-      // Ignore.
+
+        return (
+          <button
+            key={metric.label}
+            type="button"
+            onClick={metric.onClick}
+            aria-pressed={metric.active}
+            className={cx(
+              'group relative min-w-0 px-4 py-4 text-left transition-colors sm:px-5',
+              metric.active ? 'bg-[color:var(--accent)]/[0.06]' : 'bg-[var(--surface)] hover:bg-[var(--surface-muted)]',
+              'focus-visible:bg-[var(--surface-muted)] focus-visible:outline-none',
+            )}
+          >
+            {metric.active ? <span className="absolute inset-x-4 bottom-0 h-0.5 rounded-full bg-[var(--accent)]" /> : null}
+            {inner}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =============================================================================
+ * TOOLBAR BITS
+ * =============================================================================
+ */
+
+function ToolbarIcon({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className={cx(
+        'flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--line)] bg-[var(--surface)] text-[var(--text-muted)] transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60',
+        focusRing,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (value: ViewMode) => void }) {
+  const reduceMotion = useReducedMotion();
+  const id = useId();
+
+  const items: Array<{ value: ViewMode; label: string; icon: ReactNode }> = [
+    { value: 'grid', label: 'Grid view', icon: <Grid2X2 size={14} strokeWidth={1.9} /> },
+    { value: 'list', label: 'List view', icon: <LayoutList size={15} strokeWidth={1.9} /> },
+  ];
+
+  return (
+    <div className="inline-flex rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] p-1">
+      {items.map((item) => {
+        const active = item.value === value;
+
+        return (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => onChange(item.value)}
+            aria-label={item.label}
+            aria-pressed={active}
+            className={cx(
+              'relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+              active ? 'text-[var(--text)]' : 'text-[var(--text-subtle)] hover:text-[var(--text)]',
+              focusRing,
+            )}
+          >
+            {active ? (
+              <motion.span
+                layoutId={`${id}-view`}
+                className="absolute inset-0 rounded-lg bg-[var(--surface)] shadow-sm"
+                transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 38 }}
+              />
+            ) : null}
+            <span className="relative">{item.icon}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =============================================================================
+ * ACTION MENU
+ * =============================================================================
+ */
+
+function ActionMenu({ label, items }: { label: string; items: MenuItem[] }) {
+  const reduceMotion = useReducedMotion();
+  const isClient = useIsClient();
+  const portalTheme = useContext(PortalTheme);
+
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const [position, setPosition] = useState<{ top?: number; bottom?: number; right: number; placement: 'top' | 'bottom' } | null>(null);
+
+  const open = Boolean(position);
+
+  const close = useCallback((refocus = false) => {
+    setPosition(null);
+    if (refocus) triggerRef.current?.focus();
+  }, []);
+
+  const toggle = () => {
+    if (open) {
+      close();
+      return;
     }
 
-    setForm({
-      ...DEFAULT_FORM,
-      ...(draft ?? {}),
-      accountOwnerId: draft?.accountOwnerId || defaultOwner,
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const estimate = items.length * 36 + 16;
+    const flip = rect.bottom + estimate + 12 > window.innerHeight && rect.top > estimate;
+
+    setPosition({
+      right: Math.max(8, window.innerWidth - rect.right),
+      placement: flip ? 'top' : 'bottom',
+      ...(flip ? { bottom: window.innerHeight - rect.top + 6 } : { top: rect.bottom + 6 }),
+    });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      close();
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close(true);
+      }
+    };
+
+    const onScroll = () => close();
+
+    const frame = window.requestAnimationFrame(() => {
+      panelRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')?.focus();
     });
 
-    setDraftRestored(Boolean(draft));
-    setStep(1);
-    setFormIssue(null);
-    setCreatedClient(null);
-    setDrawerOpen(true);
+    document.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', onScroll);
+    window.addEventListener('scroll', onScroll, true);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', onScroll);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [close, open]);
+
+  const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    const list = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? []);
+    const index = list.indexOf(document.activeElement as HTMLElement);
+    list[(index + (event.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length]?.focus();
   };
 
-  const closeDrawer = () => {
-    if (creating) return;
+  const itemClass =
+    'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[10.5px] font-medium text-[var(--text-muted)] outline-none transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)] focus-visible:bg-[var(--surface-muted)] focus-visible:text-[var(--text)]';
 
-    setDrawerOpen(false);
-    setStep(1);
-    setFormIssue(null);
-    setCreatedClient(null);
-  };
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(event) => {
+          event.stopPropagation();
+          toggle();
+        }}
+        className={cx(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-subtle)] transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)]',
+          open && 'bg-[var(--surface-muted)] text-[var(--text)]',
+          focusRing,
+        )}
+      >
+        <MoreHorizontal size={16} />
+      </button>
 
-  const discardDraft = () => {
-    const defaultOwner = accountOwners[0]?.id ?? "";
+      {isClient
+        ? createPortal(
+            <AnimatePresence>
+              {position ? (
+                <motion.div
+                  ref={panelRef}
+                  role="menu"
+                  aria-label={label}
+                  onKeyDown={onMenuKeyDown}
+                  initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: position.placement === 'top' ? 4 : -4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: reduceMotion ? 1 : 0.97 }}
+                  transition={reduceMotion ? { duration: 0.1 } : { type: 'spring', stiffness: 520, damping: 34 }}
+                  style={{
+                    ...portalTheme,
+                    position: 'fixed',
+                    right: position.right,
+                    top: position.top,
+                    bottom: position.bottom,
+                    transformOrigin: position.placement === 'top' ? 'bottom right' : 'top right',
+                  }}
+                  className="z-[90] w-[220px] overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-xl"
+                >
+                  {items.map((item) => {
+                    const content = (
+                      <>
+                        <span className="shrink-0 text-[var(--text-subtle)]">{item.icon}</span>
+                        <span className="truncate">{item.label}</span>
+                        {item.external ? <ExternalLink size={10} className="ml-auto shrink-0 opacity-50" /> : null}
+                      </>
+                    );
 
-    clearDraft();
-    setForm({ ...DEFAULT_FORM, accountOwnerId: defaultOwner });
-    setDraftRestored(false);
-    setStep(1);
-    setFormIssue(null);
-  };
+                    if (item.href && !item.disabled) {
+                      return (
+                        <a
+                          key={item.key}
+                          role="menuitem"
+                          href={item.href}
+                          target={item.external ? '_blank' : undefined}
+                          rel={item.external ? 'noopener noreferrer' : undefined}
+                          onClick={() => close()}
+                          className={itemClass}
+                        >
+                          {content}
+                        </a>
+                      );
+                    }
 
-  const updateForm = <K extends keyof ClientForm>(
-    key: K,
-    value: ClientForm[K],
-  ) => {
-    setForm((current) => {
-      const next = { ...current, [key]: value };
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        role="menuitem"
+                        aria-disabled={item.disabled || undefined}
+                        disabled={item.disabled}
+                        onClick={() => {
+                          close();
+                          item.onSelect?.();
+                        }}
+                        className={cx(itemClass, item.disabled && 'pointer-events-none opacity-40')}
+                      >
+                        {content}
+                      </button>
+                    );
+                  })}
+                </motion.div>
+              ) : null}
+            </AnimatePresence>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
 
-      if (
-        key === "websiteUrl" &&
-        !current.domain.trim() &&
-        typeof value === "string"
-      ) {
-        const derived = domainFromUrl(value);
+function clientMenuItems(
+  client: ClientRecord,
+  onCopy: (value: string, message: string) => void,
+  onOpen: (clientId: string) => void,
+): MenuItem[] {
+  const contact = client.contacts.find((item) => item.primary) ?? client.contacts[0];
 
-        if (derived) next.domain = derived;
-      }
+  const items: MenuItem[] = [
+    { key: 'open', label: 'Open workspace', icon: <ArrowRight size={13} />, onSelect: () => onOpen(client.id) },
+  ];
 
-      return next;
+  if (client.websiteUrl) {
+    items.push({ key: 'website', label: 'Visit website', icon: <Globe2 size={13} />, href: client.websiteUrl, external: true });
+  }
+
+  if (client.adminUrl) {
+    items.push({ key: 'admin', label: 'Open their admin', icon: <ShieldCheck size={13} />, href: client.adminUrl, external: true });
+  }
+
+  if (contact?.email) {
+    items.push({ key: 'email', label: `Email ${contact.firstName}`, icon: <Mail size={13} />, href: `mailto:${contact.email}` });
+    items.push({
+      key: 'copy-email',
+      label: 'Copy contact email',
+      icon: <Copy size={13} />,
+      onSelect: () => onCopy(contact.email as string, 'Contact email copied'),
     });
+  }
 
-    if (formIssue?.field === key) setFormIssue(null);
-  };
+  if (contact?.phone) {
+    items.push({ key: 'phone', label: `Call ${contact.firstName}`, icon: <Phone size={13} />, href: `tel:${contact.phone}` });
+  }
 
-  const validateStep = (currentStep: AddClientStep): FormIssue | null => {
-    if (currentStep === 1) {
-      if (!form.name.trim()) {
-        return {
-          step: 1,
-          field: "name",
-          message: "Enter the company or organisation name.",
-        };
-      }
+  items.push({
+    key: 'copy-ref',
+    label: 'Copy client reference',
+    icon: <Copy size={13} />,
+    disabled: !client.clientRef,
+    onSelect: () => onCopy(client.clientRef ?? '', 'Client reference copied'),
+  });
 
-      if (form.websiteUrl.trim() && !isValidUrl(form.websiteUrl)) {
-        return {
-          step: 1,
-          field: "websiteUrl",
-          message: "Enter a valid website address, for example syntragrid.com.",
-        };
-      }
+  return items;
+}
+
+/* =============================================================================
+ * CLIENT CARD
+ * =============================================================================
+ */
+
+function ClientCard({
+  client,
+  onCopy,
+  onOpen,
+}: {
+  client: ClientRecord;
+  onCopy: (value: string, message: string) => void;
+  onOpen: (clientId: string) => void;
+}) {
+  const title = clientTitle(client);
+  const location = [client.city, client.country].filter(Boolean).join(', ');
+  const reasons = attentionReasons(client);
+  const renewal = renewalLabel(client.renewalAt);
+  const renewalSoon = isRenewalDue(client.renewalAt);
+  const value = formatCompactMoney(client.contractValue, client.currency);
+
+  return (
+    <article className="group flex h-full flex-col rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-sm transition-[border-color,box-shadow] duration-200 hover:border-[color:var(--text-subtle)]/40 hover:shadow-md">
+      <div className="flex flex-1 flex-col p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => onOpen(client.id)}
+            className={cx('flex min-w-0 items-center gap-3 rounded-xl text-left', focusRing)}
+          >
+            <ClientLogo client={client} />
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <h3 className="truncate text-[14px] font-semibold tracking-[-0.02em] text-[var(--text)]">{title}</h3>
+                {client.integrationLive ? (
+                  <ShieldCheck size={13} className="shrink-0 text-[var(--accent)]" aria-label="Integration live" />
+                ) : null}
+              </div>
+              <p className="mt-0.5 truncate text-[10px] text-[var(--text-subtle)]">
+                {client.industry || 'Industry not set'}
+                {client.clientRef ? ` · ${client.clientRef}` : ''}
+              </p>
+            </div>
+          </button>
+
+          <ActionMenu label={`Actions for ${title}`} items={clientMenuItems(client, onCopy, onOpen)} />
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-1.5">
+          <StatusBadge status={client.status} />
+          {client.priority !== 'STANDARD' ? <PriorityBadge priority={client.priority} /> : null}
+          {client.relationshipType !== 'CLIENT' ? <Chip>{formatEnum(client.relationshipType)}</Chip> : null}
+        </div>
+
+        <p className="mt-3 line-clamp-2 min-h-[40px] text-[11px] leading-5 text-[var(--text-muted)]">
+          {client.description || 'No description yet. Add a short summary so the team knows what we do for them.'}
+        </p>
+
+        <div className="mb-4 mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[10px] text-[var(--text-subtle)]">
+          {location ? (
+            <span className="inline-flex items-center gap-1">
+              <MapPin size={11} />
+              {location}
+            </span>
+          ) : null}
+          {client.domain ? (
+            <span className="inline-flex items-center gap-1">
+              <Globe2 size={11} />
+              {client.domain}
+            </span>
+          ) : null}
+          {value ? (
+            <span className="inline-flex items-center gap-1">
+              <CircleDollarSign size={11} />
+              {value} {client.billingCycle !== 'CUSTOM' ? formatEnum(client.billingCycle).toLowerCase() : ''}
+            </span>
+          ) : null}
+          {renewal ? (
+            <span className={cx('inline-flex items-center gap-1', renewalSoon && 'font-semibold text-[var(--warning,#b45309)]')}>
+              <CalendarClock size={11} />
+              {renewal}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="mt-auto grid grid-cols-3 border-t border-[var(--line)] pt-4">
+          <Stat label="Projects" value={client._count.projects} />
+          <Stat label="Contacts" value={client._count.contacts} />
+          <Stat label="Open support" value={client.openSupportCount} warn={client.openSupportCount > 0} />
+        </div>
+
+        {reasons.length ? (
+          <p className="mt-3 flex items-start gap-2 rounded-xl bg-[var(--warning-soft,rgba(245,158,11,0.08))] px-3 py-2 text-[10px] leading-4 text-[var(--warning,#b45309)]">
+            <AlertCircle size={12} className="mt-px shrink-0" />
+            {reasons.join(' · ')}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="flex items-center justify-between gap-3 border-t border-[var(--line)] px-4 py-3 sm:px-5">
+        <div className="flex min-w-0 items-center gap-2">
+          <OwnerAvatar owner={client.accountOwner} />
+          <p className="truncate text-[10px] text-[var(--text-subtle)]">
+            {client.accountOwner ? (
+              <>
+                Owned by <span className="font-semibold text-[var(--text)]">{personName(client.accountOwner)}</span>
+              </>
+            ) : (
+              'No account owner'
+            )}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onOpen(client.id)}
+          className={cx('inline-flex shrink-0 items-center gap-1 rounded-md text-[10px] font-semibold text-[var(--accent)] hover:opacity-80', focusRing)}
+        >
+          Open
+          <ArrowRight size={11} className="transition-transform group-hover:translate-x-0.5" />
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function Stat({ label, value, warn = false }: { label: string; value: number; warn?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <p className={cx('text-[16px] font-semibold tabular-nums tracking-[-0.03em]', warn ? 'text-[var(--warning,#b45309)]' : 'text-[var(--text)]')}>
+        {value}
+      </p>
+      <p className="mt-0.5 truncate text-[8px] font-bold uppercase tracking-[0.1em] text-[var(--text-subtle)]">{label}</p>
+    </div>
+  );
+}
+
+function ClientLogo({ client, size = 'md' }: { client: Pick<ClientRecord, 'logoUrl' | 'displayName' | 'name'>; size?: 'sm' | 'md' | 'lg' }) {
+  const box = { sm: 'h-9 w-9 rounded-[11px] text-[10px]', md: 'h-11 w-11 rounded-[14px] text-[12px]', lg: 'h-14 w-14 rounded-[18px] text-[15px]' }[size];
+
+  if (client.logoUrl) {
+    return (
+      <span className={cx('shrink-0 overflow-hidden border border-[var(--line)] bg-white', box)}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={client.logoUrl} alt="" className="h-full w-full object-contain p-1.5" />
+      </span>
+    );
+  }
+
+  const letters = initials(clientTitle(client));
+
+  return (
+    <span className={cx('flex shrink-0 items-center justify-center border border-[var(--line)] bg-[var(--surface-muted)] font-bold text-[var(--text)]', box)}>
+      {letters || <Building2 size={size === 'lg' ? 20 : 15} strokeWidth={1.8} className="text-[var(--text-subtle)]" />}
+    </span>
+  );
+}
+
+function OwnerAvatar({ owner }: { owner: AccountOwner | null }) {
+  if (owner?.avatarUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={owner.avatarUrl} alt="" className="h-6 w-6 shrink-0 rounded-full border border-[var(--line)] object-cover" />
+    );
+  }
+
+  return (
+    <span
+      title={personName(owner)}
+      className={cx(
+        'flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[8px] font-bold',
+        owner ? 'border-[var(--line)] bg-[var(--surface-muted)] text-[var(--text-muted)]' : 'border-dashed border-[var(--line)] text-[var(--text-subtle)]',
+      )}
+    >
+      {owner ? initials(personName(owner)) : <UserRound size={10} />}
+    </span>
+  );
+}
+
+function StatusBadge({ status, compact = false }: { status: ClientStatus; compact?: boolean }) {
+  const style = statusStyle(status);
+
+  return (
+    <span
+      className={cx(
+        'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border font-bold uppercase tracking-[0.08em]',
+        compact ? 'px-2 py-1 text-[7px]' : 'px-2.5 py-1 text-[8px]',
+        style.badge,
+      )}
+    >
+      <span className={cx('h-1.5 w-1.5 rounded-full', style.dot)} />
+      {formatEnum(status)}
+    </span>
+  );
+}
+
+function PriorityStars({ priority }: { priority: ClientPriority }) {
+  const count = priority === 'STRATEGIC' ? 3 : priority === 'IMPORTANT' ? 2 : 1;
+
+  return (
+    <span className="flex items-center gap-0.5" aria-hidden="true">
+      {[0, 1, 2].map((index) => (
+        <span key={index} className={cx('h-1.5 w-1.5 rounded-full', index < count ? 'bg-[var(--accent)]' : 'bg-[var(--line)]')} />
+      ))}
+    </span>
+  );
+}
+
+function PriorityBadge({ priority }: { priority: ClientPriority }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[color:var(--accent)]/35 bg-[color:var(--accent)]/10 px-2.5 py-1 text-[8px] font-bold uppercase tracking-[0.08em] text-[var(--text)]">
+      <PriorityStars priority={priority} />
+      {formatEnum(priority)}
+    </span>
+  );
+}
+
+/* =============================================================================
+ * LIST
+ * =============================================================================
+ */
+
+const LIST_GRID = 'lg:grid-cols-[minmax(240px,1.6fr)_minmax(150px,1fr)_120px_70px_80px_minmax(130px,0.8fr)_40px]';
+
+function ClientList({
+  clients,
+  onCopy,
+  onOpen,
+}: {
+  clients: ClientRecord[];
+  onCopy: (value: string, message: string) => void;
+  onOpen: (clientId: string) => void;
+}) {
+  return (
+    <section className="overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-sm">
+      <div className={cx('hidden gap-4 border-b border-[var(--line)] bg-[var(--surface-muted)] px-5 py-3 lg:grid', LIST_GRID)}>
+        {['Client', 'Owner', 'Status', 'Projects', 'Support', 'Renewal', ''].map((label) => (
+          <p key={label || 'actions'} className="text-[8px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
+            {label}
+          </p>
+        ))}
+      </div>
+
+      <div className="divide-y divide-[var(--line)]">
+        {clients.map((client) => {
+          const renewal = renewalLabel(client.renewalAt);
+          const renewalSoon = isRenewalDue(client.renewalAt);
+
+          return (
+            <div key={client.id} className={cx('grid gap-3 px-4 py-3.5 transition-colors hover:bg-[var(--surface-muted)] sm:px-5 lg:items-center lg:gap-4', LIST_GRID)}>
+              <div className="flex min-w-0 items-center justify-between gap-3">
+                <button type="button" onClick={() => onOpen(client.id)} className={cx('flex min-w-0 items-center gap-3 rounded-xl text-left', focusRing)}>
+                  <ClientLogo client={client} size="sm" />
+                  <div className="min-w-0">
+                    <p className="truncate text-[11px] font-semibold text-[var(--text)]">{clientTitle(client)}</p>
+                    <p className="mt-0.5 truncate text-[9px] text-[var(--text-subtle)]">
+                      {[client.industry, client.country].filter(Boolean).join(' · ') || 'Client'}
+                    </p>
+                  </div>
+                </button>
+                <div className="lg:hidden">
+                  <ActionMenu label={`Actions for ${clientTitle(client)}`} items={clientMenuItems(client, onCopy, onOpen)} />
+                </div>
+              </div>
+
+              <div className="hidden min-w-0 items-center gap-2 lg:flex">
+                <OwnerAvatar owner={client.accountOwner} />
+                <span className={cx('truncate text-[10px] font-medium', client.accountOwner ? 'text-[var(--text-muted)]' : 'text-[var(--text-subtle)]')}>
+                  {personName(client.accountOwner)}
+                </span>
+              </div>
+
+              <div className="hidden lg:block">
+                <StatusBadge status={client.status} compact />
+              </div>
+
+              <p className="hidden text-[10px] font-semibold tabular-nums text-[var(--text)] lg:block">{client._count.projects}</p>
+
+              <p className={cx('hidden text-[10px] font-semibold tabular-nums lg:block', client.openSupportCount > 0 ? 'text-[var(--warning,#b45309)]' : 'text-[var(--text)]')}>
+                {client.openSupportCount}
+              </p>
+
+              <p className={cx('hidden truncate text-[10px] lg:block', renewalSoon ? 'font-semibold text-[var(--warning,#b45309)]' : 'text-[var(--text-subtle)]')}>
+                {renewal ?? 'No renewal set'}
+              </p>
+
+              <div className="hidden justify-end lg:flex">
+                <ActionMenu label={`Actions for ${clientTitle(client)}`} items={clientMenuItems(client, onCopy, onOpen)} />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 lg:hidden">
+                <StatusBadge status={client.status} compact />
+                <span className="text-[9px] text-[var(--text-subtle)]">
+                  {client._count.projects} projects · {personName(client.accountOwner)}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function LoadingState({ view }: { view: ViewMode }) {
+  if (view === 'list') {
+    return (
+      <div className="overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)]">
+        {Array.from({ length: 6 }).map((_, index) => (
+          <div key={index} className="flex animate-pulse items-center gap-4 border-b border-[var(--line)] px-5 py-4 last:border-b-0 motion-reduce:animate-none">
+            <div className="h-9 w-9 rounded-[11px] bg-[var(--surface-muted)]" />
+            <div className="h-3 w-40 rounded bg-[var(--surface-muted)]" />
+            <div className="ml-auto h-3 w-24 rounded bg-[var(--surface-muted)]" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+      {Array.from({ length: 6 }).map((_, index) => (
+        <div key={index} className="h-[300px] animate-pulse rounded-[22px] border border-[var(--line)] bg-[var(--surface)] p-5 motion-reduce:animate-none">
+          <div className="flex items-center gap-3">
+            <div className="h-11 w-11 rounded-[14px] bg-[var(--surface-muted)]" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3 w-1/2 rounded bg-[var(--surface-muted)]" />
+              <div className="h-2.5 w-1/3 rounded bg-[var(--surface-muted)]" />
+            </div>
+          </div>
+          <div className="mt-6 h-3 w-full rounded bg-[var(--surface-muted)]" />
+          <div className="mt-2 h-3 w-4/5 rounded bg-[var(--surface-muted)]" />
+          <div className="mt-10 h-px bg-[var(--line)]" />
+          <div className="mt-4 grid grid-cols-3 gap-3">
+            <div className="h-8 rounded bg-[var(--surface-muted)]" />
+            <div className="h-8 rounded bg-[var(--surface-muted)]" />
+            <div className="h-8 rounded bg-[var(--surface-muted)]" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* =============================================================================
+ * ADD CLIENT MODAL
+ * =============================================================================
+ */
+
+function AddClientModal({
+  open,
+  formKey,
+  accountOwners,
+  optionsLoading,
+  onClose,
+  onCreated,
+  onOpen,
+  onAddAnother,
+}: {
+  open: boolean;
+  formKey: number;
+  accountOwners: AccountOwner[];
+  optionsLoading: boolean;
+  onClose: () => void;
+  onCreated: (client: ClientRecord) => void;
+  onOpen: (clientId: string) => void;
+  onAddAnother: () => void;
+}) {
+  const titleId = useId();
+
+  return (
+    <ModalShell open={open} onClose={onClose} labelledBy={titleId}>
+      <AddClientWizard
+        key={formKey}
+        titleId={titleId}
+        accountOwners={accountOwners}
+        optionsLoading={optionsLoading}
+        onClose={onClose}
+        onCreated={onCreated}
+        onOpen={onOpen}
+        onAddAnother={onAddAnother}
+      />
+    </ModalShell>
+  );
+}
+
+type FormUpdate = <K extends keyof ClientForm>(key: K, value: ClientForm[K]) => void;
+
+function AddClientWizard({
+  titleId,
+  accountOwners,
+  optionsLoading,
+  onClose,
+  onCreated,
+  onOpen,
+  onAddAnother,
+}: {
+  titleId: string;
+  accountOwners: AccountOwner[];
+  optionsLoading: boolean;
+  onClose: () => void;
+  onCreated: (client: ClientRecord) => void;
+  onOpen: (clientId: string) => void;
+  onAddAnother: () => void;
+}) {
+  const reduceMotion = useReducedMotion();
+
+  const [initial] = useState(() => loadDraft(accountOwners[0]?.id ?? ''));
+  const [form, setForm] = useState<ClientForm>(initial.form);
+  const [draftRestored, setDraftRestored] = useState(initial.restored);
+  const [[step, direction], setStepState] = useState<[number, number]>([1, 0]);
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [issue, setIssue] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState<ClientRecord | null>(null);
+
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const done = useRef(false);
+
+  const isMac = useMemo(() => typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform), []);
+
+  useEffect(() => {
+    if (!form.accountOwnerId && accountOwners[0]) {
+      setForm((current) => (current.accountOwnerId ? current : { ...current, accountOwnerId: accountOwners[0].id }));
     }
+  }, [accountOwners, form.accountOwnerId]);
 
-    if (currentStep === 2) {
-      if (!form.accountOwnerId && accountOwners.length > 0) {
-        return {
-          step: 2,
-          field: "accountOwnerId",
-          message: "Choose a Syntra Grid account owner.",
-        };
-      }
+  useEffect(() => {
+    if (done.current) return;
 
-      if (form.contractValue.trim() && Number(form.contractValue) < 0) {
-        return {
-          step: 2,
-          field: "contractValue",
-          message: "Contract value cannot be negative.",
-        };
+    const timer = setTimeout(() => {
+      try {
+        if (form.name.trim()) window.localStorage.setItem(DRAFT_KEY, JSON.stringify(form));
+        else window.localStorage.removeItem(DRAFT_KEY);
+      } catch {
+        // Storage is optional.
       }
+    }, 400);
 
-      if (
-        form.relationshipStartedAt &&
-        form.liveSince &&
-        timeOf(form.liveSince) < timeOf(form.relationshipStartedAt)
-      ) {
-        return {
-          step: 2,
-          field: "liveSince",
-          message: "The live date cannot come before the relationship started.",
-        };
-      }
+    return () => clearTimeout(timer);
+  }, [form]);
+
+  const update = useCallback<FormUpdate>((key, value) => {
+    setForm((current) => ({ ...current, [key]: value }));
+    setErrors((current) => (current[key] ? { ...current, [key]: undefined } : current));
+    setIssue(null);
+  }, []);
+
+  const goTo = useCallback((target: number) => {
+    setStepState(([current]) => [target, target > current ? 1 : -1]);
+    bodyRef.current?.scrollTo({ top: 0 });
+  }, []);
+
+  const hasOwners = accountOwners.length > 0;
+
+  const next = useCallback(() => {
+    const stepErrors = validateStep(step, form, hasOwners);
+    if (Object.keys(stepErrors).length) {
+      setErrors(stepErrors);
+      return;
     }
+    setErrors({});
+    goTo(Math.min(4, step + 1));
+  }, [form, goTo, hasOwners, step]);
 
-    if (currentStep === 3) {
-      const hasAnyContactField = Boolean(
-        form.contactFirstName.trim() ||
-          form.contactLastName.trim() ||
-          form.contactEmail.trim() ||
-          form.contactPhone.trim() ||
-          form.contactJobTitle.trim(),
-      );
-
-      if (hasAnyContactField) {
-        if (!form.contactFirstName.trim()) {
-          return {
-            step: 3,
-            field: "contactFirstName",
-            message: "Enter the contact's first name.",
-          };
-        }
-
-        if (!form.contactLastName.trim()) {
-          return {
-            step: 3,
-            field: "contactLastName",
-            message: "Enter the contact's last name.",
-          };
-        }
-
-        if (form.contactEmail.trim() && !isValidEmail(form.contactEmail)) {
-          return {
-            step: 3,
-            field: "contactEmail",
-            message: "Enter a valid email address for the contact.",
-          };
-        }
-      }
-    }
-
-    return null;
-  };
-
-  const goToStep = (target: AddClientStep) => {
-    if (target === step) return;
-
-    if (target < step) {
-      setFormIssue(null);
-      setStep(target);
+  const jump = (target: number) => {
+    if (target <= step) {
+      setErrors({});
+      goTo(target);
       return;
     }
 
     for (let index = step; index < target; index += 1) {
-      const issue = validateStep(index as AddClientStep);
-
-      if (issue) {
-        setFormIssue(issue);
-        setStep(issue.step);
+      const stepErrors = validateStep(index, form, hasOwners);
+      if (Object.keys(stepErrors).length) {
+        setErrors(stepErrors);
+        goTo(index);
         return;
       }
     }
 
-    setFormIssue(null);
-    setStep(target);
+    goTo(target);
   };
 
-  const nextStep = () => {
-    const issue = validateStep(step);
-
-    if (issue) {
-      setFormIssue(issue);
-      return;
+  const startOver = () => {
+    try {
+      window.localStorage.removeItem(DRAFT_KEY);
+    } catch {
+      // Storage is optional.
     }
-
-    setFormIssue(null);
-    setStep((current) => Math.min(4, current + 1) as AddClientStep);
+    setForm({ ...DEFAULT_FORM, accountOwnerId: accountOwners[0]?.id ?? '' });
+    setDraftRestored(false);
+    setErrors({});
+    setIssue(null);
+    goTo(1);
   };
 
-  const previousStep = () => {
-    setFormIssue(null);
-    setStep((current) => Math.max(1, current - 1) as AddClientStep);
-  };
-
-  const createClient = async (event?: FormEvent) => {
-    event?.preventDefault();
-
-    const issue = validateStep(1) || validateStep(2) || validateStep(3);
-
-    if (issue) {
-      setFormIssue(issue);
-      setStep(issue.step);
-      return;
+  const submit = useCallback(async () => {
+    for (const target of [1, 2, 3]) {
+      const stepErrors = validateStep(target, form, hasOwners);
+      if (Object.keys(stepErrors).length) {
+        setErrors(stepErrors);
+        goTo(target);
+        return;
+      }
     }
 
     setCreating(true);
-    setFormIssue(null);
+    setIssue(null);
 
-    const hasPrimaryContact = Boolean(
-      form.contactFirstName.trim() && form.contactLastName.trim(),
-    );
+    const values = effective(form);
+    const hasContact = Boolean(form.contactFirstName.trim() && form.contactLastName.trim());
 
     try {
-      const response = await fetch("/api/admin/clients", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+      const response = await fetch('/api/admin/clients', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
           name: form.name.trim(),
           displayName: form.displayName.trim() || null,
@@ -1378,22 +2206,19 @@ export default function ClientsTab() {
           description: form.description.trim() || null,
           country: form.country.trim() || null,
           city: form.city.trim() || null,
-          websiteUrl: form.websiteUrl.trim()
-            ? normaliseUrl(form.websiteUrl)
-            : null,
-          domain: form.domain.trim() || null,
-          status: form.status,
+          websiteUrl: form.websiteUrl.trim() ? normaliseUrl(form.websiteUrl) : null,
+          domain: values.domain.trim() || null,
+          status: values.status,
           priority: form.priority,
           relationshipType: form.relationshipType,
           accountOwnerId: form.accountOwnerId || null,
           relationshipStartedAt: form.relationshipStartedAt || null,
           liveSince: form.liveSince || null,
           billingCycle: form.billingCycle,
-          currency: form.currency,
+          currency: values.currency,
           contractValue: form.contractValue || 0,
           renewalAt: form.renewalAt || null,
-
-          primaryContact: hasPrimaryContact
+          primaryContact: hasContact
             ? {
                 firstName: form.contactFirstName.trim(),
                 lastName: form.contactLastName.trim(),
@@ -1406,672 +2231,1621 @@ export default function ClientsTab() {
         }),
       });
 
-      const payload = (await response.json()) as {
-        ok: boolean;
-        client?: ClientRecord;
-        error?: string;
-      };
+      const payload = (await response.json().catch(() => ({ ok: false }))) as { ok: boolean; client?: ClientRecord; error?: string };
 
       if (!response.ok || !payload.ok || !payload.client) {
-        throw new Error(payload.error || "The client could not be created.");
+        throw new Error(payload.error || 'The client could not be created.');
       }
 
-      clearDraft();
-      setDraftRestored(false);
-      setCreatedClient(payload.client);
+      done.current = true;
+      try {
+        window.localStorage.removeItem(DRAFT_KEY);
+      } catch {
+        // Storage is optional.
+      }
 
-      pushToast(
-        "success",
-        `${payload.client.displayName || payload.client.name} is now in the portfolio.`,
-      );
-
-      await loadClients(true);
-    } catch (err) {
-      setFormIssue({
-        step: 4,
-        message:
-          err instanceof Error
-            ? err.message
-            : "The client could not be created.",
-      });
+      setCreated(payload.client);
+      onCreated(payload.client);
+    } catch (cause) {
+      setIssue(cause instanceof Error ? cause.message : 'The client could not be created.');
     } finally {
       setCreating(false);
     }
+  }, [form, goTo, hasOwners, onCreated]);
+
+  const onSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    if (creating) return;
+    if (step < 4) next();
+    else void submit();
   };
 
-  /* ==========================================================================
-     CLIENT WORKSPACE
-  ========================================================================== */
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      if (step < 4) next();
+      else if (!creating) void submit();
+    }
+  };
 
-  if (selectedClientId) {
-    return (
-      <ClientWorkspace
-        clientId={selectedClientId}
-        onBack={closeClientWorkspace}
-      />
-    );
+  if (created) {
+    return <CreatedState titleId={titleId} client={created} onClose={onClose} onOpen={() => onOpen(created.id)} onAddAnother={onAddAnother} />;
   }
 
-  /* ==========================================================================
-     MAIN CLIENT PORTFOLIO
-  ========================================================================== */
+  const title = form.displayName.trim() || form.name.trim();
+
+  const slide = reduceMotion
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } }
+    : {
+        initial: (dir: number) => ({ opacity: 0, x: dir * 28 }),
+        animate: { opacity: 1, x: 0 },
+        exit: (dir: number) => ({ opacity: 0, x: dir * -28 }),
+      };
 
   return (
-    <div className="space-y-5">
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
+    <form onSubmit={onSubmit} onKeyDown={onKeyDown} noValidate className="flex max-h-[92dvh] min-h-0 flex-col sm:max-h-[min(88dvh,900px)]">
+      <div className="border-b border-[var(--line)] px-5 pb-4 pt-4 sm:px-7 sm:pt-6">
+        <div className="flex items-start gap-4">
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.span
+              key={initials(title) || 'empty'}
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.7 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.7 }}
+              className="flex"
+            >
+              <ClientLogo client={{ logoUrl: null, displayName: form.displayName, name: form.name }} size="lg" />
+            </motion.span>
+          </AnimatePresence>
 
-      <section
-        className="relative overflow-hidden rounded-[24px] border border-[#D4AF37]/22 bg-[var(--card)] p-4 shadow-[0_8px_24px_rgba(11,16,32,0.05)] lg:p-5"
-        style={{ backgroundImage: BRAND_WASH }}
-      >
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 h-px"
-          style={{ background: GOLD_GRADIENT, opacity: 0.7 }}
-        />
-
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-semibold tracking-tight text-[var(--text)]">
-                Client portfolio
-              </h2>
-
-              {metrics.onboarding > 0 ? (
-                <Pill tone="teal" icon={<Sparkles size={12} />}>
-                  {metrics.onboarding} onboarding
-                </Pill>
-              ) : null}
-
-              {metrics.attention > 0 ? (
-                <Pill tone="gold" icon={<AlertCircle size={12} />}>
-                  {metrics.attention} need attention
-                </Pill>
-              ) : null}
-            </div>
-
-            <p className="mt-1.5 max-w-2xl text-sm leading-6 text-[var(--muted)]">
-              Every organisation Syntra Grid works with, who owns the
-              relationship, and what is happening across delivery and support.
+          <div className="min-w-0 flex-1 pt-0.5">
+            <h2 id={titleId} className="text-[15px] font-semibold tracking-[-0.02em] text-[var(--text)]">
+              Add client
+            </h2>
+            <p className="mt-0.5 truncate text-[11px] text-[var(--text-muted)]">
+              {title
+                ? [title, form.industry.trim(), [form.city.trim(), form.country.trim()].filter(Boolean).join(', ')].filter(Boolean).join(' · ')
+                : 'Create the organisation first. Projects and systems connect to it afterwards.'}
             </p>
 
-            <p className="mt-1 text-[11px] font-medium text-[var(--muted)]">
-              {syncedLabel}
-            </p>
-          </div>
-
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={exportCsv}
-              className={cx(
-                "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3.5 text-sm font-semibold text-[var(--text)] transition hover:border-[#D4AF37]/45 hover:bg-[var(--soft)]",
-                FOCUS_RING,
-              )}
-            >
-              <Download size={15} />
-              <span className="hidden sm:inline">Export</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void loadClients(true)}
-              disabled={refreshing}
-              className={cx(
-                "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3.5 text-sm font-semibold text-[var(--text)] transition hover:border-[#D4AF37]/45 hover:bg-[var(--soft)] disabled:cursor-not-allowed disabled:opacity-50",
-                FOCUS_RING,
-              )}
-            >
-              <RefreshCw
-                size={15}
-                className={refreshing ? "animate-spin" : ""}
-              />
-              <span className="hidden sm:inline">Refresh</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={openDrawer}
-              style={{ background: GOLD_GRADIENT, boxShadow: GOLD_SHADOW }}
-              className={cx(
-                "inline-flex h-10 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition hover:brightness-[1.04]",
-                FOCUS_RING,
-              )}
-            >
-              <Plus size={16} color={GOLD_INK} />
-              <span style={{ color: GOLD_INK }}>Add client</span>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <MetricCard
-          icon={<Building2 size={17} />}
-          label="Total clients"
-          value={metrics.total}
-          hint="Portfolio"
-        />
-
-        <MetricCard
-          icon={<CheckCircle2 size={17} />}
-          label="Active"
-          value={metrics.active}
-          hint="Live"
-          active={statusFilter === "ACTIVE"}
-          onClick={() =>
-            setStatusFilter((current) =>
-              current === "ACTIVE" ? "ALL" : "ACTIVE",
-            )
-          }
-        />
-
-        <MetricCard
-          icon={<Sparkles size={17} />}
-          label="Onboarding"
-          value={metrics.onboarding}
-          hint="Setting up"
-          active={statusFilter === "ONBOARDING"}
-          onClick={() =>
-            setStatusFilter((current) =>
-              current === "ONBOARDING" ? "ALL" : "ONBOARDING",
-            )
-          }
-        />
-
-        <MetricCard
-          icon={<BriefcaseBusiness size={17} />}
-          label="Projects"
-          value={metrics.projects}
-          hint="In delivery"
-        />
-
-        <MetricCard
-          icon={<CalendarClock size={17} />}
-          label="Renewals"
-          value={metrics.renewals}
-          hint="Next 60 days"
-          accent={metrics.renewals > 0}
-          active={quickFilter === "RENEWALS"}
-          onClick={() =>
-            setQuickFilter((current) =>
-              current === "RENEWALS" ? "ALL" : "RENEWALS",
-            )
-          }
-        />
-
-        <MetricCard
-          className="col-span-2 md:col-span-1"
-          icon={<AlertCircle size={17} />}
-          label="Attention"
-          value={metrics.attention}
-          hint="Needs review"
-          accent={metrics.attention > 0}
-          active={quickFilter === "ATTENTION"}
-          onClick={() =>
-            setQuickFilter((current) =>
-              current === "ATTENTION" ? "ALL" : "ATTENTION",
-            )
-          }
-        />
-      </section>
-
-      <section className="rounded-[22px] border border-[var(--border)] bg-[var(--card)] p-3 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="relative min-w-0 flex-1">
-            <Search
-              size={16}
-              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)]"
-            />
-
-            <input
-              ref={searchRef}
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setSearchInput("");
-              }}
-              placeholder="Search clients, people, projects or locations"
-              aria-label="Search clients"
-              className={cx(
-                INPUT_BASE,
-                "h-11 bg-[var(--soft)] pl-10 pr-24 focus:bg-[var(--card)]",
-              )}
-            />
-
-            <div className="pointer-events-none absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
-              {searchInput ? (
-                <button
-                  type="button"
-                  onClick={() => setSearchInput("")}
-                  aria-label="Clear search"
-                  className="pointer-events-auto flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted)] transition hover:bg-[var(--card)] hover:text-[var(--text)]"
-                >
-                  <X size={13} />
+            {draftRestored ? (
+              <div className="mt-2 inline-flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-muted)] px-2 py-1 text-[9px] text-[var(--text-muted)]">
+                <RotateCcw size={10} />
+                Picked up where you left off
+                <button type="button" onClick={startOver} className={cx('rounded font-semibold text-[var(--accent)] hover:opacity-70', focusRing)}>
+                  Start over
                 </button>
-              ) : (
-                <kbd className="hidden rounded-md border border-[var(--border)] bg-[var(--card)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--muted)] sm:block">
-                  /
-                </kbd>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <SelectControl
-              icon={<Filter size={14} />}
-              label="Status filter"
-              value={statusFilter}
-              onChange={(value) =>
-                setStatusFilter(value as "ALL" | ClientStatus)
-              }
-              options={[
-                { value: "ALL", label: "All statuses" },
-                ...STATUS_OPTIONS,
-              ]}
-            />
-
-            <SelectControl
-              label="Priority filter"
-              value={priorityFilter}
-              onChange={(value) =>
-                setPriorityFilter(value as "ALL" | ClientPriority)
-              }
-              options={[
-                { value: "ALL", label: "All priorities" },
-                ...PRIORITY_OPTIONS,
-              ]}
-            />
-
-            <SelectControl
-              icon={<SlidersHorizontal size={14} />}
-              label="Sort clients"
-              value={sortKey}
-              onChange={(value) => setSortKey(value as SortKey)}
-              options={SORT_OPTIONS}
-            />
-
-            <div className="flex h-10 items-center rounded-xl border border-[var(--border)] bg-[var(--soft)] p-1">
-              <ViewToggle
-                active={viewMode === "grid"}
-                label="Grid view"
-                onClick={() => setViewMode("grid")}
-              >
-                <Grid2X2 size={15} />
-              </ViewToggle>
-
-              <ViewToggle
-                active={viewMode === "list"}
-                label="List view"
-                onClick={() => setViewMode("list")}
-              >
-                <LayoutList size={15} />
-              </ViewToggle>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3">
-          <FilterChip
-            active={quickFilter === "ALL"}
-            onClick={() => setQuickFilter("ALL")}
-          >
-            Everyone
-          </FilterChip>
-
-          <FilterChip
-            active={quickFilter === "ATTENTION"}
-            count={metrics.attention}
-            onClick={() =>
-              setQuickFilter((current) =>
-                current === "ATTENTION" ? "ALL" : "ATTENTION",
-              )
-            }
-          >
-            Needs attention
-          </FilterChip>
-
-          <FilterChip
-            active={quickFilter === "RENEWALS"}
-            count={metrics.renewals}
-            onClick={() =>
-              setQuickFilter((current) =>
-                current === "RENEWALS" ? "ALL" : "RENEWALS",
-              )
-            }
-          >
-            Renewing soon
-          </FilterChip>
-
-          <FilterChip
-            active={quickFilter === "UNASSIGNED"}
-            onClick={() =>
-              setQuickFilter((current) =>
-                current === "UNASSIGNED" ? "ALL" : "UNASSIGNED",
-              )
-            }
-          >
-            Unassigned
-          </FilterChip>
-
-          <FilterChip
-            active={quickFilter === "SUPPORT"}
-            onClick={() =>
-              setQuickFilter((current) =>
-                current === "SUPPORT" ? "ALL" : "SUPPORT",
-              )
-            }
-          >
-            Open support
-          </FilterChip>
-
-          <div className="ml-auto flex items-center gap-3 text-xs text-[var(--muted)]">
-            <span aria-live="polite">
-              {visibleClients.length}{" "}
-              {visibleClients.length === 1 ? "client" : "clients"}
-              {filtersActive && clients.length > 0
-                ? ` of ${clients.length}`
-                : ""}
-            </span>
-
-            {filtersActive ? (
-              <button
-                type="button"
-                onClick={resetFilters}
-                className={cx(
-                  "rounded-md px-1 font-semibold text-[var(--text)] hover:text-[#B8912A]",
-                  FOCUS_RING,
-                )}
-              >
-                Clear filters
-              </button>
+              </div>
             ) : null}
           </div>
+
+          <IconButton label="Close" onClick={onClose}>
+            <X size={16} />
+          </IconButton>
         </div>
-      </section>
 
-      {loading ? (
-        <LoadingState view={viewMode} />
-      ) : error ? (
-        <ErrorState message={error} onRetry={() => void loadClients()} />
-      ) : clients.length === 0 ? (
-        <EmptyState onAdd={openDrawer} />
-      ) : visibleClients.length === 0 ? (
-        <NoResultsState query={searchInput} onClear={resetFilters} />
-      ) : viewMode === "grid" ? (
-        <div
-          className={cx(
-            "grid gap-4 md:grid-cols-2 2xl:grid-cols-3",
-            refreshing && "opacity-70 transition-opacity",
-          )}
-        >
-          {visibleClients.map((client) => (
-            <ClientCard
-              key={client.id}
-              client={client}
-              onCopy={copyValue}
-              onOpen={openClient}
-            />
-          ))}
-        </div>
-      ) : (
-        <ClientList
-          clients={visibleClients}
-          onCopy={copyValue}
-          onOpen={openClient}
-        />
-      )}
+        <WizardStepper step={step} onJump={jump} />
+      </div>
 
-      {drawerOpen ? (
-        <AddClientDrawer
-          form={form}
-          step={step}
-          creating={creating}
-          formIssue={formIssue}
-          createdClient={createdClient}
-          accountOwners={accountOwners}
-          optionsLoading={optionsLoading}
-          selectedOwner={selectedOwner}
-          draftRestored={draftRestored}
-          onDiscardDraft={discardDraft}
-          onChange={updateForm}
-          onClose={closeDrawer}
-          onNext={nextStep}
-          onBack={previousStep}
-          onStep={goToStep}
-          onSubmit={createClient}
-          onOpenClient={openClient}
-          onDone={() => {
-            setDrawerOpen(false);
-            setCreatedClient(null);
-            setStep(1);
-          }}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-/* =============================================================================
-   TOASTS
-============================================================================= */
-
-function ToastStack({
-  toasts,
-  onDismiss,
-}: {
-  toasts: ToastMessage[];
-  onDismiss: (id: number) => void;
-}) {
-  if (toasts.length === 0) return null;
-
-  return (
-    <div className="pointer-events-none fixed bottom-5 right-5 z-[150] flex w-[min(360px,calc(100vw-2.5rem))] flex-col gap-2">
-      {toasts.map((toast) => (
-        <div
-          key={toast.id}
-          role="status"
-          className={cx(
-            "pointer-events-auto flex items-start gap-3 rounded-2xl border bg-[var(--card)] p-3.5 shadow-[0_18px_40px_rgba(11,16,32,0.18)]",
-            toast.tone === "success" && "border-[#D4AF37]/40",
-            toast.tone === "error" && "border-red-500/30",
-            toast.tone === "info" && "border-[var(--border)]",
-          )}
-        >
-          <span
-            className={cx(
-              "mt-0.5 shrink-0",
-              toast.tone === "success" && "text-[#B8912A]",
-              toast.tone === "error" && "text-red-600",
-              toast.tone === "info" && "text-[var(--muted)]",
-            )}
+      <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-5 py-5 sm:px-7">
+        <AnimatePresence mode="wait" initial={false} custom={direction}>
+          <motion.div
+            key={step}
+            custom={direction}
+            variants={slide}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={reduceMotion ? { duration: 0.12 } : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
           >
-            {toast.tone === "error" ? (
-              <AlertCircle size={16} />
-            ) : (
-              <CheckCircle2 size={16} />
-            )}
-          </span>
+            {step === 1 ? <CompanyStep form={form} errors={errors} update={update} /> : null}
+            {step === 2 ? (
+              <RelationshipStep form={form} errors={errors} update={update} accountOwners={accountOwners} optionsLoading={optionsLoading} />
+            ) : null}
+            {step === 3 ? <ContactStep form={form} errors={errors} update={update} /> : null}
+            {step === 4 ? <ReviewStep form={form} accountOwners={accountOwners} onEdit={goTo} /> : null}
+          </motion.div>
+        </AnimatePresence>
 
-          <p className="flex-1 text-xs leading-5 text-[var(--text)]">
-            {toast.message}
+        {issue ? (
+          <p role="alert" className="mt-5 flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3.5 py-3 text-[10px] font-medium leading-5 text-red-600">
+            <AlertCircle size={13} className="mt-0.5 shrink-0" />
+            {issue}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="border-t border-[var(--line)] bg-white px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-7">
+        <div className="flex items-center justify-between gap-3">
+          <p className="hidden items-center gap-1.5 text-[9px] text-[var(--text-subtle)] sm:flex">
+            <Kbd>{isMac ? '⌘' : 'Ctrl'}</Kbd>
+            <Kbd>Enter</Kbd>
+            {step < 4 ? 'to continue' : 'to create'}
+            <span className="ml-2">Draft saves as you type</span>
           </p>
 
-          <button
-            type="button"
-            onClick={() => onDismiss(toast.id)}
-            aria-label="Dismiss notification"
-            className="shrink-0 rounded-md p-0.5 text-[var(--muted)] transition hover:text-[var(--text)]"
-          >
-            <X size={14} />
-          </button>
+          <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
+            <button
+              type="button"
+              onClick={
+                step === 1
+                  ? onClose
+                  : () => {
+                      setErrors({});
+                      goTo(step - 1);
+                    }
+              }
+              disabled={creating}
+              className={cx('inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-[var(--line)] px-4 text-[10px] font-semibold text-[var(--text-muted)] transition hover:bg-[var(--surface-muted)] disabled:opacity-50 sm:flex-none', focusRing)}
+            >
+              {step === 1 ? null : <ArrowLeft size={13} />}
+              {step === 1 ? 'Cancel' : 'Back'}
+            </button>
+
+            <button
+              type="submit"
+              disabled={creating}
+              className={cx('inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[10px] font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[150px] sm:flex-none', focusRing)}
+            >
+              {step < 4 ? (
+                <>
+                  Continue
+                  <ArrowRight size={13} />
+                </>
+              ) : creating ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" />
+                  Creating
+                </>
+              ) : (
+                <>
+                  <Check size={13} />
+                  Create client
+                </>
+              )}
+            </button>
+          </div>
         </div>
-      ))}
-    </div>
+      </div>
+
+    </form>
   );
 }
 
-/* =============================================================================
-   SMALL COMPONENTS
-============================================================================= */
+function WizardStepper({ step, onJump }: { step: number; onJump: (step: number) => void }) {
+  const reduceMotion = useReducedMotion();
 
-function Pill({
-  children,
-  icon,
-  tone = "neutral",
-}: {
-  children: ReactNode;
-  icon?: ReactNode;
-  tone?: "neutral" | "gold" | "teal";
-}) {
   return (
-    <span
-      className={cx(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold",
-        tone === "gold" &&
-          "border-[#D4AF37]/40 bg-[#D4AF37]/12 text-[#8A6A12] dark:text-[#F3DFA2]",
-        tone === "teal" &&
-          "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-300",
-        tone === "neutral" &&
-          "border-[var(--border)] bg-[var(--soft)] text-[var(--muted)]",
-      )}
-    >
-      {icon}
-      {children}
+    <ol className="mt-5 grid grid-cols-4 gap-2">
+      {WIZARD_STEPS.map((item) => {
+        const active = step === item.id;
+        const complete = step > item.id;
+
+        return (
+          <li key={item.id}>
+            <button
+              type="button"
+              onClick={() => onJump(item.id)}
+              aria-current={active ? 'step' : undefined}
+              className={cx('block w-full rounded-md text-left', focusRing)}
+            >
+              <span className="relative block h-1 overflow-hidden rounded-full bg-[var(--line)]">
+                <motion.span
+                  className="absolute inset-y-0 left-0 rounded-full bg-[var(--accent)]"
+                  initial={false}
+                  animate={{ width: complete || active ? '100%' : '0%' }}
+                  transition={reduceMotion ? { duration: 0 } : { duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                />
+              </span>
+              <span className={cx('mt-2 flex items-center gap-1 text-[10px] font-semibold', active || complete ? 'text-[var(--text)]' : 'text-[var(--text-subtle)]')}>
+                {complete ? <Check size={10} strokeWidth={2.6} className="text-[var(--accent)]" /> : <span className="tabular-nums">{item.id}.</span>}
+                {item.label}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function AutoHint({ auto, onReset, label }: { auto: boolean; onReset: () => void; label: string }) {
+  return auto ? (
+    <span className="inline-flex items-center gap-1 text-[8px] font-semibold text-[var(--accent)]">
+      <Wand2 size={9} />
+      {label}
     </span>
-  );
-}
-
-function MetricCard({
-  icon,
-  label,
-  value,
-  hint,
-  className,
-  accent,
-  active,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: number;
-  hint: string;
-  className?: string;
-  accent?: boolean;
-  active?: boolean;
-  onClick?: () => void;
-}) {
-  const body = (
-    <>
-      <div className="flex items-start justify-between gap-3">
-        <span
-          className={cx(
-            "flex h-9 w-9 items-center justify-center rounded-xl transition",
-            accent
-              ? "bg-[#D4AF37]/14 text-[#B8912A] dark:text-[#F3DFA2]"
-              : "bg-[var(--soft)] text-[var(--text)]",
-          )}
-        >
-          {icon}
-        </span>
-
-        <span className="text-[11px] font-medium text-[var(--muted)]">
-          {hint}
-        </span>
-      </div>
-
-      <div className="mt-5">
-        <div className="text-2xl font-semibold tracking-tight text-[var(--text)]">
-          {value}
-        </div>
-
-        <div className="mt-1 text-xs font-medium text-[var(--muted)]">
-          {label}
-        </div>
-      </div>
-    </>
-  );
-
-  const shell = cx(
-    "rounded-[20px] border bg-[var(--card)] p-4 text-left shadow-sm transition",
-    active
-      ? "border-[#D4AF37]/55 shadow-[0_10px_26px_rgba(212,175,55,0.18)]"
-      : "border-[var(--border)]",
-    className,
-  );
-
-  if (!onClick) return <div className={shell}>{body}</div>;
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cx(
-        shell,
-        "hover:border-[#D4AF37]/45 hover:shadow-[0_10px_26px_rgba(212,175,55,0.14)]",
-        FOCUS_RING,
-      )}
-      style={active ? { backgroundImage: BRAND_WASH_SOFT } : undefined}
-    >
-      {body}
+  ) : (
+    <button type="button" onClick={onReset} className={cx('inline-flex items-center gap-1 rounded text-[8px] font-semibold text-[var(--text-subtle)] hover:text-[var(--accent)]', focusRing)}>
+      <RotateCcw size={9} />
+      Reset to auto
     </button>
   );
 }
 
-function SelectControl({
-  value,
-  onChange,
-  options,
-  icon,
-  label,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-  icon?: ReactNode;
-  label: string;
-}) {
+function CompanyStep({ form, errors, update }: { form: ClientForm; errors: FieldErrors; update: FormUpdate }) {
+  const values = effective(form);
+
   return (
-    <div className="relative">
-      {icon ? (
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]">
-          {icon}
-        </span>
-      ) : null}
+    <div>
+      <StepIntro icon={<Building2 size={16} />} title="Who is the client?" description="The organisation itself. Only the name is required." />
 
-      <select
-        value={value}
-        aria-label={label}
-        onChange={(event) => onChange(event.target.value)}
-        className={cx(
-          "h-10 appearance-none rounded-xl border border-[var(--border)] bg-[var(--soft)] pr-9 text-xs font-semibold text-[var(--text)] transition hover:border-[#D4AF37]/45 hover:bg-[var(--card)]",
-          icon ? "pl-8" : "pl-3",
-          FOCUS_RING,
-        )}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <Field label="Company name" required error={errors.name} className="mt-5">
+        <input
+          data-autofocus
+          value={form.name}
+          onChange={(event) => update('name', event.target.value)}
+          placeholder="Type the company name, e.g. RentWise Nigeria Ltd"
+          autoComplete="off"
+          aria-invalid={Boolean(errors.name)}
+          className={cx(inputClass(errors.name), 'h-12 text-[14px] font-semibold')}
+        />
+      </Field>
 
-      <ChevronDown
-        size={13}
-        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)]"
-      />
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <Field label="Short name" hint="Shown across the dashboard">
+          <input value={form.displayName} onChange={(event) => update('displayName', event.target.value)} placeholder="RentWise" className={inputClass()} />
+        </Field>
+        <Field label="Industry">
+          <input value={form.industry} onChange={(event) => update('industry', event.target.value)} placeholder="Property technology" className={inputClass()} />
+        </Field>
+        <Field label="Country">
+          <input value={form.country} onChange={(event) => update('country', event.target.value)} placeholder="Nigeria" className={inputClass()} />
+        </Field>
+        <Field label="City">
+          <input value={form.city} onChange={(event) => update('city', event.target.value)} placeholder="Abuja" className={inputClass()} />
+        </Field>
+        <Field label="Website" error={errors.websiteUrl}>
+          <input
+            value={form.websiteUrl}
+            onChange={(event) => update('websiteUrl', event.target.value)}
+            placeholder="rentwise.ng"
+            inputMode="url"
+            aria-invalid={Boolean(errors.websiteUrl)}
+            className={inputClass(errors.websiteUrl)}
+          />
+        </Field>
+        <div>
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="text-[9px] font-semibold text-[var(--text-muted)]">Primary domain</span>
+            <AutoHint auto={form.domainAuto} onReset={() => update('domainAuto', true)} label="From the website" />
+          </div>
+          <input
+            value={values.domain}
+            onChange={(event) => {
+              update('domain', event.target.value);
+              update('domainAuto', false);
+            }}
+            placeholder="rentwise.ng"
+            className={inputClass()}
+          />
+        </div>
+      </div>
+
+      <Field label="What do we do for them?" hint="Optional" className="mt-4">
+        <textarea
+          value={form.description}
+          onChange={(event) => update('description', event.target.value)}
+          rows={3}
+          maxLength={600}
+          placeholder="A short summary the team will read on the client card"
+          className={cx(inputClass(), 'h-auto resize-none py-2.5 leading-5')}
+        />
+      </Field>
     </div>
   );
 }
 
-function ViewToggle({
-  active,
+function RelationshipStep({
+  form,
+  errors,
+  update,
+  accountOwners,
+  optionsLoading,
+}: {
+  form: ClientForm;
+  errors: FieldErrors;
+  update: FormUpdate;
+  accountOwners: AccountOwner[];
+  optionsLoading: boolean;
+}) {
+  const values = effective(form);
+  const renewalSuggestion = suggestRenewal(form);
+  const contractPreview = form.contractValue ? formatMoney(form.contractValue, values.currency) : null;
+
+  const ownerOptions: Array<DropdownOption<string>> = accountOwners.length
+    ? accountOwners.map((owner) => ({
+        value: owner.id,
+        label: personName(owner),
+        hint: owner.role ? formatEnum(owner.role) : owner.email,
+        keywords: owner.email,
+        leading: <OwnerAvatar owner={owner} />,
+      }))
+    : [{ value: '', label: 'No eligible team members', disabled: true }];
+
+  const statusOptions: Array<DropdownOption<ClientStatus>> = STATUS_OPTIONS.map((option) => ({
+    value: option.value,
+    label: option.label,
+    hint: option.hint,
+    leading: <span className={cx('h-2 w-2 rounded-full', statusStyle(option.value).dot)} />,
+  }));
+
+  return (
+    <div>
+      <StepIntro icon={<Users size={16} />} title="How do we work with them?" description="Who owns the relationship, where it stands and the commercial basics." />
+
+      <Field label="Account owner" as="div" required hint="The person the client hears from first" error={errors.accountOwnerId} className="mt-5">
+        <Dropdown
+          value={form.accountOwnerId}
+          onChange={(value) => update('accountOwnerId', value)}
+          options={ownerOptions}
+          ariaLabel="Account owner"
+          searchable={ownerOptions.length > 6}
+          searchPlaceholder="Search people"
+          disabled={optionsLoading}
+          loading={optionsLoading}
+          minWidth={280}
+        />
+      </Field>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <Field label="Relationship started">
+          <input type="date" value={form.relationshipStartedAt} onChange={(event) => update('relationshipStartedAt', event.target.value)} className={cx(inputClass(), '[color-scheme:light]')} />
+        </Field>
+        <Field label="Went live" error={errors.liveSince} hint={form.liveSince ? undefined : 'Leave empty if not live yet'}>
+          <input
+            type="date"
+            value={form.liveSince}
+            min={form.relationshipStartedAt || undefined}
+            onChange={(event) => update('liveSince', event.target.value)}
+            aria-invalid={Boolean(errors.liveSince)}
+            className={cx(inputClass(errors.liveSince), '[color-scheme:light]')}
+          />
+        </Field>
+      </div>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="text-[9px] font-semibold text-[var(--text-muted)]">Status</span>
+            <AutoHint auto={form.statusAuto} onReset={() => update('statusAuto', true)} label="Set from the live date" />
+          </div>
+          <Dropdown
+            value={values.status}
+            onChange={(value) => setBoth(update, 'status', value, 'statusAuto')}
+            options={statusOptions}
+            ariaLabel="Status"
+            minWidth={240}
+          />
+        </div>
+
+        <Field label="Relationship" as="div">
+          <Dropdown
+            value={form.relationshipType}
+            onChange={(value) => update('relationshipType', value)}
+            options={RELATIONSHIP_OPTIONS}
+            ariaLabel="Relationship type"
+          />
+        </Field>
+      </div>
+
+      <Field label="Priority" as="div" className="mt-4">
+        <Segmented
+          value={form.priority}
+          onChange={(value) => update('priority', value)}
+          ariaLabel="Priority"
+          options={PRIORITY_OPTIONS.map((option) => ({ ...option, leading: <PriorityStars priority={option.value} /> }))}
+        />
+      </Field>
+
+      <div className="mt-6 rounded-[18px] border border-[var(--line)] bg-[var(--surface-muted)] p-4">
+        <div className="flex items-center justify-between gap-3">
+          <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--text)]">
+            <CircleDollarSign size={13} className="text-[var(--accent)]" />
+            Commercial snapshot
+          </p>
+          {contractPreview ? (
+            <p className="text-[10px] font-semibold text-[var(--text-muted)]">
+              {contractPreview} {form.billingCycle !== 'CUSTOM' ? formatEnum(form.billingCycle).toLowerCase() : ''}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Field label="Billing cycle" as="div">
+            <Dropdown value={form.billingCycle} onChange={(value) => update('billingCycle', value)} options={BILLING_OPTIONS} ariaLabel="Billing cycle" />
+          </Field>
+
+          <div>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <span className="text-[9px] font-semibold text-[var(--text-muted)]">Currency</span>
+              <AutoHint auto={form.currencyAuto} onReset={() => update('currencyAuto', true)} label="Matched to the country" />
+            </div>
+            <Dropdown
+              value={values.currency}
+              onChange={(value) => setBoth(update, 'currency', value, 'currencyAuto')}
+              options={CURRENCY_OPTIONS}
+              ariaLabel="Currency"
+            />
+          </div>
+
+          <Field label="Contract value" error={errors.contractValue}>
+            <input
+              type="number"
+              min={0}
+              step={1000}
+              inputMode="numeric"
+              value={form.contractValue}
+              onChange={(event) => update('contractValue', event.target.value)}
+              placeholder="0"
+              aria-invalid={Boolean(errors.contractValue)}
+              className={cx(inputClass(errors.contractValue), 'bg-white tabular-nums')}
+            />
+          </Field>
+
+          <div>
+            <Field label="Renewal date">
+              <input type="date" value={form.renewalAt} onChange={(event) => update('renewalAt', event.target.value)} className={cx(inputClass(), 'bg-white [color-scheme:light]')} />
+            </Field>
+            {renewalSuggestion && !form.renewalAt ? (
+              <button
+                type="button"
+                onClick={() => update('renewalAt', renewalSuggestion)}
+                className={cx('mt-1.5 inline-flex items-center gap-1 rounded-md text-[9px] font-semibold text-[var(--accent)] hover:opacity-70', focusRing)}
+              >
+                <Wand2 size={10} />
+                Use {formatDate(renewalSuggestion)}
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <p className="mt-3 text-[9.5px] leading-4 text-[var(--text-subtle)]">
+          Only enter a genuine fixed amount. Revenue share, equity or other arrangements belong in Commercial.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function setBoth<K extends keyof ClientForm, A extends keyof ClientForm>(update: FormUpdate, key: K, value: ClientForm[K], autoKey: A) {
+  update(key, value);
+  update(autoKey, false as ClientForm[A]);
+}
+
+function ContactStep({ form, errors, update }: { form: ClientForm; errors: FieldErrors; update: FormUpdate }) {
+  return (
+    <div>
+      <StepIntro
+        icon={<UserRound size={16} />}
+        title="Who do we speak to?"
+        description="Optional. The person we deal with most. Leave it empty to add contacts later."
+      />
+
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        <Field label="First name" error={errors.contactFirstName}>
+          <input value={form.contactFirstName} onChange={(event) => update('contactFirstName', event.target.value)} placeholder="First name" aria-invalid={Boolean(errors.contactFirstName)} className={inputClass(errors.contactFirstName)} />
+        </Field>
+        <Field label="Last name" error={errors.contactLastName}>
+          <input value={form.contactLastName} onChange={(event) => update('contactLastName', event.target.value)} placeholder="Last name" aria-invalid={Boolean(errors.contactLastName)} className={inputClass(errors.contactLastName)} />
+        </Field>
+        <Field label="Job title">
+          <input value={form.contactJobTitle} onChange={(event) => update('contactJobTitle', event.target.value)} placeholder="Managing Director" className={inputClass()} />
+        </Field>
+        <Field label="Their role for us" as="div">
+          <Dropdown value={form.contactRole} onChange={(value) => update('contactRole', value)} options={CONTACT_ROLE_OPTIONS} ariaLabel="Contact role" />
+        </Field>
+        <Field label="Email" error={errors.contactEmail}>
+          <input type="email" value={form.contactEmail} onChange={(event) => update('contactEmail', event.target.value)} placeholder="name@company.com" aria-invalid={Boolean(errors.contactEmail)} className={inputClass(errors.contactEmail)} />
+        </Field>
+        <Field label="Phone">
+          <input type="tel" value={form.contactPhone} onChange={(event) => update('contactPhone', event.target.value)} placeholder={form.country.trim().toLowerCase() === 'nigeria' ? '+234' : '+44'} className={inputClass()} />
+        </Field>
+      </div>
+    </div>
+  );
+}
+
+function ReviewStep({ form, accountOwners, onEdit }: { form: ClientForm; accountOwners: AccountOwner[]; onEdit: (step: number) => void }) {
+  const values = effective(form);
+  const owner = accountOwners.find((item) => item.id === form.accountOwnerId) ?? null;
+  const hasContact = Boolean(form.contactFirstName.trim() && form.contactLastName.trim());
+  const title = form.displayName.trim() || form.name.trim() || 'Unnamed client';
+
+  return (
+    <div>
+      <StepIntro icon={<Check size={16} />} title="Check everything looks right" description="Anything here can be changed later in the client workspace." />
+
+      <div className="mt-5 flex items-center gap-4 rounded-[18px] border border-[var(--line)] p-4">
+        <ClientLogo client={{ logoUrl: null, displayName: form.displayName, name: form.name }} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[14px] font-semibold tracking-[-0.02em] text-[var(--text)]">{title}</p>
+          <p className="truncate text-[10px] text-[var(--text-subtle)]">
+            {[form.industry, form.city, form.country].filter(Boolean).join(' · ') || 'No company details'}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <StatusBadge status={values.status} compact />
+          {form.priority !== 'STANDARD' ? <PriorityBadge priority={form.priority} /> : null}
+        </div>
+      </div>
+
+      <div className="mt-4 divide-y divide-[var(--line)] rounded-[18px] border border-[var(--line)]">
+        <ReviewRow label="Website" value={values.domain || 'Not set'} onEdit={() => onEdit(1)} />
+        <ReviewRow label="Account owner" value={owner ? personName(owner) : 'Not set'} onEdit={() => onEdit(2)} />
+        <ReviewRow label="Relationship" value={formatEnum(form.relationshipType)} onEdit={() => onEdit(2)} />
+        <ReviewRow
+          label="Commercial"
+          value={`${form.contractValue ? formatMoney(form.contractValue, values.currency) : values.currency}, ${formatEnum(form.billingCycle).toLowerCase()}`}
+          onEdit={() => onEdit(2)}
+        />
+        <ReviewRow label="Renewal" value={form.renewalAt ? formatDate(form.renewalAt) : 'Not set'} onEdit={() => onEdit(2)} />
+        <ReviewRow label="Primary contact" value={hasContact ? `${form.contactFirstName.trim()} ${form.contactLastName.trim()}` : 'Add later'} onEdit={() => onEdit(3)} />
+      </div>
+
+      <p className="mt-4 flex items-start gap-2 text-[10px] leading-5 text-[var(--text-subtle)]">
+        <ShieldCheck size={13} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+        This creates the client record only. Projects, repositories, deployments and databases are connected separately.
+      </p>
+    </div>
+  );
+}
+
+function ReviewRow({ label, value, onEdit }: { label: string; value: string; onEdit?: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+      <span className="text-[10px] text-[var(--text-subtle)]">{label}</span>
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-right text-[11px] font-semibold text-[var(--text)]">{value}</span>
+        {onEdit ? (
+          <button
+            type="button"
+            onClick={onEdit}
+            aria-label={`Edit ${label.toLowerCase()}`}
+            className={cx('flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-subtle)] hover:bg-[var(--surface-muted)] hover:text-[var(--accent)]', focusRing)}
+          >
+            <Pencil size={10} />
+          </button>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+function CreatedState({
+  titleId,
+  client,
+  onClose,
+  onOpen,
+  onAddAnother,
+}: {
+  titleId: string;
+  client: ClientRecord;
+  onClose: () => void;
+  onOpen: () => void;
+  onAddAnother: () => void;
+}) {
+  const reduceMotion = useReducedMotion();
+
+  return (
+    <div className="px-6 pb-7 pt-8 text-center sm:px-10 sm:pt-10">
+      <motion.div
+        initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={reduceMotion ? { duration: 0.15 } : { type: 'spring', stiffness: 380, damping: 20 }}
+        className="relative mx-auto w-fit"
+      >
+        <ClientLogo client={client} size="lg" />
+        <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-[var(--success,#10b981)] text-white">
+          <Check size={12} strokeWidth={3} />
+        </span>
+      </motion.div>
+
+      <h2 id={titleId} className="mt-5 text-[18px] font-semibold tracking-[-0.03em] text-[var(--text)]">
+        {clientTitle(client)} is in the portfolio
+      </h2>
+      <p className="mx-auto mt-1.5 max-w-[380px] text-[11px] leading-5 text-[var(--text-muted)]">
+        {client.clientRef ? `Reference ${client.clientRef}. ` : ''}
+        Projects, systems, support and commercial records can now connect to it.
+      </p>
+
+      <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
+        <button type="button" data-autofocus onClick={onOpen} className={cx('inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[10px] font-semibold text-white shadow-sm transition hover:opacity-90', focusRing)}>
+          Open workspace
+          <ArrowRight size={13} />
+        </button>
+        <button type="button" onClick={onAddAnother} className={cx('inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--line)] px-4 text-[10px] font-semibold text-[var(--text)] transition hover:bg-[var(--surface-muted)]', focusRing)}>
+          <Plus size={13} />
+          Add another
+        </button>
+        <button type="button" onClick={onClose} className={cx('inline-flex h-10 items-center justify-center rounded-xl px-4 text-[10px] font-semibold text-[var(--text-muted)] transition hover:bg-[var(--surface-muted)]', focusRing)}>
+          Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* =============================================================================
+ * SHARED PRIMITIVES
+ * Same building blocks as the Team, Departments, Recruitment, Leave and
+ * Calendar tabs.
+ * =============================================================================
+ */
+
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(' ');
+}
+
+const BRIDGED_VARS = [
+  '--accent',
+  '--accent-soft',
+  '--surface',
+  '--surface-muted',
+  '--line',
+  '--text',
+  '--text-muted',
+  '--text-subtle',
+  '--success',
+  '--success-soft',
+  '--success-border',
+  '--warning',
+  '--warning-soft',
+  '--warning-border',
+] as const;
+
+/* Solid white modal with black text and clearly visible borders. */
+
+const MODAL_VARS = {
+  '--surface': '#FFFFFF',
+  '--surface-muted': '#F4F4F5',
+  '--line': '#D4D4D8',
+  '--text': '#0A0A0A',
+  '--text-muted': '#27272A',
+  '--text-subtle': '#52525B',
+} as CSSProperties;
+
+const PortalTheme = createContext<CSSProperties>({});
+
+const subscribeNoop = () => () => {};
+
+function useIsClient() {
+  return useSyncExternalStore(
+    subscribeNoop,
+    () => true,
+    () => false,
+  );
+}
+
+function useThemeBridge() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [vars, setVars] = useState<CSSProperties>({});
+
+  useEffect(() => {
+    const read = () => {
+      const element = ref.current;
+
+      if (!element) {
+        return;
+      }
+
+      const computed = window.getComputedStyle(element);
+      const next: Record<string, string> = {};
+
+      for (const name of BRIDGED_VARS) {
+        const value = computed.getPropertyValue(name).trim();
+
+        if (value) {
+          next[name] = value;
+        }
+      }
+
+      setVars((previous) =>
+        JSON.stringify(previous) === JSON.stringify(next)
+          ? previous
+          : (next as CSSProperties),
+      );
+    };
+
+    read();
+
+    const observer = new MutationObserver(read);
+    const options = {
+      attributes: true,
+      attributeFilter: ['class', 'data-theme', 'style'],
+    };
+
+    observer.observe(document.documentElement, options);
+    observer.observe(document.body, options);
+
+    return () => observer.disconnect();
+  }, []);
+
+  return { ref, vars };
+}
+
+function focusableIn(root: HTMLElement) {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.offsetParent !== null);
+}
+
+const focusRing =
+  'outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]';
+
+const inputBase =
+  'h-10 w-full rounded-xl border bg-[var(--surface)] px-3 text-[11px] text-[var(--text)] outline-none transition placeholder:text-[var(--text-subtle)] focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60';
+
+function inputClass(error?: string) {
+  return cx(
+    inputBase,
+    error
+      ? 'border-red-500/60 focus:border-red-500 focus:ring-red-500/10'
+      : 'border-[var(--line)] focus:border-[var(--accent)] focus:ring-[var(--accent)]/10',
+  );
+}
+
+function ModalShell({
+  open,
+  onClose,
+  labelledBy,
+  size = 'lg',
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  labelledBy: string;
+  size?: 'sm' | 'lg';
+  children: ReactNode;
+}) {
+  const reduceMotion = useReducedMotion();
+  const isClient = useIsClient();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  const inherited = useContext(PortalTheme);
+  const modalTheme = useMemo(
+    () => ({ ...inherited, ...MODAL_VARS }),
+    [inherited],
+  );
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const previous =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const frame = window.requestAnimationFrame(() => {
+      const panel = panelRef.current;
+
+      if (!panel) {
+        return;
+      }
+
+      const target =
+        panel.querySelector<HTMLElement>('[data-autofocus]') ??
+        focusableIn(panel)[0];
+
+      target?.focus({ preventScroll: true });
+    });
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      const panel = panelRef.current;
+
+      if (!panel || !panel.contains(document.activeElement)) {
+        return;
+      }
+
+      const items = focusableIn(panel);
+
+      if (items.length === 0) {
+        return;
+      }
+
+      const first = items[0];
+      const last = items[items.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previous?.focus({ preventScroll: true });
+    };
+  }, [open]);
+
+  if (!isClient) {
+    return null;
+  }
+
+  return createPortal(
+    <AnimatePresence>
+      {open ? (
+        <div
+          key="modal"
+          style={modalTheme}
+          className="fixed inset-0 z-[120] flex items-end justify-center text-[var(--text)] sm:items-center sm:p-6"
+        >
+          <motion.div
+            aria-hidden="true"
+            className="absolute inset-0 bg-black/30 backdrop-blur-[3px]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0.12 : 0.22 }}
+            onClick={() => onCloseRef.current()}
+          />
+
+          <motion.div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={labelledBy}
+            className={cx(
+              'relative flex w-full flex-col overflow-hidden rounded-t-[26px] border border-[var(--line)] bg-white shadow-2xl sm:rounded-[26px]',
+              size === 'lg' ? 'sm:max-w-[720px]' : 'sm:max-w-[440px]',
+            )}
+            initial={
+              reduceMotion ? { opacity: 0 } : { opacity: 0, y: 28, scale: 0.97 }
+            }
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={
+              reduceMotion ? { opacity: 0 } : { opacity: 0, y: 14, scale: 0.98 }
+            }
+            transition={
+              reduceMotion
+                ? { duration: 0.15 }
+                : { type: 'spring', stiffness: 420, damping: 36, mass: 0.9 }
+            }
+          >
+            <div className="mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-[var(--line)] sm:hidden" />
+            <PortalTheme.Provider value={modalTheme}>
+              {children}
+            </PortalTheme.Provider>
+          </motion.div>
+        </div>
+      ) : null}
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+function Dropdown<T extends string>({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+  placeholder = 'Select',
+  searchable = false,
+  searchPlaceholder = 'Search',
+  emptyText = 'No results',
+  disabled = false,
+  loading = false,
+  minWidth = 220,
+  triggerClassName,
+}: {
+  value: T;
+  onChange: (value: T) => void;
+  options: Array<DropdownOption<T>>;
+  ariaLabel: string;
+  placeholder?: string;
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  emptyText?: string;
+  disabled?: boolean;
+  loading?: boolean;
+  minWidth?: number;
+  triggerClassName?: string;
+}) {
+  const reduceMotion = useReducedMotion();
+  const isClient = useIsClient();
+  const listId = useId();
+  const portalTheme = useContext(PortalTheme);
+
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const [position, setPosition] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+    placement: 'top' | 'bottom';
+  } | null>(null);
+
+  const selected = options.find((option) => option.value === value) ?? null;
+
+  const filtered = useMemo(() => {
+    const term = query.trim().toLowerCase();
+
+    if (!term) {
+      return options;
+    }
+
+    return options.filter((option) =>
+      `${option.label} ${option.hint ?? ''} ${option.keywords ?? ''}`
+        .toLowerCase()
+        .includes(term),
+    );
+  }, [options, query]);
+
+  const measure = useCallback(() => {
+    const trigger = triggerRef.current;
+
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.max(rect.width, minWidth);
+    const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
+    const below = window.innerHeight - rect.bottom - 12;
+    const above = rect.top - 12;
+    const desired = 320;
+
+    if (below < Math.min(desired, 240) && above > below) {
+      setPosition({
+        bottom: window.innerHeight - rect.top + 6,
+        left,
+        width,
+        maxHeight: Math.min(desired, above - 6),
+        placement: 'top',
+      });
+    } else {
+      setPosition({
+        top: rect.bottom + 6,
+        left,
+        width,
+        maxHeight: Math.min(desired, below - 6),
+        placement: 'bottom',
+      });
+    }
+  }, [minWidth]);
+
+  const openMenu = () => {
+    if (disabled) {
+      return;
+    }
+
+    measure();
+    setQuery('');
+    const index = options.findIndex((option) => option.value === value);
+    setActive(index >= 0 ? index : 0);
+    setOpen(true);
+  };
+
+  const close = (refocus = true) => {
+    setOpen(false);
+
+    if (refocus) {
+      triggerRef.current?.focus();
+    }
+  };
+
+  const select = (option: DropdownOption<T>) => {
+    if (option.disabled) {
+      return;
+    }
+
+    onChange(option.value);
+    close();
+  };
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+
+      if (
+        triggerRef.current?.contains(target) ||
+        panelRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setOpen(false);
+    };
+
+    const onReflow = (event?: Event) => {
+      if (
+        event?.target instanceof Node &&
+        panelRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+
+      measure();
+    };
+
+    document.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('resize', onReflow);
+    window.addEventListener('scroll', onReflow, true);
+
+    const frame = window.requestAnimationFrame(() => {
+      (searchable ? searchRef.current : listRef.current)?.focus({
+        preventScroll: true,
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('resize', onReflow);
+      window.removeEventListener('scroll', onReflow, true);
+    };
+  }, [open, measure, searchable]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-index="${active}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [active, open]);
+
+  const moveActive = (direction: 1 | -1) => {
+    if (filtered.length === 0) {
+      return;
+    }
+
+    setActive((current) => {
+      let next = current;
+
+      for (let step = 0; step < filtered.length; step += 1) {
+        next = (next + direction + filtered.length) % filtered.length;
+
+        if (!filtered[next]?.disabled) {
+          return next;
+        }
+      }
+
+      return current;
+    });
+  };
+
+  const onPanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        moveActive(1);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        moveActive(-1);
+        break;
+      case 'Home':
+        if (!searchable) {
+          event.preventDefault();
+          setActive(0);
+        }
+        break;
+      case 'End':
+        if (!searchable) {
+          event.preventDefault();
+          setActive(Math.max(0, filtered.length - 1));
+        }
+        break;
+      case 'Enter': {
+        event.preventDefault();
+        event.stopPropagation();
+        const option = filtered[active];
+        if (option) {
+          select(option);
+        }
+        break;
+      }
+      case 'Escape':
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+        break;
+      case 'Tab':
+        setOpen(false);
+        break;
+      default:
+        break;
+    }
+  };
+
+  const onTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowUp' ||
+      event.key === 'Enter' ||
+      event.key === ' '
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (!open) {
+        openMenu();
+      }
+    }
+  };
+
+  const activeId =
+    open && filtered[active] ? `${listId}-option-${active}` : undefined;
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        onClick={() => (open ? close(false) : openMenu())}
+        onKeyDown={onTriggerKeyDown}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        aria-label={ariaLabel}
+        className={cx(
+          'group flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border bg-[var(--surface)] px-3 text-left text-[11px] transition',
+          open
+            ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/10'
+            : 'border-[var(--line)] hover:bg-[var(--surface-muted)]',
+          'disabled:cursor-not-allowed disabled:opacity-60',
+          focusRing,
+          triggerClassName,
+        )}
+      >
+        {selected?.leading ? (
+          <span className="flex shrink-0 items-center">{selected.leading}</span>
+        ) : null}
+
+        <span
+          className={cx(
+            'min-w-0 flex-1 truncate font-semibold',
+            selected ? 'text-[var(--text)]' : 'text-[var(--text-subtle)]',
+          )}
+        >
+          {loading ? 'Loading' : (selected?.label ?? placeholder)}
+        </span>
+
+        {loading ? (
+          <Loader2
+            size={13}
+            className="shrink-0 animate-spin text-[var(--text-subtle)]"
+          />
+        ) : (
+          <ChevronDown
+            size={14}
+            className={cx(
+              'shrink-0 text-[var(--text-subtle)] transition-transform duration-200',
+              open && 'rotate-180 text-[var(--text)]',
+            )}
+          />
+        )}
+      </button>
+
+      {isClient
+        ? createPortal(
+            <AnimatePresence>
+              {open && position ? (
+                <motion.div
+                  ref={panelRef}
+                  key="panel"
+                  onKeyDown={onPanelKeyDown}
+                  initial={
+                    reduceMotion
+                      ? { opacity: 0 }
+                      : {
+                          opacity: 0,
+                          y: position.placement === 'top' ? 6 : -6,
+                          scale: 0.97,
+                        }
+                  }
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={
+                    reduceMotion
+                      ? { opacity: 0 }
+                      : {
+                          opacity: 0,
+                          y: position.placement === 'top' ? 4 : -4,
+                          scale: 0.98,
+                        }
+                  }
+                  transition={
+                    reduceMotion
+                      ? { duration: 0.1 }
+                      : { type: 'spring', stiffness: 520, damping: 36 }
+                  }
+                  style={{
+                    ...portalTheme,
+                    position: 'fixed',
+                    top: position.top,
+                    bottom: position.bottom,
+                    left: position.left,
+                    width: position.width,
+                    transformOrigin:
+                      position.placement === 'top'
+                        ? 'bottom center'
+                        : 'top center',
+                  }}
+                  className="z-[160] flex flex-col overflow-hidden rounded-[16px] border border-[var(--line)] bg-white text-[var(--text)] shadow-xl"
+                >
+                  {searchable ? (
+                    <div className="relative border-b border-[var(--line)] p-1.5">
+                      <Search
+                        size={13}
+                        className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]"
+                      />
+                      <input
+                        ref={searchRef}
+                        value={query}
+                        onChange={(event) => {
+                          setQuery(event.target.value);
+                          setActive(0);
+                        }}
+                        placeholder={searchPlaceholder}
+                        aria-label={searchPlaceholder}
+                        aria-controls={listId}
+                        aria-activedescendant={activeId}
+                        className="h-9 w-full rounded-[10px] bg-[var(--surface-muted)] pl-8 pr-3 text-[11px] text-[var(--text)] outline-none placeholder:text-[var(--text-subtle)]"
+                      />
+                    </div>
+                  ) : null}
+
+                  <div
+                    ref={listRef}
+                    id={listId}
+                    role="listbox"
+                    aria-label={ariaLabel}
+                    aria-activedescendant={searchable ? undefined : activeId}
+                    tabIndex={searchable ? -1 : 0}
+                    className="overflow-y-auto overscroll-contain p-1.5 outline-none"
+                    style={{
+                      maxHeight: position.maxHeight - (searchable ? 49 : 0),
+                    }}
+                  >
+                    {filtered.length === 0 ? (
+                      <p className="px-3 py-6 text-center text-[10px] text-[var(--text-subtle)]">
+                        {emptyText}
+                      </p>
+                    ) : (
+                      filtered.map((option, index) => {
+                        const isSelected = option.value === value;
+                        const isActive = index === active;
+
+                        return (
+                          <div
+                            key={option.value || '__empty'}
+                            id={`${listId}-option-${index}`}
+                            data-index={index}
+                            role="option"
+                            aria-selected={isSelected}
+                            aria-disabled={option.disabled}
+                            onPointerMove={() => {
+                              if (!option.disabled && active !== index) {
+                                setActive(index);
+                              }
+                            }}
+                            onClick={() => select(option)}
+                            className={cx(
+                              'relative flex cursor-pointer select-none items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-[11px] transition-colors',
+                              option.disabled && 'cursor-not-allowed opacity-50',
+                              isActive
+                                ? 'bg-[var(--surface-muted)] text-[var(--text)]'
+                                : 'text-[var(--text-muted)]',
+                            )}
+                          >
+                            {option.leading ? (
+                              <span className="flex shrink-0 items-center">
+                                {option.leading}
+                              </span>
+                            ) : null}
+
+                            <span className="min-w-0 flex-1">
+                              <span
+                                className={cx(
+                                  'block truncate',
+                                  isSelected
+                                    ? 'font-semibold text-[var(--text)]'
+                                    : 'font-medium',
+                                )}
+                              >
+                                {option.label}
+                              </span>
+
+                              {option.hint ? (
+                                <span className="mt-0.5 block truncate text-[9px] text-[var(--text-subtle)]">
+                                  {option.hint}
+                                </span>
+                              ) : null}
+                            </span>
+
+                            {option.trailing ? (
+                              <span className="shrink-0">{option.trailing}</span>
+                            ) : null}
+
+                            <Check
+                              size={13}
+                              strokeWidth={2.2}
+                              className={cx(
+                                'shrink-0 text-[var(--accent)] transition-opacity',
+                                isSelected ? 'opacity-100' : 'opacity-0',
+                              )}
+                            />
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+}: {
+  value: T;
+  onChange: (value: T) => void;
+  options: Array<{ value: T; label: string; leading?: ReactNode }>;
+  ariaLabel: string;
+}) {
+  const reduceMotion = useReducedMotion();
+  const id = useId();
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') {
+      return;
+    }
+
+    event.preventDefault();
+    const index = options.findIndex((option) => option.value === value);
+    const next =
+      (index + (event.key === 'ArrowRight' ? 1 : -1) + options.length) %
+      options.length;
+
+    onChange(options[next].value);
+    refs.current[next]?.focus();
+  };
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      onKeyDown={onKeyDown}
+      className="grid rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] p-1"
+      style={{
+        gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
+      }}
+    >
+      {options.map((option, index) => {
+        const active = option.value === value;
+
+        return (
+          <button
+            key={option.value || '__none'}
+            ref={(element) => {
+              refs.current[index] = element;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onChange(option.value)}
+            className={cx(
+              'relative flex h-8 items-center justify-center gap-1.5 rounded-lg text-[10px] font-semibold transition-colors',
+              active
+                ? 'text-[var(--text)]'
+                : 'text-[var(--text-subtle)] hover:text-[var(--text)]',
+              focusRing,
+            )}
+          >
+            {active ? (
+              <motion.span
+                layoutId={`${id}-pill`}
+                className="absolute inset-0 rounded-lg border border-[var(--line)] bg-[var(--surface)] shadow-sm"
+                transition={
+                  reduceMotion
+                    ? { duration: 0 }
+                    : { type: 'spring', stiffness: 500, damping: 38 }
+                }
+              />
+            ) : null}
+            <span className="relative flex items-center gap-1.5">
+              {option.leading}
+              {option.label}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Toast({
+  toast,
+  onDismiss,
+}: {
+  toast: ToastState;
+  onDismiss: () => void;
+}) {
+  const reduceMotion = useReducedMotion();
+  const isClient = useIsClient();
+  const portalTheme = useContext(PortalTheme);
+
+  if (!isClient) {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      style={portalTheme}
+      aria-live="polite"
+      className="pointer-events-none fixed inset-x-0 bottom-5 z-[200] flex justify-center px-4"
+    >
+      <AnimatePresence>
+        {toast ? (
+          <motion.div
+            key={toast.id}
+            role="status"
+            initial={
+              reduceMotion ? { opacity: 0 } : { opacity: 0, y: 16, scale: 0.96 }
+            }
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={
+              reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.98 }
+            }
+            transition={
+              reduceMotion
+                ? { duration: 0.12 }
+                : { type: 'spring', stiffness: 460, damping: 32 }
+            }
+            className="pointer-events-auto flex items-center gap-2.5 rounded-2xl border border-[var(--line)] bg-[var(--surface)] py-2.5 pl-3 pr-2 text-[11px] font-medium text-[var(--text)] shadow-xl"
+          >
+            {toast.tone === 'success' ? (
+              <CheckCircle2
+                size={15}
+                className="text-[var(--success,var(--accent))]"
+              />
+            ) : (
+              <AlertCircle size={15} className="text-red-500" />
+            )}
+            {toast.message}
+            <button
+              type="button"
+              onClick={onDismiss}
+              aria-label="Dismiss"
+              className={cx(
+                'ml-1 flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-subtle)] transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)]',
+                focusRing,
+              )}
+            >
+              <X size={12} />
+            </button>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>,
+    document.body,
+  );
+}
+
+function Chip({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
+  return (
+    <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--text-muted)]">
+      {icon ? <span className="shrink-0">{icon}</span> : null}
+      <span className="truncate">{children}</span>
+    </span>
+  );
+}
+
+function Field({
+  label,
+  required,
+  hint,
+  error,
+  children,
+  as = 'label',
+  className,
+}: {
+  label: string;
+  required?: boolean;
+  hint?: string;
+  error?: string;
+  children: ReactNode;
+  as?: 'label' | 'div';
+  className?: string;
+}) {
+  const Wrapper = as;
+
+  return (
+    <Wrapper className={cx('block', className)}>
+      <span className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1 text-[9px] font-semibold text-[var(--text-muted)]">
+          {label}
+          {required ? <span className="text-[var(--accent)]">*</span> : null}
+        </span>
+        {hint ? (
+          <span className="truncate text-[8px] text-[var(--text-subtle)]">
+            {hint}
+          </span>
+        ) : null}
+      </span>
+
+      {children}
+
+      <AnimatePresence initial={false}>
+        {error ? (
+          <motion.span
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="block overflow-hidden"
+          >
+            <span className="block pt-1 text-[9px] font-medium text-red-600">
+              {error}
+            </span>
+          </motion.span>
+        ) : null}
+      </AnimatePresence>
+    </Wrapper>
+  );
+}
+
+function IconButton({
   label,
   onClick,
   children,
 }: {
-  active: boolean;
   label: string;
   onClick: () => void;
   children: ReactNode;
@@ -2081,13 +3855,9 @@ function ViewToggle({
       type="button"
       onClick={onClick}
       aria-label={label}
-      aria-pressed={active}
       className={cx(
-        "flex h-8 w-8 items-center justify-center rounded-lg transition",
-        active
-          ? "bg-[var(--card)] text-[#B8912A] shadow-sm ring-1 ring-[#D4AF37]/35 dark:text-[#F3DFA2]"
-          : "text-[var(--muted)] hover:text-[var(--text)]",
-        FOCUS_RING,
+        'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--line)] text-[var(--text-subtle)] transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)]',
+        focusRing,
       )}
     >
       {children}
@@ -2095,14 +3865,10 @@ function ViewToggle({
   );
 }
 
-function FilterChip({
-  active,
-  count,
+function PrimaryButton({
   onClick,
   children,
 }: {
-  active: boolean;
-  count?: number;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -2110,1969 +3876,144 @@ function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      aria-pressed={active}
       className={cx(
-        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition",
-        active
-          ? "border-[#D4AF37]/50 bg-[#D4AF37]/12 text-[#8A6A12] dark:text-[#F3DFA2]"
-          : "border-[var(--border)] bg-[var(--soft)] text-[var(--muted)] hover:border-[#D4AF37]/35 hover:text-[var(--text)]",
-        FOCUS_RING,
+        'inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--accent)] px-3.5 text-[10px] font-semibold text-white shadow-sm transition hover:opacity-90',
+        focusRing,
       )}
     >
       {children}
-
-      {typeof count === "number" && count > 0 ? (
-        <span
-          className={cx(
-            "rounded-full px-1.5 py-0.5 text-[10px] font-bold",
-            active
-              ? "bg-[#D4AF37]/25"
-              : "bg-[var(--card)] text-[var(--muted)]",
-          )}
-        >
-          {count}
-        </span>
-      ) : null}
     </button>
   );
 }
 
-/* =============================================================================
-   ACTION MENU
-============================================================================= */
-
-function ActionMenu({
-  label,
-  items,
-}: {
-  label: string;
-  items: MenuItem[];
-}) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const onPointerDown = (event: MouseEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  return (
-    <div ref={containerRef} className="relative">
-      <button
-        type="button"
-        aria-label={label}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className={cx(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--soft)] hover:text-[var(--text)]",
-          open && "bg-[var(--soft)] text-[var(--text)]",
-          FOCUS_RING,
-        )}
-      >
-        <MoreHorizontal size={17} />
-      </button>
-
-      {open ? (
-        <div
-          role="menu"
-          className="absolute right-0 top-10 z-30 w-56 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] p-1.5 shadow-[0_18px_44px_rgba(11,16,32,0.18)]"
-        >
-          {items.map((item) => {
-            const content = (
-              <>
-                <span className="shrink-0 text-[var(--muted)]">
-                  {item.icon}
-                </span>
-                <span className="truncate">{item.label}</span>
-              </>
-            );
-
-            const itemClass = cx(
-              "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs font-medium text-[var(--text)] transition hover:bg-[#D4AF37]/10",
-              item.disabled && "pointer-events-none opacity-40",
-            );
-
-            if (item.href) {
-              return (
-                <a
-                  key={item.key}
-                  role="menuitem"
-                  href={item.href}
-                  target={item.external ? "_blank" : undefined}
-                  rel={item.external ? "noreferrer" : undefined}
-                  onClick={() => setOpen(false)}
-                  className={itemClass}
-                >
-                  {content}
-                </a>
-              );
-            }
-
-            return (
-              <button
-                key={item.key}
-                type="button"
-                role="menuitem"
-                disabled={item.disabled}
-                onClick={() => {
-                  setOpen(false);
-                  item.onSelect?.();
-                }}
-                className={itemClass}
-              >
-                {content}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function clientMenuItems(
-  client: ClientRecord,
-  onCopy: (value: string, message: string) => void,
-  onOpen: (clientId: string) => void,
-): MenuItem[] {
-  const primaryContact =
-    client.contacts.find((contact) => contact.primary) ?? client.contacts[0];
-
-  const items: MenuItem[] = [
-    {
-      key: "open",
-      label: "Open workspace",
-      icon: <ArrowRight size={14} />,
-      onSelect: () => onOpen(client.id),
-    },
-  ];
-
-  if (client.websiteUrl) {
-    items.push({
-      key: "website",
-      label: "Visit website",
-      icon: <Globe2 size={14} />,
-      href: client.websiteUrl,
-      external: true,
-    });
-  }
-
-  if (client.adminUrl) {
-    items.push({
-      key: "admin",
-      label: "Open client admin",
-      icon: <ExternalLink size={14} />,
-      href: client.adminUrl,
-      external: true,
-    });
-  }
-
-  if (primaryContact?.email) {
-    items.push({
-      key: "email",
-      label: "Email primary contact",
-      icon: <Mail size={14} />,
-      href: `mailto:${primaryContact.email}`,
-    });
-
-    items.push({
-      key: "copy-email",
-      label: "Copy contact email",
-      icon: <Copy size={14} />,
-      onSelect: () =>
-        onCopy(primaryContact.email as string, "Contact email copied."),
-    });
-  }
-
-  if (primaryContact?.phone) {
-    items.push({
-      key: "phone",
-      label: "Call primary contact",
-      icon: <Phone size={14} />,
-      href: `tel:${primaryContact.phone}`,
-    });
-  }
-
-  items.push({
-    key: "copy-ref",
-    label: "Copy client reference",
-    icon: <Copy size={14} />,
-    disabled: !client.clientRef,
-    onSelect: () =>
-      onCopy(client.clientRef ?? "", "Client reference copied."),
-  });
-
-  return items;
-}
-
-/* =============================================================================
-   CLIENT CARD
-============================================================================= */
-
-function ClientCard({
-  client,
-  onCopy,
-  onOpen,
-}: {
-  client: ClientRecord;
-  onCopy: (value: string, message: string) => void;
-  onOpen: (clientId: string) => void;
-}) {
-  const title = client.displayName || client.name;
-  const location = [client.city, client.country].filter(Boolean).join(", ");
-  const reasons = attentionReasons(client);
-  const renewal = renewalLabel(client.renewalAt);
-  const renewalSoon = isRenewalDue(client.renewalAt);
-
-  return (
-    <article className="group relative flex flex-col rounded-[24px] border border-[var(--border)] bg-[var(--card)] shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-[#D4AF37]/45 hover:shadow-[0_16px_34px_rgba(212,175,55,0.16)]">
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-6 top-0 h-px opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-        style={{ background: GOLD_GRADIENT }}
-      />
-
-      <div className="flex-1 p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <ClientLogo client={client} />
-
-            <div className="min-w-0">
-              <h3 className="truncate text-base font-semibold tracking-tight text-[var(--text)]">
-                {title}
-              </h3>
-
-              <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
-                {client.industry || "Industry not set"}
-                {client.clientRef ? ` · ${client.clientRef}` : ""}
-              </p>
-            </div>
-          </div>
-
-          <ActionMenu
-            label={`Actions for ${title}`}
-            items={clientMenuItems(client, onCopy, onOpen)}
-          />
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          <span
-            className={cx(
-              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em]",
-              statusClasses(client.status),
-            )}
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-current" />
-            {formatEnum(client.status)}
-          </span>
-
-          <span
-            className={cx(
-              "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em]",
-              priorityClasses(client.priority),
-            )}
-          >
-            {formatEnum(client.priority)}
-          </span>
-
-          {client.integrationLive ? (
-            <Pill tone="teal" icon={<ShieldCheck size={11} />}>
-              Integrated
-            </Pill>
-          ) : null}
-        </div>
-
-        <p className="mt-4 line-clamp-2 min-h-10 text-sm leading-5 text-[var(--muted)]">
-          {client.description ||
-            `${title} is managed inside the Syntra Grid client workspace.`}
-        </p>
-
-        <div className="mt-4 space-y-2">
-          <InfoRow
-            icon={<ShieldCheck size={14} />}
-            value={formatEnum(client.relationshipType)}
-          />
-
-          <InfoRow
-            icon={<MapPin size={14} />}
-            value={location || "Location not set"}
-          />
-
-          {client.domain ? (
-            <InfoRow icon={<Globe2 size={14} />} value={client.domain} />
-          ) : null}
-
-          <InfoRow
-            icon={<CircleDollarSign size={14} />}
-            value={`${formatCompactMoney(
-              client.contractValue,
-              client.currency,
-            )} · ${formatEnum(client.billingCycle)}`}
-          />
-
-          {renewal ? (
-            <InfoRow
-              icon={<CalendarClock size={14} />}
-              value={renewal}
-              accent={renewalSoon}
-            />
-          ) : null}
-        </div>
-
-        <div className="mt-5 grid grid-cols-3 gap-2">
-          <MiniMetric label="Projects" value={client._count.projects} />
-          <MiniMetric label="Contacts" value={client._count.contacts} />
-          <MiniMetric
-            label="Support"
-            value={client.openSupportCount}
-            attention={client.openSupportCount > 0}
-          />
-        </div>
-
-        {reasons.length > 0 ? (
-          <div
-            className="mt-4 flex items-start gap-2.5 rounded-2xl border border-[#D4AF37]/30 p-3"
-            style={{ backgroundImage: BRAND_WASH_SOFT }}
-          >
-            <AlertCircle
-              size={14}
-              className="mt-0.5 shrink-0 text-[#B8912A] dark:text-[#F3DFA2]"
-            />
-
-            <p className="text-[11px] leading-5 text-[var(--text)]">
-              {reasons.join(" · ")}
-            </p>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="flex items-center justify-between gap-3 rounded-b-[24px] border-t border-[var(--border)] bg-[var(--soft)]/50 px-5 py-3.5">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <OwnerAvatar owner={client.accountOwner} />
-
-          <div className="min-w-0">
-            <div className="truncate text-xs font-semibold text-[var(--text)]">
-              {personName(client.accountOwner)}
-            </div>
-
-            <div className="text-[10px] text-[var(--muted)]">Account owner</div>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => onOpen(client.id)}
-          className={cx(
-            "inline-flex h-8 items-center gap-1 rounded-lg border border-transparent px-2.5 text-xs font-semibold text-[var(--text)] transition hover:border-[#D4AF37]/40 hover:bg-[var(--card)]",
-            FOCUS_RING,
-          )}
-        >
-          Open
-          <ArrowRight size={13} />
-        </button>
-      </div>
-    </article>
-  );
-}
-
-function ClientLogo({
-  client,
-  size = "md",
-}: {
-  client: ClientRecord;
-  size?: "sm" | "md";
-}) {
-  const title = client.displayName || client.name;
-  const box = size === "sm" ? "h-9 w-9 text-xs" : "h-11 w-11 text-sm";
-
-  if (client.logoUrl) {
-    return (
-      <div
-        className={cx(
-          "shrink-0 overflow-hidden rounded-xl border border-[#D4AF37]/25 bg-white",
-          box,
-        )}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={client.logoUrl}
-          alt=""
-          className="h-full w-full object-contain p-1.5"
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={cx(
-        "flex shrink-0 items-center justify-center rounded-xl border border-[#D4AF37]/25 font-bold text-[#8A6A12] dark:text-[#F3DFA2]",
-        box,
-      )}
-      style={{ backgroundImage: BRAND_WASH_SOFT }}
-    >
-      {initials(title) || "CL"}
-    </div>
-  );
-}
-
-function OwnerAvatar({ owner }: { owner: AccountOwner | null }) {
-  const name = personName(owner);
-
-  if (owner?.avatarUrl) {
-    return (
-      <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full border border-[var(--border)] bg-[var(--card)]">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={owner.avatarUrl}
-          alt=""
-          className="h-full w-full object-cover"
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={cx(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold",
-        owner
-          ? "border-[#D4AF37]/30 text-[#8A6A12] dark:text-[#F3DFA2]"
-          : "border-dashed border-[var(--border)] text-[var(--muted)]",
-      )}
-      title={name}
-    >
-      {owner ? initials(name) : <UserRound size={13} />}
-    </div>
-  );
-}
-
-function InfoRow({
-  icon,
-  value,
-  accent,
-}: {
-  icon: ReactNode;
-  value: string;
-  accent?: boolean;
-}) {
-  return (
-    <div
-      className={cx(
-        "flex min-w-0 items-center gap-2 text-xs",
-        accent
-          ? "font-semibold text-[#B8912A] dark:text-[#F3DFA2]"
-          : "text-[var(--muted)]",
-      )}
-    >
-      <span className="shrink-0">{icon}</span>
-      <span className="truncate">{value}</span>
-    </div>
-  );
-}
-
-function MiniMetric({
-  label,
-  value,
-  attention,
-}: {
-  label: string;
-  value: number;
-  attention?: boolean;
-}) {
-  return (
-    <div
-      className={cx(
-        "rounded-xl border px-3 py-2.5",
-        attention
-          ? "border-[#D4AF37]/35 bg-[#D4AF37]/[0.08]"
-          : "border-[var(--border)] bg-[var(--soft)]",
-      )}
-    >
-      <div
-        className={cx(
-          "text-sm font-semibold",
-          attention
-            ? "text-[#B8912A] dark:text-[#F3DFA2]"
-            : "text-[var(--text)]",
-        )}
-      >
-        {value}
-      </div>
-
-      <div className="mt-0.5 truncate text-[10px] font-medium text-[var(--muted)]">
-        {label}
-      </div>
-    </div>
-  );
-}
-
-/* =============================================================================
-   LIST
-============================================================================= */
-
-const LIST_GRID =
-  "lg:grid-cols-[minmax(220px,1.5fr)_minmax(140px,1fr)_130px_90px_90px_140px_44px]";
-
-function ClientList({
-  clients,
-  onCopy,
-  onOpen,
-}: {
-  clients: ClientRecord[];
-  onCopy: (value: string, message: string) => void;
-  onOpen: (clientId: string) => void;
-}) {
-  return (
-    <section className="rounded-[24px] border border-[var(--border)] bg-[var(--card)] shadow-sm">
-      <div
-        className={cx(
-          "sticky top-0 z-10 hidden gap-4 rounded-t-[24px] border-b border-[var(--border)] bg-[var(--card)] px-5 py-3 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--muted)] lg:grid",
-          LIST_GRID,
-        )}
-        style={{ backgroundImage: BRAND_WASH_SOFT }}
-      >
-        <span>Client</span>
-        <span>Owner</span>
-        <span>Status</span>
-        <span>Projects</span>
-        <span>Support</span>
-        <span>Renewal</span>
-        <span />
-      </div>
-
-      <div className="divide-y divide-[var(--border)]">
-        {clients.map((client) => {
-          const renewal = renewalLabel(client.renewalAt);
-          const renewalSoon = isRenewalDue(client.renewalAt);
-
-          return (
-            <div
-              key={client.id}
-              className={cx(
-                "grid gap-3 px-4 py-4 transition last:rounded-b-[24px] hover:bg-[#D4AF37]/[0.05] lg:items-center lg:gap-4 lg:px-5",
-                LIST_GRID,
-              )}
-            >
-              <button
-                type="button"
-                onClick={() => onOpen(client.id)}
-                className="flex min-w-0 items-center gap-3 text-left"
-              >
-                <ClientLogo client={client} size="sm" />
-
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-[var(--text)]">
-                    {client.displayName || client.name}
-                  </div>
-
-                  <div className="mt-0.5 truncate text-xs text-[var(--muted)]">
-                    {[client.industry, client.country]
-                      .filter(Boolean)
-                      .join(" · ") || "Client"}
-                  </div>
-                </div>
-              </button>
-
-              <div className="flex min-w-0 items-center gap-2">
-                <OwnerAvatar owner={client.accountOwner} />
-
-                <span className="truncate text-xs font-medium text-[var(--text)]">
-                  {personName(client.accountOwner)}
-                </span>
-              </div>
-
-              <div>
-                <span
-                  className={cx(
-                    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em]",
-                    statusClasses(client.status),
-                  )}
-                >
-                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                  {formatEnum(client.status)}
-                </span>
-              </div>
-
-              <div className="text-sm font-semibold text-[var(--text)]">
-                <span className="mr-1.5 text-[10px] font-medium uppercase tracking-wider text-[var(--muted)] lg:hidden">
-                  Projects
-                </span>
-                {client._count.projects}
-              </div>
-
-              <div
-                className={cx(
-                  "text-sm font-semibold",
-                  client.openSupportCount > 0
-                    ? "text-[#B8912A] dark:text-[#F3DFA2]"
-                    : "text-[var(--text)]",
-                )}
-              >
-                <span className="mr-1.5 text-[10px] font-medium uppercase tracking-wider text-[var(--muted)] lg:hidden">
-                  Support
-                </span>
-                {client.openSupportCount}
-              </div>
-
-              <div
-                className={cx(
-                  "truncate text-xs",
-                  renewalSoon
-                    ? "font-semibold text-[#B8912A] dark:text-[#F3DFA2]"
-                    : "text-[var(--muted)]",
-                )}
-              >
-                {renewal ?? "No renewal set"}
-              </div>
-
-              <div className="flex items-center justify-end gap-1">
-                <ActionMenu
-                  label={`Actions for ${client.name}`}
-                  items={clientMenuItems(client, onCopy, onOpen)}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-/* =============================================================================
-   STATES
-============================================================================= */
-
-function LoadingState({ view }: { view: ViewMode }) {
-  if (view === "list") {
-    return (
-      <div className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--card)]">
-        {Array.from({ length: 6 }).map((_, index) => (
-          <div
-            key={index}
-            className="flex animate-pulse items-center gap-4 border-b border-[var(--border)] px-5 py-4 last:border-b-0"
-          >
-            <div className="h-9 w-9 rounded-xl bg-[var(--soft)]" />
-            <div className="h-3.5 w-40 rounded bg-[var(--soft)]" />
-            <div className="ml-auto h-3.5 w-24 rounded bg-[var(--soft)]" />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-      {Array.from({ length: 6 }).map((_, index) => (
-        <div
-          key={index}
-          className="h-[340px] animate-pulse rounded-[24px] border border-[var(--border)] bg-[var(--card)] p-5"
-        >
-          <div className="flex items-center gap-3">
-            <div className="h-11 w-11 rounded-xl bg-[var(--soft)]" />
-
-            <div className="flex-1 space-y-2">
-              <div className="h-3.5 w-1/2 rounded bg-[var(--soft)]" />
-              <div className="h-3 w-1/3 rounded bg-[var(--soft)]" />
-            </div>
-          </div>
-
-          <div className="mt-6 h-4 w-2/3 rounded bg-[var(--soft)]" />
-          <div className="mt-2 h-4 w-full rounded bg-[var(--soft)]" />
-          <div className="mt-2 h-4 w-4/5 rounded bg-[var(--soft)]" />
-
-          <div className="mt-8 grid grid-cols-3 gap-2">
-            <div className="h-14 rounded-xl bg-[var(--soft)]" />
-            <div className="h-14 rounded-xl bg-[var(--soft)]" />
-            <div className="h-14 rounded-xl bg-[var(--soft)]" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ErrorState({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="flex min-h-[340px] flex-col items-center justify-center rounded-[24px] border border-red-500/20 bg-red-500/[0.04] px-6 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-red-500/10 text-red-600">
-        <AlertCircle size={21} />
-      </div>
-
-      <h3 className="mt-4 text-base font-semibold text-[var(--text)]">
-        Clients could not be loaded
-      </h3>
-
-      <p className="mt-2 max-w-md text-sm leading-6 text-[var(--muted)]">
-        {message}
-      </p>
-
-      <button
-        type="button"
-        onClick={onRetry}
-        className={cx(
-          "mt-5 inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 text-sm font-semibold text-[var(--text)] transition hover:border-[#D4AF37]/45 hover:bg-[var(--soft)]",
-          FOCUS_RING,
-        )}
-      >
-        <RefreshCw size={14} />
-        Try again
-      </button>
-    </div>
-  );
-}
-
-function EmptyState({ onAdd }: { onAdd: () => void }) {
-  return (
-    <div
-      className="relative overflow-hidden rounded-[28px] border border-dashed border-[#D4AF37]/35 bg-[var(--card)] px-6 py-16 text-center"
-      style={{ backgroundImage: BRAND_WASH_SOFT }}
-    >
-      <div className="pointer-events-none absolute left-1/2 top-0 h-52 w-52 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#D4AF37]/20 blur-3xl" />
-
-      <div className="relative mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-[#D4AF37]/35 bg-[var(--card)] text-[#B8912A] dark:text-[#F3DFA2]">
-        <Building2 size={23} />
-      </div>
-
-      <h3 className="relative mt-5 text-lg font-semibold tracking-tight text-[var(--text)]">
-        Build your client portfolio
-      </h3>
-
-      <p className="relative mx-auto mt-2 max-w-md text-sm leading-6 text-[var(--muted)]">
-        Add the organisations Syntra Grid works with. Projects, systems, support
-        and commercial activity all connect back to one client record.
-      </p>
-
-      <button
-        type="button"
-        onClick={onAdd}
-        style={{ background: GOLD_GRADIENT, boxShadow: GOLD_SHADOW }}
-        className={cx(
-          "relative mt-6 inline-flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold transition hover:brightness-[1.04]",
-          FOCUS_RING,
-        )}
-      >
-        <Plus size={15} color={GOLD_INK} />
-        <span style={{ color: GOLD_INK }}>Add first client</span>
-      </button>
-    </div>
-  );
-}
-
-function NoResultsState({
-  query,
-  onClear,
-}: {
-  query: string;
-  onClear: () => void;
-}) {
-  return (
-    <div className="flex min-h-[280px] flex-col items-center justify-center rounded-[24px] border border-[var(--border)] bg-[var(--card)] px-6 text-center">
-      <Search size={22} className="text-[var(--muted)]" />
-
-      <h3 className="mt-4 text-base font-semibold text-[var(--text)]">
-        {query ? `Nothing matches "${query}"` : "No clients match these filters"}
-      </h3>
-
-      <p className="mt-2 text-sm text-[var(--muted)]">
-        Try a different search, or reset the portfolio filters.
-      </p>
-
-      <button
-        type="button"
-        onClick={onClear}
-        className={cx(
-          "mt-5 rounded-md px-1 text-sm font-semibold text-[var(--text)] hover:text-[#B8912A]",
-          FOCUS_RING,
-        )}
-      >
-        Clear filters
-      </button>
-    </div>
-  );
-}
-
-/* =============================================================================
-   ADD CLIENT DRAWER
-============================================================================= */
-
-function AddClientDrawer({
-  form,
-  step,
-  creating,
-  formIssue,
-  createdClient,
-  accountOwners,
-  optionsLoading,
-  selectedOwner,
-  draftRestored,
-  onDiscardDraft,
-  onChange,
-  onClose,
-  onNext,
-  onBack,
-  onStep,
-  onSubmit,
-  onDone,
-  onOpenClient,
-}: {
-  form: ClientForm;
-  step: AddClientStep;
-  creating: boolean;
-  formIssue: FormIssue | null;
-  createdClient: ClientRecord | null;
-  accountOwners: AccountOwner[];
-  optionsLoading: boolean;
-  selectedOwner: AccountOwner | null;
-  draftRestored: boolean;
-  onDiscardDraft: () => void;
-  onChange: <K extends keyof ClientForm>(
-    key: K,
-    value: ClientForm[K],
-  ) => void;
-  onClose: () => void;
-  onNext: () => void;
-  onBack: () => void;
-  onStep: (target: AddClientStep) => void;
-  onSubmit: (event?: FormEvent) => Promise<void>;
-  onDone: () => void;
-  onOpenClient: (clientId: string) => void;
-}) {
-  const panelRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    const previousFocus = document.activeElement as HTMLElement | null;
-
-    document.body.style.overflow = "hidden";
-    panelRef.current?.focus();
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      previousFocus?.focus?.();
-    };
-  }, []);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !creating) {
-        event.stopPropagation();
-        onClose();
-        return;
-      }
-
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.key === "Enter" &&
-        !creating &&
-        !createdClient
-      ) {
-        event.preventDefault();
-        void onSubmit();
-        return;
-      }
-
-      if (event.key !== "Tab" || !panelRef.current) return;
-
-      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-
-      if (focusable.length === 0) return;
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-
-      if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown, true);
-
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [createdClient, creating, onClose, onSubmit]);
-
-  return (
-    <div className="fixed inset-0 z-[120]">
-      <button
-        type="button"
-        aria-label="Close the add client drawer"
-        onClick={onClose}
-        className="absolute inset-0 bg-[#0B1020]/40 backdrop-blur-[2px]"
-      />
-
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Add client"
-        tabIndex={-1}
-        className="absolute inset-y-0 right-0 flex w-full max-w-[680px] flex-col border-l border-[#D4AF37]/25 bg-[var(--shell)] shadow-[0_0_60px_rgba(11,16,32,0.35)] outline-none"
-      >
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 left-0 w-[3px]"
-          style={{ background: GOLD_GRADIENT }}
-        />
-
-        {createdClient ? (
-          <ClientCreatedState
-            client={createdClient}
-            onDone={onDone}
-            onOpen={() => onOpenClient(createdClient.id)}
-          />
-        ) : (
-          <>
-            <div
-              className="border-b border-[var(--border)] px-5 py-5 sm:px-7"
-              style={{ backgroundImage: BRAND_WASH_SOFT }}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-semibold tracking-tight text-[var(--text)]">
-                    Add client
-                  </h2>
-
-                  <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-                    Create the organisation first. Projects and systems connect
-                    to it afterwards.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={onClose}
-                  disabled={creating}
-                  aria-label="Close"
-                  className={cx(
-                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--card)] text-[var(--muted)] transition hover:border-[#D4AF37]/45 hover:text-[var(--text)] disabled:opacity-50",
-                    FOCUS_RING,
-                  )}
-                >
-                  <X size={16} />
-                </button>
-              </div>
-
-              <StepIndicator step={step} onStep={onStep} />
-            </div>
-
-            <form
-              onSubmit={(event) => void onSubmit(event)}
-              className="flex min-h-0 flex-1 flex-col"
-            >
-              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-7">
-                {draftRestored ? (
-                  <div
-                    className="mb-6 flex items-center justify-between gap-3 rounded-2xl border border-[#D4AF37]/35 p-3.5"
-                    style={{ backgroundImage: BRAND_WASH_SOFT }}
-                  >
-                    <p className="text-xs leading-5 text-[var(--text)]">
-                      Picked up where you left off. Your unsaved client details
-                      were restored.
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={onDiscardDraft}
-                      className={cx(
-                        "shrink-0 rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--text)] transition hover:bg-[var(--soft)]",
-                        FOCUS_RING,
-                      )}
-                    >
-                      Start fresh
-                    </button>
-                  </div>
-                ) : null}
-
-                {step === 1 ? (
-                  <CompanyStep
-                    form={form}
-                    issue={formIssue}
-                    onChange={onChange}
-                  />
-                ) : null}
-
-                {step === 2 ? (
-                  <RelationshipStep
-                    form={form}
-                    issue={formIssue}
-                    accountOwners={accountOwners}
-                    optionsLoading={optionsLoading}
-                    onChange={onChange}
-                  />
-                ) : null}
-
-                {step === 3 ? (
-                  <ContactStep
-                    form={form}
-                    issue={formIssue}
-                    onChange={onChange}
-                  />
-                ) : null}
-
-                {step === 4 ? (
-                  <ReviewStep
-                    form={form}
-                    selectedOwner={selectedOwner}
-                    onStep={onStep}
-                  />
-                ) : null}
-
-                {formIssue ? (
-                  <div className="mt-5 flex items-start gap-3 rounded-2xl border border-red-500/25 bg-red-500/[0.06] p-4 text-sm text-red-700 dark:text-red-300">
-                    <AlertCircle size={17} className="mt-0.5 shrink-0" />
-                    <span>{formIssue.message}</span>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="flex items-center justify-between gap-3 border-t border-[var(--border)] bg-[var(--shell)] px-5 py-4 sm:px-7">
-                <div className="flex items-center gap-3">
-                  {step > 1 ? (
-                    <button
-                      type="button"
-                      onClick={onBack}
-                      disabled={creating}
-                      className={cx(
-                        "inline-flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-[var(--muted)] transition hover:bg-[var(--soft)] hover:text-[var(--text)] disabled:opacity-50",
-                        FOCUS_RING,
-                      )}
-                    >
-                      <ArrowLeft size={15} />
-                      Back
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={onClose}
-                      disabled={creating}
-                      className={cx(
-                        "h-10 rounded-xl px-3 text-sm font-semibold text-[var(--muted)] transition hover:bg-[var(--soft)] hover:text-[var(--text)] disabled:opacity-50",
-                        FOCUS_RING,
-                      )}
-                    >
-                      Cancel
-                    </button>
-                  )}
-
-                  <span className="hidden text-[11px] text-[var(--muted)] sm:block">
-                    Saved as a draft while you type
-                  </span>
-                </div>
-
-                {step < 4 ? (
-                  <button
-                    type="button"
-                    onClick={onNext}
-                    style={{
-                      background: GOLD_GRADIENT,
-                      boxShadow: GOLD_SHADOW,
-                    }}
-                    className={cx(
-                      "inline-flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold transition hover:brightness-[1.04]",
-                      FOCUS_RING,
-                    )}
-                  >
-                    <span style={{ color: GOLD_INK }}>Continue</span>
-                    <ArrowRight size={15} color={GOLD_INK} />
-                  </button>
-                ) : (
-                  <button
-                    type="submit"
-                    disabled={creating}
-                    style={{
-                      background: GOLD_GRADIENT,
-                      boxShadow: GOLD_SHADOW,
-                    }}
-                    className={cx(
-                      "inline-flex h-10 min-w-[140px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition hover:brightness-[1.04] disabled:cursor-not-allowed disabled:opacity-60",
-                      FOCUS_RING,
-                    )}
-                  >
-                    {creating ? (
-                      <>
-                        <Loader2
-                          size={15}
-                          color={GOLD_INK}
-                          className="animate-spin"
-                        />
-                        <span style={{ color: GOLD_INK }}>Creating</span>
-                      </>
-                    ) : (
-                      <>
-                        <Check size={15} color={GOLD_INK} />
-                        <span style={{ color: GOLD_INK }}>Create client</span>
-                      </>
-                    )}
-                  </button>
-                )}
-              </div>
-            </form>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* =============================================================================
-   STEPS
-============================================================================= */
-
-const STEPS: Array<{ number: AddClientStep; label: string }> = [
-  { number: 1, label: "Company" },
-  { number: 2, label: "Relationship" },
-  { number: 3, label: "Contact" },
-  { number: 4, label: "Review" },
-];
-
-function StepIndicator({
-  step,
-  onStep,
-}: {
-  step: AddClientStep;
-  onStep: (target: AddClientStep) => void;
-}) {
-  return (
-    <div className="mt-5 grid grid-cols-4 gap-2">
-      {STEPS.map((item) => {
-        const active = item.number === step;
-        const complete = item.number < step;
-
-        return (
-          <button
-            key={item.number}
-            type="button"
-            onClick={() => onStep(item.number)}
-            aria-current={active ? "step" : undefined}
-            className={cx("group text-left", FOCUS_RING, "rounded-md")}
-          >
-            <span
-              className={cx(
-                "block h-1 rounded-full transition",
-                !active && !complete && "bg-[var(--soft)]",
-              )}
-              style={
-                active || complete ? { background: GOLD_GRADIENT } : undefined
-              }
-            />
-
-            <span
-              className={cx(
-                "mt-2 block truncate text-[11px] font-semibold transition",
-                active
-                  ? "text-[var(--text)]"
-                  : "text-[var(--muted)] group-hover:text-[var(--text)]",
-              )}
-            >
-              {item.label}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function CompanyStep({
-  form,
-  issue,
-  onChange,
-}: {
-  form: ClientForm;
-  issue: FormIssue | null;
-  onChange: <K extends keyof ClientForm>(
-    key: K,
-    value: ClientForm[K],
-  ) => void;
-}) {
-  return (
-    <StepSection
-      title="Company details"
-      description="Start with the organisation itself. Technical systems and projects are connected once the client exists."
-    >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field
-          className="sm:col-span-2"
-          label="Company name"
-          required
-          invalid={issue?.field === "name"}
-          value={form.name}
-          onChange={(value) => onChange("name", value)}
-          placeholder="RentWise"
-          autoFocus
-        />
-
-        <Field
-          label="Display name"
-          hint="A shorter label used across the dashboard"
-          value={form.displayName}
-          onChange={(value) => onChange("displayName", value)}
-          placeholder="Optional"
-        />
-
-        <Field
-          label="Industry"
-          value={form.industry}
-          onChange={(value) => onChange("industry", value)}
-          placeholder="Property technology"
-        />
-
-        <TextAreaField
-          className="sm:col-span-2"
-          label="Description"
-          hint="What the organisation does and how Syntra Grid works with it"
-          value={form.description}
-          onChange={(value) => onChange("description", value)}
-          placeholder="A short summary the team will read on the client card."
-        />
-
-        <Field
-          label="Country"
-          value={form.country}
-          onChange={(value) => onChange("country", value)}
-          placeholder="Nigeria"
-        />
-
-        <Field
-          label="City"
-          value={form.city}
-          onChange={(value) => onChange("city", value)}
-          placeholder="Abuja"
-        />
-
-        <Field
-          label="Website"
-          hint="The domain fills itself in from this"
-          invalid={issue?.field === "websiteUrl"}
-          value={form.websiteUrl}
-          onChange={(value) => onChange("websiteUrl", value)}
-          placeholder="rentwise.ng"
-          inputMode="url"
-        />
-
-        <Field
-          label="Primary domain"
-          value={form.domain}
-          onChange={(value) => onChange("domain", value)}
-          placeholder="rentwise.ng"
-        />
-      </div>
-    </StepSection>
-  );
-}
-
-function RelationshipStep({
-  form,
-  issue,
-  accountOwners,
-  optionsLoading,
-  onChange,
-}: {
-  form: ClientForm;
-  issue: FormIssue | null;
-  accountOwners: AccountOwner[];
-  optionsLoading: boolean;
-  onChange: <K extends keyof ClientForm>(
-    key: K,
-    value: ClientForm[K],
-  ) => void;
-}) {
-  const contractPreview = form.contractValue
-    ? formatMoney(form.contractValue, form.currency)
-    : null;
-
-  return (
-    <StepSection
-      title="Relationship"
-      description="Set how Syntra Grid works with this organisation and who owns the relationship internally."
-    >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <FormSelect
-          label="Status"
-          value={form.status}
-          onChange={(value) => onChange("status", value as ClientStatus)}
-          options={STATUS_OPTIONS}
-        />
-
-        <FormSelect
-          label="Priority"
-          value={form.priority}
-          onChange={(value) => onChange("priority", value as ClientPriority)}
-          options={PRIORITY_OPTIONS}
-        />
-
-        <FormSelect
-          className="sm:col-span-2"
-          label="Relationship type"
-          value={form.relationshipType}
-          onChange={(value) =>
-            onChange("relationshipType", value as ClientRelationship)
-          }
-          options={RELATIONSHIP_OPTIONS}
-        />
-
-        <FormSelect
-          className="sm:col-span-2"
-          label="Account owner"
-          hint="The person clients hear from first"
-          invalid={issue?.field === "accountOwnerId"}
-          value={form.accountOwnerId}
-          onChange={(value) => onChange("accountOwnerId", value)}
-          disabled={optionsLoading}
-          options={[
-            ...(accountOwners.length === 0
-              ? [{ value: "", label: "No eligible team members" }]
-              : []),
-            ...accountOwners.map((owner) => ({
-              value: owner.id,
-              label: `${personName(owner)}${
-                owner.role ? ` · ${formatEnum(owner.role)}` : ""
-              }`,
-            })),
-          ]}
-        />
-
-        <Field
-          label="Relationship started"
-          type="date"
-          value={form.relationshipStartedAt}
-          onChange={(value) => onChange("relationshipStartedAt", value)}
-        />
-
-        <Field
-          label="Went live"
-          type="date"
-          invalid={issue?.field === "liveSince"}
-          value={form.liveSince}
-          onChange={(value) => onChange("liveSince", value)}
-        />
-
-        <div className="sm:col-span-2">
-          <div className="mb-3 mt-2 flex items-center gap-2">
-            <CircleDollarSign size={15} className="text-[#B8912A]" />
-            <span className="text-xs font-semibold text-[var(--text)]">
-              Commercial snapshot
-            </span>
-          </div>
-
-          <div
-            className="grid gap-4 rounded-2xl border border-[#D4AF37]/25 p-4 sm:grid-cols-2"
-            style={{ backgroundImage: BRAND_WASH_SOFT }}
-          >
-            <FormSelect
-              label="Billing cycle"
-              value={form.billingCycle}
-              onChange={(value) =>
-                onChange("billingCycle", value as BillingCycle)
-              }
-              options={BILLING_OPTIONS}
-            />
-
-            <FormSelect
-              label="Currency"
-              value={form.currency}
-              onChange={(value) => onChange("currency", value as Currency)}
-              options={CURRENCY_OPTIONS}
-            />
-
-            <Field
-              label="Contract value"
-              type="number"
-              min="0"
-              invalid={issue?.field === "contractValue"}
-              hint={contractPreview ?? undefined}
-              value={form.contractValue}
-              onChange={(value) => onChange("contractValue", value)}
-              placeholder="0"
-            />
-
-            <Field
-              label="Renewal date"
-              type="date"
-              value={form.renewalAt}
-              onChange={(value) => onChange("renewalAt", value)}
-            />
-          </div>
-
-          <p className="mt-2 text-[11px] leading-5 text-[var(--muted)]">
-            Use contract value only for a genuine fixed amount. Revenue share,
-            equity or other arrangements belong in the Commercial workspace
-            rather than this field.
-          </p>
-        </div>
-      </div>
-    </StepSection>
-  );
-}
-
-function ContactStep({
-  form,
-  issue,
-  onChange,
-}: {
-  form: ClientForm;
-  issue: FormIssue | null;
-  onChange: <K extends keyof ClientForm>(
-    key: K,
-    value: ClientForm[K],
-  ) => void;
-}) {
-  return (
-    <StepSection
-      title="Primary contact"
-      description="Optional. Add the person Syntra Grid speaks to most often. More contacts can be added later."
-    >
-      <div
-        className="mb-5 flex items-center gap-3 rounded-2xl border border-[#D4AF37]/25 p-4"
-        style={{ backgroundImage: BRAND_WASH_SOFT }}
-      >
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--card)] text-[#B8912A] dark:text-[#F3DFA2]">
-          <Users size={17} />
-        </div>
-
-        <div>
-          <div className="text-sm font-semibold text-[var(--text)]">
-            Contact record
-          </div>
-
-          <div className="mt-0.5 text-xs text-[var(--muted)]">
-            Leave every field blank to skip this and add contacts later.
-          </div>
-        </div>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field
-          label="First name"
-          invalid={issue?.field === "contactFirstName"}
-          value={form.contactFirstName}
-          onChange={(value) => onChange("contactFirstName", value)}
-          placeholder="First name"
-        />
-
-        <Field
-          label="Last name"
-          invalid={issue?.field === "contactLastName"}
-          value={form.contactLastName}
-          onChange={(value) => onChange("contactLastName", value)}
-          placeholder="Last name"
-        />
-
-        <Field
-          label="Job title"
-          value={form.contactJobTitle}
-          onChange={(value) => onChange("contactJobTitle", value)}
-          placeholder="Managing Director"
-        />
-
-        <FormSelect
-          label="Contact role"
-          value={form.contactRole}
-          onChange={(value) => onChange("contactRole", value as ContactRole)}
-          options={CONTACT_ROLE_OPTIONS}
-        />
-
-        <Field
-          label="Email"
-          type="email"
-          invalid={issue?.field === "contactEmail"}
-          value={form.contactEmail}
-          onChange={(value) => onChange("contactEmail", value)}
-          placeholder="name@company.com"
-        />
-
-        <Field
-          label="Phone"
-          type="tel"
-          value={form.contactPhone}
-          onChange={(value) => onChange("contactPhone", value)}
-          placeholder="+234"
-        />
-      </div>
-    </StepSection>
-  );
-}
-
-function ReviewStep({
-  form,
-  selectedOwner,
-  onStep,
-}: {
-  form: ClientForm;
-  selectedOwner: AccountOwner | null;
-  onStep: (target: AddClientStep) => void;
-}) {
-  const hasContact = Boolean(
-    form.contactFirstName.trim() && form.contactLastName.trim(),
-  );
-
-  return (
-    <StepSection
-      title="Review client"
-      description="Check the record before it is created. Anything here can be edited afterwards."
-    >
-      <div className="overflow-hidden rounded-[22px] border border-[var(--border)] bg-[var(--card)]">
-        <div
-          className="flex items-start gap-4 border-b border-[var(--border)] p-5"
-          style={{ backgroundImage: BRAND_WASH_SOFT }}
-        >
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#D4AF37]/30 bg-[var(--card)] text-sm font-bold text-[#8A6A12] dark:text-[#F3DFA2]">
-            {initials(form.displayName || form.name) || "CL"}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <h3 className="truncate text-base font-semibold text-[var(--text)]">
-              {form.displayName || form.name || "Unnamed client"}
-            </h3>
-
-            <p className="mt-1 truncate text-xs text-[var(--muted)]">
-              {[form.industry, form.city, form.country]
-                .filter(Boolean)
-                .join(" · ") || "No company details supplied"}
-            </p>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              <span
-                className={cx(
-                  "rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em]",
-                  statusClasses(form.status),
-                )}
-              >
-                {formatEnum(form.status)}
-              </span>
-
-              <span
-                className={cx(
-                  "rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em]",
-                  priorityClasses(form.priority),
-                )}
-              >
-                {formatEnum(form.priority)}
-              </span>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => onStep(1)}
-            className={cx(
-              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 text-[11px] font-semibold text-[var(--text)] transition hover:border-[#D4AF37]/45",
-              FOCUS_RING,
-            )}
-          >
-            <Pencil size={12} />
-            Edit
-          </button>
-        </div>
-
-        <div className="divide-y divide-[var(--border)] px-5">
-          <ReviewRow
-            label="Relationship"
-            value={formatEnum(form.relationshipType)}
-            onEdit={() => onStep(2)}
-          />
-
-          <ReviewRow
-            label="Account owner"
-            value={personName(selectedOwner)}
-            onEdit={() => onStep(2)}
-          />
-
-          <ReviewRow
-            label="Relationship started"
-            value={
-              form.relationshipStartedAt
-                ? formatDate(form.relationshipStartedAt)
-                : "Not set"
-            }
-            onEdit={() => onStep(2)}
-          />
-
-          <ReviewRow
-            label="Commercial"
-            value={`${formatEnum(form.billingCycle)} · ${
-              form.contractValue
-                ? formatMoney(form.contractValue, form.currency)
-                : form.currency
-            }`}
-            onEdit={() => onStep(2)}
-          />
-
-          <ReviewRow
-            label="Renewal"
-            value={form.renewalAt ? formatDate(form.renewalAt) : "Not set"}
-            onEdit={() => onStep(2)}
-          />
-
-          <ReviewRow
-            label="Primary contact"
-            value={
-              hasContact
-                ? `${form.contactFirstName} ${form.contactLastName}`
-                : "Add later"
-            }
-            onEdit={() => onStep(3)}
-          />
-        </div>
-      </div>
-
-      <div className="mt-4 flex items-start gap-3 rounded-2xl border border-[var(--border)] bg-[var(--soft)] p-4">
-        <ShieldCheck size={17} className="mt-0.5 shrink-0 text-[#B8912A]" />
-
-        <p className="text-xs leading-5 text-[var(--muted)]">
-          This creates the client workspace only. Projects, repositories,
-          deployments and databases are connected separately so the client
-          record stays clean.
-        </p>
-      </div>
-    </StepSection>
-  );
-}
-
-function StepSection({
-  title,
-  description,
+function SecondaryButton({
+  onClick,
   children,
 }: {
-  title: string;
-  description: string;
+  onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <div>
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold tracking-tight text-[var(--text)]">
-          {title}
-        </h3>
-
-        <p className="mt-1.5 max-w-xl text-sm leading-6 text-[var(--muted)]">
-          {description}
-        </p>
-      </div>
-
+    <button
+      type="button"
+      onClick={onClick}
+      className={cx(
+        'inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--line)] px-3.5 text-[10px] font-semibold text-[var(--text-muted)] transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)]',
+        focusRing,
+      )}
+    >
       {children}
-    </div>
+    </button>
   );
 }
 
-/* =============================================================================
-   FORM CONTROLS
-============================================================================= */
-
-function FieldLabel({
-  label,
-  required,
-  hint,
-}: {
-  label: string;
-  required?: boolean;
-  hint?: string;
-}) {
+function Kbd({ children }: { children: ReactNode }) {
   return (
-    <span className="mb-2 flex items-baseline justify-between gap-3">
-      <span className="text-xs font-semibold text-[var(--text)]">
-        {label}
-        {required ? <span className="ml-1 text-[#C79A2A]">*</span> : null}
-      </span>
+    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-[var(--line)] bg-[var(--surface-muted)] px-1.5 text-[9px] font-semibold text-[var(--text-muted)]">
+      {children}
+    </kbd>
+  );
+}
 
-      {hint ? (
-        <span className="truncate text-[11px] font-medium text-[var(--muted)]">
-          {hint}
-        </span>
-      ) : null}
+function CountPill({ value }: { value: number }) {
+  return (
+    <span className="rounded-md bg-[var(--surface-muted)] px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-[var(--text-subtle)]">
+      {value}
     </span>
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-  required,
-  className,
-  type = "text",
-  autoFocus,
-  min,
-  hint,
-  invalid,
-  inputMode,
+function ErrorState({
+  title,
+  message,
+  onRetry,
 }: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  required?: boolean;
-  className?: string;
-  type?: string;
-  autoFocus?: boolean;
-  min?: string;
-  hint?: string;
-  invalid?: boolean;
-  inputMode?: "text" | "url" | "tel" | "email" | "numeric" | "decimal";
+  title: string;
+  message: string;
+  onRetry: () => void;
 }) {
   return (
-    <label className={cx("block", className)}>
-      <FieldLabel label={label} required={required} hint={hint} />
+    <div className="flex min-h-[320px] items-center justify-center rounded-[22px] border border-[var(--line)] bg-[var(--surface)] px-5 py-12 text-center">
+      <div className="max-w-[420px]">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-[15px] border border-red-500/20 bg-red-500/5 text-red-500">
+          <AlertCircle size={19} />
+        </div>
 
-      <input
-        type={type}
-        value={value}
-        min={min}
-        inputMode={inputMode}
-        autoFocus={autoFocus}
-        aria-invalid={invalid || undefined}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className={cx(
-          INPUT_BASE,
-          "h-11 px-3.5",
-          invalid &&
-            "border-red-500/60 focus:border-red-500/60 focus:ring-red-500/15",
-        )}
-      />
-    </label>
-  );
-}
+        <h3 className="mt-4 text-[14px] font-semibold text-[var(--text)]">
+          {title}
+        </h3>
 
-function TextAreaField({
-  label,
-  value,
-  onChange,
-  placeholder,
-  className,
-  hint,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  className?: string;
-  hint?: string;
-}) {
-  return (
-    <label className={cx("block", className)}>
-      <FieldLabel label={label} hint={hint} />
+        <p className="mt-2 text-[10px] leading-5 text-[var(--text-muted)]">
+          {message}
+        </p>
 
-      <textarea
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        rows={4}
-        className={cx(INPUT_BASE, "resize-none px-3.5 py-3 leading-6")}
-      />
-    </label>
-  );
-}
-
-function FormSelect({
-  label,
-  value,
-  onChange,
-  options,
-  className,
-  disabled,
-  hint,
-  invalid,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-  className?: string;
-  disabled?: boolean;
-  hint?: string;
-  invalid?: boolean;
-}) {
-  return (
-    <label className={cx("block", className)}>
-      <FieldLabel label={label} hint={hint} />
-
-      <div className="relative">
-        <select
-          value={value}
-          disabled={disabled}
-          aria-invalid={invalid || undefined}
-          onChange={(event) => onChange(event.target.value)}
-          className={cx(
-            INPUT_BASE,
-            "h-11 appearance-none px-3.5 pr-10 disabled:cursor-not-allowed disabled:opacity-50",
-            invalid && "border-red-500/60 focus:border-red-500/60",
-          )}
-        >
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-
-        <ChevronDown
-          size={14}
-          className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)]"
-        />
+        <div className="mt-5 flex justify-center">
+          <SecondaryButton onClick={onRetry}>
+            <RefreshCw size={13} />
+            Try again
+          </SecondaryButton>
+        </div>
       </div>
-    </label>
-  );
-}
-
-/* =============================================================================
-   REVIEW
-============================================================================= */
-
-function ReviewRow({
-  label,
-  value,
-  onEdit,
-}: {
-  label: string;
-  value: string;
-  onEdit?: () => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-5 py-3.5">
-      <span className="text-xs text-[var(--muted)]">{label}</span>
-
-      <span className="flex items-center gap-2">
-        <span className="text-right text-xs font-semibold text-[var(--text)]">
-          {value}
-        </span>
-
-        {onEdit ? (
-          <button
-            type="button"
-            onClick={onEdit}
-            aria-label={`Edit ${label.toLowerCase()}`}
-            className={cx(
-              "rounded-md p-1 text-[var(--muted)] transition hover:text-[#B8912A]",
-              FOCUS_RING,
-            )}
-          >
-            <Pencil size={12} />
-          </button>
-        ) : null}
-      </span>
     </div>
   );
 }
 
-/* =============================================================================
-   SUCCESS
-============================================================================= */
-
-function ClientCreatedState({
-  client,
-  onDone,
-  onOpen,
+function EmptyState({
+  title,
+  description,
+  action,
+  icon,
 }: {
-  client: ClientRecord;
-  onDone: () => void;
-  onOpen: () => void;
+  title: string;
+  description: string;
+  action?: ReactNode;
+  icon?: ReactNode;
 }) {
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex flex-1 items-center justify-center overflow-y-auto px-6 py-12">
-        <div className="w-full max-w-md text-center">
-          <div
-            className="mx-auto flex h-16 w-16 items-center justify-center rounded-[22px] border border-[#D4AF37]/35 text-[#B8912A] dark:text-[#F3DFA2]"
-            style={{ backgroundImage: BRAND_WASH }}
-          >
-            <CheckCircle2 size={27} />
-          </div>
-
-          <h2 className="mt-6 text-2xl font-semibold tracking-tight text-[var(--text)]">
-            {client.displayName || client.name} is in the portfolio
-          </h2>
-
-          <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-[var(--muted)]">
-            The client workspace is live. Projects, systems, support activity
-            and commercial records can now be connected to it.
-          </p>
-
-          <div className="mt-7 rounded-[22px] border border-[var(--border)] bg-[var(--card)] p-5 text-left shadow-sm">
-            <ReviewRow label="Status" value={formatEnum(client.status)} />
-
-            <div className="border-t border-[var(--border)]">
-              <ReviewRow
-                label="Relationship"
-                value={formatEnum(client.relationshipType)}
-              />
-            </div>
-
-            <div className="border-t border-[var(--border)]">
-              <ReviewRow
-                label="Account owner"
-                value={personName(client.accountOwner)}
-              />
-            </div>
-
-            <div className="border-t border-[var(--border)]">
-              <ReviewRow
-                label="Reference"
-                value={client.clientRef || "Not assigned"}
-              />
-            </div>
-          </div>
-
-          <div className="mt-7 flex flex-col gap-2 sm:flex-row sm:justify-center">
-            <button
-              type="button"
-              onClick={onDone}
-              className={cx(
-                "inline-flex h-11 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--card)] px-5 text-sm font-semibold text-[var(--text)] transition hover:border-[#D4AF37]/45 hover:bg-[var(--soft)]",
-                FOCUS_RING,
-              )}
-            >
-              Back to clients
-            </button>
-
-            <button
-              type="button"
-              onClick={onOpen}
-              style={{ background: GOLD_GRADIENT, boxShadow: GOLD_SHADOW }}
-              className={cx(
-                "inline-flex h-11 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition hover:brightness-[1.04]",
-                FOCUS_RING,
-              )}
-            >
-              <span style={{ color: GOLD_INK }}>Open workspace</span>
-              <ArrowRight size={15} color={GOLD_INK} />
-            </button>
-          </div>
+    <div className="flex min-h-[320px] items-center justify-center rounded-[22px] border border-[var(--line)] bg-[var(--surface)] px-5 py-12 text-center">
+      <div className="max-w-[440px]">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[18px] border border-[var(--line)] bg-[var(--surface-muted)] text-[var(--accent)]">
+          {icon ?? <Users size={21} strokeWidth={1.7} />}
         </div>
+
+        <h3 className="mt-5 text-[16px] font-semibold tracking-[-0.02em] text-[var(--text)]">
+          {title}
+        </h3>
+
+        <p className="mx-auto mt-2 max-w-[380px] text-[10px] leading-5 text-[var(--text-muted)]">
+          {description}
+        </p>
+
+        {action ? (
+          <div className="mt-5 flex items-center justify-center">{action}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function StepIntro({
+  icon,
+  title,
+  description,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] text-[var(--text)]">
+        {icon}
+      </span>
+
+      <div>
+        <h3 className="text-[13px] font-semibold tracking-[-0.01em] text-[var(--text)]">
+          {title}
+        </h3>
+        <p className="mt-0.5 text-[10px] leading-5 text-[var(--text-muted)]">
+          {description}
+        </p>
       </div>
     </div>
   );
