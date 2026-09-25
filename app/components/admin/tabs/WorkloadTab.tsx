@@ -347,6 +347,20 @@ const EMPTY_SUMMARY: WorkloadSummary = {
   overAllocatedEmployeeCount: 0,
 };
 
+const SKELETON_ROWS = [
+  { name: "w-36", meta: "w-52" },
+  { name: "w-28", meta: "w-44" },
+  { name: "w-40", meta: "w-56" },
+  { name: "w-32", meta: "w-40" },
+];
+
+const SKELETON_STAT_LABELS = [
+  "Available",
+  "Allocated",
+  "Remaining",
+  "Actual",
+];
+
 /* =============================================================================
  * COMPONENT
  * =============================================================================
@@ -370,6 +384,9 @@ export default function WorkloadTab() {
     useState<WorkloadOptionsResponse | null>(
       null,
     );
+
+  const [optionsLoading, setOptionsLoading] =
+    useState(true);
 
   const [data, setData] =
     useState<WorkloadResponse | null>(null);
@@ -575,15 +592,19 @@ export default function WorkloadTab() {
     );
 
   useEffect(() => {
-    void loadOptions().catch(
-      (loadError) => {
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "Unable to load workload options.",
-        );
-      },
-    );
+    void loadOptions()
+      .catch(
+        (loadError) => {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Unable to load workload options.",
+          );
+        },
+      )
+      .finally(() => {
+        setOptionsLoading(false);
+      });
   }, [loadOptions]);
 
   useEffect(() => {
@@ -595,9 +616,31 @@ export default function WorkloadTab() {
    * ===========================================================================
    */
 
+  const initialLoading: boolean =
+    loading && !data;
+
+  const backgroundLoading: boolean =
+    refreshing ||
+    (loading && !initialLoading);
+
+  const optionsPending: boolean =
+    options === null &&
+    optionsLoading;
+
   const summary =
     data?.summary ??
     EMPTY_SUMMARY;
+
+  const summaryOverAllocated: boolean =
+    summary.overAllocatedEmployeeCount > 0;
+
+  const summaryRemainingNegative: boolean =
+    summary.remainingHours < 0;
+
+  const isManager: boolean =
+    Boolean(
+      options?.viewer.isWorkloadManager,
+    );
 
   const filteredEmployees =
     useMemo(() => {
@@ -645,6 +688,22 @@ export default function WorkloadTab() {
       data,
       search,
     ]);
+
+  const teamCount =
+    filteredEmployees.length;
+
+  const teamCountLabel =
+    teamCount === 1
+      ? "person"
+      : "people";
+
+  const showEmptyState: boolean =
+    !initialLoading &&
+    teamCount === 0;
+
+  const showRows: boolean =
+    !initialLoading &&
+    teamCount !== 0;
 
   const availableProjects =
     useMemo(() => {
@@ -1248,20 +1307,6 @@ export default function WorkloadTab() {
    * ===========================================================================
    */
 
-  if (
-    loading &&
-    !data
-  ) {
-    return (
-      <div className="flex min-h-[520px] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-zinc-500">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          Loading workload…
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6 pb-12">
       {/* =======================================================================
@@ -1295,22 +1340,24 @@ export default function WorkloadTab() {
                 "refresh",
               )
             }
-            disabled={refreshing}
+            disabled={
+              refreshing ||
+              loading
+            }
             className="inline-flex h-10 items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3.5 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:opacity-50"
           >
             <RefreshCw
-              className={`h-4 w-4 ${
-                refreshing
-                  ? "animate-spin"
-                  : ""
-              }`}
+              className={
+                backgroundLoading
+                  ? "h-4 w-4 animate-spin"
+                  : "h-4 w-4"
+              }
             />
 
             Refresh
           </button>
 
-          {options?.viewer
-            .isWorkloadManager && (
+          {isManager && (
             <button
               type="button"
               onClick={() =>
@@ -1419,7 +1466,10 @@ export default function WorkloadTab() {
           SUMMARY
       ======================================================================= */}
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section
+        aria-busy={initialLoading}
+        className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+      >
         <MetricCard
           icon={<Users className="h-4 w-4" />}
           label="People"
@@ -1427,6 +1477,7 @@ export default function WorkloadTab() {
             summary.employeeCount,
           )}
           detail={`${hours(summary.availableCapacityHours)} available capacity`}
+          loading={initialLoading}
         />
 
         <MetricCard
@@ -1434,10 +1485,8 @@ export default function WorkloadTab() {
           label="Planned utilisation"
           value={`${formatNumber(summary.utilisationPercent)}%`}
           detail={`${hours(summary.allocatedHours)} of ${hours(summary.availableCapacityHours)}`}
-          warning={
-            summary.overAllocatedEmployeeCount >
-            0
-          }
+          warning={summaryOverAllocated}
+          loading={initialLoading}
         />
 
         <MetricCard
@@ -1445,6 +1494,7 @@ export default function WorkloadTab() {
           label="Billable plan"
           value={`${formatNumber(summary.billablePercent)}%`}
           detail={`${hours(summary.billableAllocatedHours)} billable`}
+          loading={initialLoading}
         />
 
         <MetricCard
@@ -1454,6 +1504,7 @@ export default function WorkloadTab() {
             summary.actualHours,
           )}
           detail={`${hours(summary.actualBillableHours)} billable`}
+          loading={initialLoading}
         />
       </section>
 
@@ -1461,29 +1512,33 @@ export default function WorkloadTab() {
           CAPACITY STRIP
       ======================================================================= */}
 
-      <section className="grid overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm md:grid-cols-4">
+      <section
+        aria-busy={initialLoading}
+        className="grid overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm md:grid-cols-4"
+      >
         <CapacityStat
           label="Scheduled"
           value={summary.scheduledCapacityHours}
+          loading={initialLoading}
         />
 
         <CapacityStat
           label="Leave"
           value={summary.leaveHours}
+          loading={initialLoading}
         />
 
         <CapacityStat
           label="Available"
           value={summary.availableCapacityHours}
+          loading={initialLoading}
         />
 
         <CapacityStat
           label="Remaining"
           value={summary.remainingHours}
-          warning={
-            summary.remainingHours <
-            0
-          }
+          warning={summaryRemainingNegative}
+          loading={initialLoading}
         />
       </section>
 
@@ -1515,10 +1570,13 @@ export default function WorkloadTab() {
                 event.target.value,
               )
             }
-            className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-700 outline-none focus:border-zinc-400"
+            disabled={optionsPending}
+            className={filterSelectClass}
           >
             <option value="">
-              All employees
+              {optionsPending
+                ? "Loading employees…"
+                : "All employees"}
             </option>
 
             {options?.employees.map(
@@ -1544,10 +1602,13 @@ export default function WorkloadTab() {
                 event.target.value,
               )
             }
-            className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-700 outline-none focus:border-zinc-400"
+            disabled={optionsPending}
+            className={filterSelectClass}
           >
             <option value="">
-              All departments
+              {optionsPending
+                ? "Loading departments…"
+                : "All departments"}
             </option>
 
             {options?.departments.map(
@@ -1590,10 +1651,13 @@ export default function WorkloadTab() {
                 setProjectId("");
               }
             }}
-            className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-700 outline-none focus:border-zinc-400"
+            disabled={optionsPending}
+            className={filterSelectClass}
           >
             <option value="">
-              All clients
+              {optionsPending
+                ? "Loading clients…"
+                : "All clients"}
             </option>
 
             {options?.clients.map(
@@ -1620,10 +1684,13 @@ export default function WorkloadTab() {
                 event.target.value,
               )
             }
-            className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-700 outline-none focus:border-zinc-400"
+            disabled={optionsPending}
+            className={filterSelectClass}
           >
             <option value="">
-              All projects
+              {optionsPending
+                ? "Loading projects…"
+                : "All projects"}
             </option>
 
             {availableProjects.map(
@@ -1648,7 +1715,13 @@ export default function WorkloadTab() {
           TEAM
       ======================================================================= */}
 
-      <section className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+      <section
+        aria-busy={
+          initialLoading ||
+          backgroundLoading
+        }
+        className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm"
+      >
         <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-4">
           <div>
             <h2 className="font-semibold text-zinc-950">
@@ -1660,19 +1733,26 @@ export default function WorkloadTab() {
             </p>
           </div>
 
-          <div className="text-xs text-zinc-400">
-            {filteredEmployees.length}{" "}
-            {filteredEmployees.length ===
-            1
-              ? "person"
-              : "people"}
-          </div>
+          {initialLoading && (
+            <Skeleton className="h-3 w-14" />
+          )}
+
+          {!initialLoading && (
+            <div className="text-xs text-zinc-400">
+              {teamCount} {teamCountLabel}
+            </div>
+          )}
         </div>
 
-        {filteredEmployees.length ===
-        0 ? (
+        {initialLoading && (
+          <WorkloadRowsSkeleton />
+        )}
+
+        {showEmptyState && (
           <EmptyState />
-        ) : (
+        )}
+
+        {showRows && (
           <div className="divide-y divide-zinc-100">
             {filteredEmployees.map(
               (row) => (
@@ -1681,12 +1761,7 @@ export default function WorkloadTab() {
                     row.employee.id
                   }
                   row={row}
-                  manager={
-                    Boolean(
-                      options?.viewer
-                        .isWorkloadManager,
-                    )
-                  }
+                  manager={isManager}
                   onAdd={() =>
                     openNewAllocation(
                       row,
@@ -2557,6 +2632,30 @@ function EmployeeRow({
   const utilisation =
     row.workload.utilisationPercent;
 
+  const overAllocated: boolean =
+    row.workload.overAllocated;
+
+  const onLeave: boolean =
+    row.capacity.leaveHours > 0;
+
+  const availableSub =
+    onLeave
+      ? `${hours(row.capacity.leaveHours)} leave`
+      : `${hours(row.capacity.scheduledHours)} scheduled`;
+
+  const remainingSub =
+    overAllocated
+      ? `${hours(row.workload.overAllocatedHours)} over`
+      : "Capacity left";
+
+  const hasAllocations: boolean =
+    row.allocations.length !== 0;
+
+  const departmentSuffix =
+    row.employee.department?.name
+      ? ` · ${row.employee.department.name}`
+      : "";
+
   return (
     <div>
       <div className="p-5">
@@ -2581,12 +2680,7 @@ function EmployeeRow({
                   row.employee
                     .jobTitle
                 }
-
-                {row.employee
-                  .department
-                  ?.name
-                  ? ` · ${row.employee.department.name}`
-                  : ""}
+                {departmentSuffix}
               </div>
             </div>
           </div>
@@ -2598,12 +2692,7 @@ function EmployeeRow({
                 row.capacity
                   .availableHours,
               )}
-              sub={
-                row.capacity
-                  .leaveHours > 0
-                  ? `${hours(row.capacity.leaveHours)} leave`
-                  : `${hours(row.capacity.scheduledHours)} scheduled`
-              }
+              sub={availableSub}
             />
 
             <MiniStat
@@ -2613,10 +2702,7 @@ function EmployeeRow({
                   .allocatedHours,
               )}
               sub={`${formatNumber(utilisation)}% utilised`}
-              warning={
-                row.workload
-                  .overAllocated
-              }
+              warning={overAllocated}
             />
 
             <MiniStat
@@ -2625,16 +2711,8 @@ function EmployeeRow({
                 row.workload
                   .remainingHours,
               )}
-              sub={
-                row.workload
-                  .overAllocated
-                  ? `${hours(row.workload.overAllocatedHours)} over`
-                  : "Capacity left"
-              }
-              warning={
-                row.workload
-                  .overAllocated
-              }
+              sub={remainingSub}
+              warning={overAllocated}
             />
 
             <MiniStat
@@ -2688,22 +2766,20 @@ function EmployeeRow({
         <div className="mt-4">
           <UtilisationBar
             percent={utilisation}
-            over={
-              row.workload
-                .overAllocated
-            }
+            over={overAllocated}
           />
         </div>
       </div>
 
       {expanded && (
         <div className="border-t border-zinc-100 bg-zinc-50/60 px-5 py-4">
-          {row.allocations.length ===
-          0 ? (
+          {!hasAllocations && (
             <div className="rounded-xl border border-dashed border-zinc-200 bg-white px-4 py-5 text-center text-sm text-zinc-400">
               No planned work in this period.
             </div>
-          ) : (
+          )}
+
+          {hasAllocations && (
             <div className="space-y-2">
               {row.allocations.map(
                 (allocation) => (
@@ -2736,6 +2812,93 @@ function EmployeeRow({
 }
 
 /* =============================================================================
+ * WORKLOAD ROWS SKELETON
+ * =============================================================================
+ */
+
+function WorkloadRowsSkeleton() {
+  return (
+    <div
+      aria-hidden="true"
+      className="divide-y divide-zinc-100"
+    >
+      {SKELETON_ROWS.map(
+        (row, index) => (
+          <div key={index}>
+            <div className="p-5">
+              <div className="flex flex-col gap-5 xl:flex-row xl:items-center">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <Skeleton className="h-10 w-10 shrink-0 rounded-xl" />
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex h-6 items-center">
+                      <Skeleton
+                        className={`h-4 ${row.name}`}
+                      />
+                    </div>
+
+                    <div className="mt-0.5 flex h-4 items-center">
+                      <Skeleton
+                        className={`h-3 ${row.meta}`}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid flex-[2] grid-cols-2 gap-3 sm:grid-cols-4">
+                  {SKELETON_STAT_LABELS.map(
+                    (label) => (
+                      <div key={label}>
+                        <div className="text-[11px] uppercase tracking-wide text-zinc-400">
+                          {label}
+                        </div>
+
+                        <div className="mt-1 flex h-5 items-center">
+                          <Skeleton className="h-3.5 w-12" />
+                        </div>
+
+                        <div className="mt-0.5 flex h-4 items-center">
+                          <Skeleton className="h-2.5 w-16" />
+                        </div>
+                      </div>
+                    ),
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-9 w-9 rounded-lg" />
+                  <Skeleton className="h-9 w-9 rounded-lg" />
+                  <Skeleton className="h-9 w-9 rounded-lg" />
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <Skeleton className="h-1.5 w-full rounded-full" />
+              </div>
+            </div>
+
+            <div className="border-t border-zinc-100 bg-zinc-50/60 px-5 py-4">
+              <div className="flex items-center gap-4 rounded-xl border border-zinc-200 bg-white px-4 py-3">
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Skeleton className="h-4 w-44" />
+                  <Skeleton className="h-3 w-64 max-w-full" />
+                </div>
+
+                <div className="hidden gap-5 lg:flex">
+                  <Skeleton className="h-8 w-12" />
+                  <Skeleton className="h-8 w-12" />
+                  <Skeleton className="h-8 w-12" />
+                </div>
+              </div>
+            </div>
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
+/* =============================================================================
  * ALLOCATION ROW
  * =============================================================================
  */
@@ -2749,6 +2912,18 @@ function AllocationRow({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const plannedLabel =
+    allocation.allocationMode ===
+    "PERCENTAGE"
+      ? `${formatNumber(allocation.allocationPercent ?? 0)}%`
+      : `${formatNumber(allocation.hoursPerWeek ?? 0)}h/w`;
+
+  const clientLabel =
+    allocation.client
+      ? allocation.client.displayName ||
+        allocation.client.name
+      : "";
+
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 lg:flex-row lg:items-center">
       <div className="min-w-0 flex-1">
@@ -2773,10 +2948,7 @@ function AllocationRow({
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-zinc-500">
           {allocation.client && (
             <span>
-              {allocation.client
-                .displayName ||
-                allocation.client
-                  .name}
+              {clientLabel}
             </span>
           )}
 
@@ -2814,10 +2986,7 @@ function AllocationRow({
           </div>
 
           <div className="mt-1 font-medium text-zinc-900">
-            {allocation.allocationMode ===
-            "PERCENTAGE"
-              ? `${formatNumber(allocation.allocationPercent ?? 0)}%`
-              : `${formatNumber(allocation.hoursPerWeek ?? 0)}h/w`}
+            {plannedLabel}
           </div>
         </div>
 
@@ -2874,19 +3043,64 @@ function AllocationRow({
  * =============================================================================
  */
 
+function Skeleton({
+  className = "",
+}: {
+  className?: string;
+}) {
+  const hasRounded =
+    className
+      .split(" ")
+      .some((token) =>
+        token.startsWith("rounded"),
+      );
+
+  const classes = [
+    "animate-pulse bg-zinc-200/80",
+    hasRounded
+      ? ""
+      : "rounded-md",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <div
+      aria-hidden="true"
+      className={classes}
+    />
+  );
+}
+
 function MetricCard({
   icon,
   label,
   value,
   detail,
   warning = false,
+  loading = false,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
   detail: string;
   warning?: boolean;
+  loading?: boolean;
 }) {
+  const showWarning: boolean =
+    warning && !loading;
+
+  const iconClass =
+    showWarning
+      ? "grid h-8 w-8 place-items-center rounded-lg bg-red-50 text-red-600"
+      : "grid h-8 w-8 place-items-center rounded-lg bg-zinc-100 text-zinc-600";
+
+  const valueClass =
+    showWarning
+      ? "mt-4 text-2xl font-semibold tracking-tight text-red-600"
+      : "mt-4 text-2xl font-semibold tracking-tight text-zinc-950";
+
   return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between">
@@ -2894,30 +3108,34 @@ function MetricCard({
           {label}
         </div>
 
-        <div
-          className={`grid h-8 w-8 place-items-center rounded-lg ${
-            warning
-              ? "bg-red-50 text-red-600"
-              : "bg-zinc-100 text-zinc-600"
-          }`}
-        >
+        <div className={iconClass}>
           {icon}
         </div>
       </div>
 
-      <div
-        className={`mt-4 text-2xl font-semibold tracking-tight ${
-          warning
-            ? "text-red-600"
-            : "text-zinc-950"
-        }`}
-      >
-        {value}
-      </div>
+      {loading && (
+        <>
+          <div className="mt-4 flex h-8 items-center">
+            <Skeleton className="h-7 w-20" />
+          </div>
 
-      <div className="mt-1 text-xs text-zinc-400">
-        {detail}
-      </div>
+          <div className="mt-1 flex h-4 items-center">
+            <Skeleton className="h-3 w-32" />
+          </div>
+        </>
+      )}
+
+      {!loading && (
+        <>
+          <div className={valueClass}>
+            {value}
+          </div>
+
+          <div className="mt-1 text-xs text-zinc-400">
+            {detail}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -2926,26 +3144,35 @@ function CapacityStat({
   label,
   value,
   warning = false,
+  loading = false,
 }: {
   label: string;
   value: number;
   warning?: boolean;
+  loading?: boolean;
 }) {
+  const valueClass =
+    warning
+      ? "mt-1 text-lg font-semibold text-red-600"
+      : "mt-1 text-lg font-semibold text-zinc-900";
+
   return (
     <div className="border-b border-zinc-100 px-5 py-4 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0">
       <div className="text-xs text-zinc-400">
         {label}
       </div>
 
-      <div
-        className={`mt-1 text-lg font-semibold ${
-          warning
-            ? "text-red-600"
-            : "text-zinc-900"
-        }`}
-      >
-        {hours(value)}
-      </div>
+      {loading && (
+        <div className="mt-1 flex h-7 items-center">
+          <Skeleton className="h-5 w-16" />
+        </div>
+      )}
+
+      {!loading && (
+        <div className={valueClass}>
+          {hours(value)}
+        </div>
+      )}
     </div>
   );
 }
@@ -2961,19 +3188,18 @@ function MiniStat({
   sub: string;
   warning?: boolean;
 }) {
+  const valueClass =
+    warning
+      ? "mt-1 text-sm font-semibold text-red-600"
+      : "mt-1 text-sm font-semibold text-zinc-900";
+
   return (
     <div>
       <div className="text-[11px] uppercase tracking-wide text-zinc-400">
         {label}
       </div>
 
-      <div
-        className={`mt-1 text-sm font-semibold ${
-          warning
-            ? "text-red-600"
-            : "text-zinc-900"
-        }`}
-      >
+      <div className={valueClass}>
         {value}
       </div>
 
@@ -2997,16 +3223,22 @@ function UtilisationBar({
       100,
     );
 
+  const nearCapacity: boolean =
+    percent >= 85;
+
+  let barColour =
+    "bg-zinc-900";
+
+  if (over) {
+    barColour = "bg-red-500";
+  } else if (nearCapacity) {
+    barColour = "bg-amber-500";
+  }
+
   return (
     <div className="h-1.5 overflow-hidden rounded-full bg-zinc-100">
       <div
-        className={`h-full rounded-full ${
-          over
-            ? "bg-red-500"
-            : percent >= 85
-              ? "bg-amber-500"
-              : "bg-zinc-900"
-        }`}
+        className={`h-full rounded-full ${barColour}`}
         style={{
           width: `${width}%`,
         }}
@@ -3177,9 +3409,11 @@ function ModalActions({
         disabled={saving}
         className="inline-flex h-10 items-center gap-2 rounded-xl bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:opacity-50"
       >
-        {saving ? (
+        {saving && (
           <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
+        )}
+
+        {!saving && (
           <Check className="h-4 w-4" />
         )}
 
@@ -3196,6 +3430,9 @@ function ModalActions({
 
 const inputClass =
   "h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-800 outline-none transition placeholder:text-zinc-300 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-100";
+
+const filterSelectClass =
+  "h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-700 outline-none transition focus:border-zinc-400 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-400";
 
 function emptyAllocationForm(
   startDate: string,
