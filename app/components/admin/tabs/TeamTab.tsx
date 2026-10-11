@@ -30,6 +30,10 @@ import {
   ArrowLeft,
   ArrowRight,
   BriefcaseBusiness,
+  Camera,
+  ImagePlus,
+  ZoomIn,
+  Trash2,
   Building2,
   CalendarDays,
   Check,
@@ -49,13 +53,17 @@ import {
   Mail,
   MapPin,
   Network,
+  PauseCircle,
   Pencil,
   Phone,
+  PlayCircle,
   Plus,
   RefreshCw,
   RotateCcw,
   Search,
+  ShieldAlert,
   ShieldCheck,
+  ShieldOff,
   Sparkles,
   UserRound,
   UserRoundPlus,
@@ -64,6 +72,13 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
+
+import TeamDepartmentView from './TeamDepartmentView';
+import {
+  ADMIN_SECTIONS,
+  isModuleSecured,
+  type AdminTab,
+} from '../adminNav';
 
 /* =============================================================================
  * TYPES
@@ -187,6 +202,7 @@ type EmployeeDetail = EmployeeSummary & {
     avatarUrl?: string | null;
     role: AdminRole;
     active: boolean;
+    restrictedAccess?: boolean;
     createdAt?: string;
     updatedAt?: string;
   } | null;
@@ -243,6 +259,16 @@ type AdminUserOption = {
   active: boolean;
 };
 
+type TeamPermissions = {
+  canAddEmployee: boolean;
+  canOffboard: boolean;
+  canGrantAccess: boolean;
+  canManageTeam: boolean;
+  canViewDepartmentTeam: boolean;
+  viewerDepartmentId: string | null;
+  viewerEmployeeId: string | null;
+};
+
 type TeamOptionsResponse = {
   ok?: boolean;
   departments?: DepartmentOption[];
@@ -250,6 +276,7 @@ type TeamOptionsResponse = {
   adminUsers?: AdminUserOption[];
   availableAdminUsers?: AdminUserOption[];
   systemAccounts?: AdminUserOption[];
+  permissions?: TeamPermissions;
   error?: string;
 };
 
@@ -867,6 +894,9 @@ export default function TeamTab() {
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
   const [managers, setManagers] = useState<ManagerOption[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUserOption[]>([]);
+  const [permissions, setPermissions] = useState<TeamPermissions | null>(
+    null,
+  );
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -996,6 +1026,7 @@ export default function TeamTab() {
           optionsPayload?.systemAccounts ??
           [],
       );
+      setPermissions(optionsPayload?.permissions ?? null);
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : 'Could not load the team.',
@@ -1273,6 +1304,16 @@ export default function TeamTab() {
         onRetry={() => void loadTeam()}
       />
     );
+  } else if (permissions && !permissions.canManageTeam) {
+    // A restricted, department-scoped viewer never reaches the full admin
+    // tree below (add/offboard/grant-access, every colleague's full
+    // profile) — she gets a small, separate, read-only view instead.
+    content = (
+      <TeamDepartmentView
+        viewerDepartmentId={permissions.viewerDepartmentId}
+        viewerEmployeeId={permissions.viewerEmployeeId}
+      />
+    );
   } else {
     content = (
       <>
@@ -1517,7 +1558,7 @@ export default function TeamTab() {
     <PortalTheme.Provider value={theme.vars}>
       <div ref={theme.ref} className="mx-auto w-full max-w-[1600px]">
         {content}
-        {addModal}
+        {permissions?.canManageTeam ? addModal : null}
         {toastNode}
       </div>
     </PortalTheme.Provider>
@@ -1944,6 +1985,19 @@ function AddEmployeeWizard({
   const [issue, setIssue] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState<EmployeeSummary | null>(null);
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!photoFile) {
+      setPhotoPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(photoFile);
+    setPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photoFile]);
 
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -2003,6 +2057,7 @@ function AddEmployeeWizard({
 
   const startOver = useCallback(() => {
     setForm(EMPTY_FORM);
+    setPhotoFile(null);
     setErrors({});
     setIssue(null);
     setDraftRestored(false);
@@ -2024,11 +2079,15 @@ function AddEmployeeWizard({
     setIssue(null);
 
     try {
+      // Upload only at submission, rather than leaving files behind when
+      // someone starts the employee wizard and cancels it.
+      const avatarUrl = photoFile ? await uploadEmployeeAvatar(photoFile) : null;
       const response = await fetch('/api/admin/team', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          avatarUrl,
           firstName: form.firstName.trim(),
           lastName: form.lastName.trim(),
           preferredName: form.preferredName.trim() || null,
@@ -2080,7 +2139,7 @@ function AddEmployeeWizard({
     } finally {
       setSubmitting(false);
     }
-  }, [form, goTo, onCreated]);
+  }, [form, goTo, onCreated, photoFile]);
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -2152,6 +2211,7 @@ function AddEmployeeWizard({
               person={{
                 firstName: form.firstName,
                 lastName: form.lastName,
+                avatarUrl: photoPreview,
               }}
               size="xl"
               animateChanges
@@ -2241,7 +2301,14 @@ function AddEmployeeWizard({
             }
           >
             {step === 1 ? (
-              <ProfileStep form={form} errors={errors} update={update} />
+              <ProfileStep
+                form={form}
+                errors={errors}
+                update={update}
+                photoUrl={photoPreview}
+                onEditPhoto={() => setPhotoOpen(true)}
+                onRemovePhoto={() => setPhotoFile(null)}
+              />
             ) : null}
 
             {step === 2 ? (
@@ -2266,11 +2333,23 @@ function AddEmployeeWizard({
                 managers={managers}
                 adminUsers={adminUsers}
                 onEdit={goTo}
+                photoUrl={photoPreview}
               />
             ) : null}
           </motion.div>
         </AnimatePresence>
       </div>
+
+      <EmployeePhotoEditor
+        open={photoOpen}
+        title="Employee profile picture"
+        existingUrl={photoPreview}
+        onClose={() => setPhotoOpen(false)}
+        onSave={(photo) => {
+          setPhotoFile(photo);
+          setPhotoOpen(false);
+        }}
+      />
 
       {/* Footer */}
       <div className="border-t border-[var(--line)] bg-white px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-7">
@@ -2398,10 +2477,16 @@ function ProfileStep({
   form,
   errors,
   update,
+  photoUrl,
+  onEditPhoto,
+  onRemovePhoto,
 }: {
   form: EmployeeForm;
   errors: FieldErrors;
   update: FormUpdate;
+  photoUrl: string | null;
+  onEditPhoto: () => void;
+  onRemovePhoto: () => void;
 }) {
   return (
     <div>
@@ -2410,6 +2495,20 @@ function ProfileStep({
         title="Who are they?"
         description="Their name and role inside Syntra Grid. Everything else can be added later."
       />
+
+      <div className="mt-5 flex items-center gap-4 rounded-2xl border border-[var(--line)] bg-[var(--surface-muted)] p-4">
+        <Avatar person={{ ...form, avatarUrl: photoUrl }} size="xl" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold text-[var(--text)]">Profile picture</p>
+          <p className="mt-1 text-[10px] text-[var(--text-muted)]">JPG, PNG or WebP · up to 5 MB. Crop before saving.</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" onClick={onEditPhoto} className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-2 text-[10px] font-semibold text-white">
+              <ImagePlus size={13} /> {photoUrl ? 'Replace photo' : 'Upload photo'}
+            </button>
+            {photoUrl ? <button type="button" onClick={onRemovePhoto} className="rounded-lg border border-[var(--line)] px-3 py-2 text-[10px] font-semibold text-[var(--text-muted)]">Remove</button> : null}
+          </div>
+        </div>
+      </div>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <Field label="First name" required error={errors.firstName}>
@@ -2920,12 +3019,14 @@ function ReviewStep({
   managers,
   adminUsers,
   onEdit,
+  photoUrl,
 }: {
   form: EmployeeForm;
   departments: DepartmentOption[];
   managers: ManagerOption[];
   adminUsers: AdminUserOption[];
   onEdit: (step: number) => void;
+  photoUrl: string | null;
 }) {
   const department = departments.find((item) => item.id === form.departmentId);
   const manager = managers.find((item) => item.id === form.managerId);
@@ -2942,7 +3043,7 @@ function ReviewStep({
 
       <div className="mt-5 flex items-center gap-4 rounded-[18px] border border-[var(--line)] p-4">
         <Avatar
-          person={{ firstName: form.firstName, lastName: form.lastName }}
+          person={{ firstName: form.firstName, lastName: form.lastName, avatarUrl: photoUrl }}
           size="lg"
         />
 
@@ -3191,6 +3292,37 @@ function EmployeeWorkspace({
   const [tab, setTab] = useState<WorkspaceTab>('overview');
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [offboarding, setOffboarding] = useState(false);
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [photoSaving, setPhotoSaving] = useState(false);
+
+  const saveEmployeePhoto = useCallback(async (photo: File | null) => {
+    if (!employee || photoSaving) return;
+    setPhotoSaving(true);
+    try {
+      const avatarUrl = photo ? await uploadEmployeeAvatar(photo) : null;
+      const response = await fetch(`/api/admin/team/${employee.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ avatarUrl }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        employee?: EmployeeDetail;
+        error?: string;
+      } | null;
+      if (!response.ok || !payload?.employee) {
+        throw new Error(payload?.error || 'Could not save the profile picture.');
+      }
+      setEmployee(payload.employee);
+      setPhotoOpen(false);
+      notify('success', photo ? 'Profile picture updated' : 'Profile picture removed');
+      onChanged();
+    } catch (cause) {
+      notify('error', cause instanceof Error ? cause.message : 'Could not update photo.');
+    } finally {
+      setPhotoSaving(false);
+    }
+  }, [employee, photoSaving, notify, onChanged]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -3242,6 +3374,8 @@ function EmployeeWorkspace({
         ok?: boolean;
         employee?: EmployeeDetail;
         error?: string;
+        accessAutoDisabled?: boolean;
+        ownerAccessRequiresManualAction?: boolean;
       } | null;
 
       if (!response.ok || !payload?.employee) {
@@ -3252,7 +3386,21 @@ function EmployeeWorkspace({
         current ? { ...current, ...payload.employee } : payload.employee!,
       );
       setConfirmOpen(false);
-      notify('success', `${employeeName(employee)} offboarded`);
+
+      if (payload.ownerAccessRequiresManualAction) {
+        notify(
+          'success',
+          `${employeeName(employee)} offboarded — their owner account was left active, handle it from the Access tab.`,
+        );
+      } else if (payload.accessAutoDisabled) {
+        notify(
+          'success',
+          `${employeeName(employee)} offboarded and dashboard access disabled`,
+        );
+      } else {
+        notify('success', `${employeeName(employee)} offboarded`);
+      }
+
       onChanged();
     } catch (cause) {
       notify(
@@ -3341,7 +3489,18 @@ function EmployeeWorkspace({
         <div className="px-4 py-5 sm:px-6 sm:py-6">
           <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
             <div className="flex min-w-0 items-start gap-4">
-              <Avatar person={employee} size="xl" />
+              <button
+                type="button"
+                onClick={() => setPhotoOpen(true)}
+                title="Edit employee profile photo"
+                aria-label={`Edit ${employeeName(employee)} profile picture`}
+                className="group relative shrink-0 rounded-[18px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+              >
+                <Avatar person={employee} size="xl" />
+                <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[var(--surface)] bg-[var(--accent)] text-white group-hover:scale-110">
+                  <Camera size={12} />
+                </span>
+              </button>
 
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -3487,13 +3646,31 @@ function EmployeeWorkspace({
             />
           ) : null}
           {tab === 'employment' ? <EmploymentPanel employee={employee} /> : null}
-          {tab === 'access' ? <AccessPanel employee={employee} /> : null}
+          {tab === 'access' ? (
+            <AccessPanel
+              employee={employee}
+              notify={notify}
+              onChanged={() => {
+                void load();
+                onChanged();
+              }}
+            />
+          ) : null}
           {tab === 'reports' ? (
             <ReportingPanel employee={employee} onOpen={onOpen} />
           ) : null}
           {tab === 'activity' ? <ActivityPanel employee={employee} /> : null}
         </motion.div>
       </AnimatePresence>
+
+      <EmployeePhotoEditor
+        open={photoOpen}
+        title={`Edit ${employeeName(employee)}'s picture`}
+        existingUrl={employee.avatarUrl ?? null}
+        busy={photoSaving}
+        onClose={() => { if (!photoSaving) setPhotoOpen(false); }}
+        onSave={(photo) => void saveEmployeePhoto(photo)}
+      />
 
       <ConfirmDialog
         open={confirmOpen}
@@ -3503,7 +3680,9 @@ function EmployeeWorkspace({
         description="Their employee record is kept for history and they move out of the active team."
         note={
           employee.adminUser
-            ? 'They still have a linked dashboard account. Disable it separately if they should lose access.'
+            ? employee.adminUser.role === 'OWNER'
+              ? 'Their dashboard access is an owner account, so it will not be disabled automatically. Handle it from the Access tab if needed.'
+              : 'Their dashboard access will be disabled automatically.'
             : undefined
         }
         cancelLabel="Keep employee"
@@ -3777,64 +3956,947 @@ function EmploymentPanel({ employee }: { employee: EmployeeDetail }) {
   );
 }
 
-function AccessPanel({ employee }: { employee: EmployeeDetail }) {
-  if (!employee.adminUser) {
-    return (
-      <EmptyState
-        icon={<ShieldCheck size={21} strokeWidth={1.7} />}
-        title="No dashboard access"
-        description="This person is on the team but has no linked dashboard account. That is normal for anyone who does not need to sign in to the Syntra Grid operating system."
-      />
-    );
+/* =============================================================================
+ * ACCESS / PERMISSIONS
+ * =============================================================================
+ */
+
+const PERMISSION_ACTIONS = [
+  'VIEW',
+  'CREATE',
+  'EDIT',
+  'MANAGE',
+  'APPROVE',
+] as const;
+
+type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
+type PermissionScope = 'OWN' | 'DEPARTMENT' | 'ALL';
+
+type ModuleGrant = {
+  actions: Set<PermissionAction>;
+  scope: PermissionScope;
+};
+
+type GrantState = Partial<Record<AdminTab, ModuleGrant>>;
+
+type PermissionModuleRow = {
+  tab: AdminTab;
+  label: string;
+  secured: boolean;
+};
+
+type PermissionSectionGroup = {
+  id: string;
+  label: string;
+  modules: PermissionModuleRow[];
+};
+
+// Every grantable tab in the entire Syntra Grid dashboard, grouped under
+// its real sidebar section — derived from adminNav.ts's ADMIN_SECTIONS at
+// module load time, so a newly added tab appears here automatically with
+// no further change to this file. The Owner's Overview is never included
+// (it's never grantable — see adminNav.ts's getGrantableTabs/
+// filterSectionsByPermission).
+const PERMISSION_SECTIONS: PermissionSectionGroup[] = ADMIN_SECTIONS.map(
+  (section) => ({
+    id: section.id,
+    label: section.label,
+    modules: section.items
+      .filter((item) => item.tab !== 'overview')
+      .map((item) => ({
+        tab: item.tab,
+        label: item.title,
+        secured: isModuleSecured(item.tab),
+      })),
+  }),
+).filter((section) => section.modules.length > 0);
+
+function defaultScopeForModule(tab: string): PermissionScope {
+  if (tab === 'team') return 'DEPARTMENT';
+  if (tab === 'leave' || tab === 'calendar') return 'OWN';
+  return 'ALL';
+}
+
+const SCOPE_OPTIONS: Array<DropdownOption<PermissionScope>> = [
+  { value: 'OWN', label: 'Her own' },
+  { value: 'DEPARTMENT', label: 'Her department' },
+  { value: 'ALL', label: 'Entire company' },
+];
+
+type RoleTemplateGrants = Record<
+  string,
+  { actions: PermissionAction[]; scope: PermissionScope }
+>;
+
+const ACCESS_ROLE_TEMPLATES: {
+  id: string;
+  label: string;
+  description: string;
+  grants: RoleTemplateGrants;
+}[] = [
+  {
+    id: 'marketing-executive',
+    label: 'Marketing Executive',
+    description:
+      'Calendar and Notifications for her own schedule, full control over Social Media and Campaigns, read-only SEO & Analytics, her department’s Team view, self-service leave.',
+    grants: {
+      calendar: { actions: ['VIEW', 'CREATE', 'EDIT'], scope: 'OWN' },
+      notifications: { actions: ['VIEW'], scope: 'ALL' },
+      social_media: { actions: ['VIEW', 'CREATE', 'EDIT'], scope: 'ALL' },
+      campaigns: { actions: ['VIEW', 'CREATE', 'EDIT'], scope: 'ALL' },
+      brand_assets: { actions: ['VIEW', 'CREATE', 'EDIT'], scope: 'ALL' },
+      seo_analytics: { actions: ['VIEW'], scope: 'ALL' },
+      team: { actions: ['VIEW'], scope: 'DEPARTMENT' },
+      leave: { actions: ['VIEW', 'CREATE'], scope: 'OWN' },
+    },
+  },
+  {
+    id: 'department-viewer',
+    label: 'Department Viewer',
+    description:
+      'Read-only department Team view and self-service leave. Nothing else.',
+    grants: {
+      team: { actions: ['VIEW'], scope: 'DEPARTMENT' },
+      leave: { actions: ['VIEW', 'CREATE'], scope: 'OWN' },
+    },
+  },
+  {
+    id: 'custom',
+    label: 'Custom',
+    description: 'Start from nothing and check exactly what she needs.',
+    grants: {},
+  },
+];
+
+function grantStateFromTemplateGrants(
+  templateGrants: RoleTemplateGrants,
+): GrantState {
+  const state: GrantState = {};
+
+  for (const [tab, grant] of Object.entries(templateGrants)) {
+    state[tab as AdminTab] = {
+      actions: new Set(grant.actions),
+      scope: grant.scope,
+    };
   }
+
+  return state;
+}
+
+function grantStateFromRecord(
+  grants: { module: string; action: string; scope?: string }[],
+): GrantState {
+  const state: GrantState = {};
+
+  for (const grant of grants) {
+    const tab = grant.module as AdminTab;
+    const existing = state[tab] ?? {
+      actions: new Set<PermissionAction>(),
+      scope: defaultScopeForModule(tab),
+    };
+
+    existing.actions.add(grant.action as PermissionAction);
+
+    if (grant.scope) {
+      existing.scope = grant.scope as PermissionScope;
+    }
+
+    state[tab] = existing;
+  }
+
+  return state;
+}
+
+function grantStateToPayload(state: GrantState) {
+  return Object.entries(state).flatMap(([module, grant]) =>
+    Array.from(grant?.actions ?? []).map((action) => ({
+      module,
+      action,
+      scope: grant?.scope ?? defaultScopeForModule(module),
+    })),
+  );
+}
+
+type GrantAccessResult = {
+  requiresClaim?: boolean;
+  inviteLink?: string | null;
+};
+
+function GrantAccessModal({
+  open,
+  mode,
+  employeeId,
+  initialGrants,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  mode: 'grant' | 'change';
+  employeeId: string;
+  initialGrants?: { module: string; action: string; scope?: string }[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const titleId = useId();
+  const [templateId, setTemplateId] = useState('marketing-executive');
+  const [grants, setGrants] = useState<GrantState>(() =>
+    grantStateFromTemplateGrants(ACCESS_ROLE_TEMPLATES[0].grants),
+  );
+  const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<GrantAccessResult | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const expandSectionsWithSelections = useCallback(
+    (state: GrantState) => {
+      const next: Record<string, boolean> = {};
+
+      for (const section of PERMISSION_SECTIONS) {
+        next[section.id] = section.modules.some(
+          (module) => (state[module.tab]?.actions.size ?? 0) > 0,
+        );
+      }
+
+      return next;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+
+    setError(null);
+    setResult(null);
+    setCopied(false);
+    setSearch('');
+
+    let initialState: GrantState;
+
+    if (mode === 'change' && initialGrants) {
+      setTemplateId('custom');
+      initialState = grantStateFromRecord(initialGrants);
+    } else {
+      setTemplateId('marketing-executive');
+      initialState = grantStateFromTemplateGrants(
+        ACCESS_ROLE_TEMPLATES[0].grants,
+      );
+    }
+
+    setGrants(initialState);
+    setExpanded(expandSectionsWithSelections(initialState));
+  }, [open, mode, initialGrants, expandSectionsWithSelections]);
+
+  const applyTemplate = (id: string) => {
+    setTemplateId(id);
+
+    const template = ACCESS_ROLE_TEMPLATES.find((item) => item.id === id);
+    const nextState = grantStateFromTemplateGrants(template?.grants ?? {});
+
+    setGrants(nextState);
+    setExpanded(expandSectionsWithSelections(nextState));
+  };
+
+  const toggleAction = (tab: AdminTab, action: PermissionAction) => {
+    setTemplateId('custom');
+    setGrants((current) => {
+      const existing = current[tab] ?? {
+        actions: new Set<PermissionAction>(),
+        scope: defaultScopeForModule(tab),
+      };
+
+      const actions = new Set(existing.actions);
+
+      if (actions.has(action)) {
+        actions.delete(action);
+      } else {
+        actions.add(action);
+      }
+
+      return { ...current, [tab]: { ...existing, actions } };
+    });
+  };
+
+  const setModuleScope = (tab: AdminTab, scope: PermissionScope) => {
+    setGrants((current) => {
+      const existing = current[tab];
+      if (!existing) return current;
+      return { ...current, [tab]: { ...existing, scope } };
+    });
+  };
+
+  const selectAllForModule = (tab: AdminTab) => {
+    setTemplateId('custom');
+    setGrants((current) => ({
+      ...current,
+      [tab]: {
+        actions: new Set(PERMISSION_ACTIONS),
+        scope: current[tab]?.scope ?? defaultScopeForModule(tab),
+      },
+    }));
+  };
+
+  const clearModule = (tab: AdminTab) => {
+    setTemplateId('custom');
+    setGrants((current) => {
+      const next = { ...current };
+      delete next[tab];
+      return next;
+    });
+  };
+
+  const selectAllInSection = (sectionId: string) => {
+    setTemplateId('custom');
+
+    const section = PERMISSION_SECTIONS.find((item) => item.id === sectionId);
+    if (!section) return;
+
+    setGrants((current) => {
+      const next = { ...current };
+
+      for (const module of section.modules) {
+        next[module.tab] = {
+          actions: new Set(['VIEW']),
+          scope: next[module.tab]?.scope ?? defaultScopeForModule(module.tab),
+        };
+      }
+
+      return next;
+    });
+  };
+
+  const clearSection = (sectionId: string) => {
+    setTemplateId('custom');
+
+    const section = PERMISSION_SECTIONS.find((item) => item.id === sectionId);
+    if (!section) return;
+
+    setGrants((current) => {
+      const next = { ...current };
+      for (const module of section.modules) delete next[module.tab];
+      return next;
+    });
+  };
+
+  const clearAllGrants = () => {
+    setTemplateId('custom');
+    setGrants({});
+  };
+
+  const filteredSections = useMemo<PermissionSectionGroup[]>(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return PERMISSION_SECTIONS;
+
+    return PERMISSION_SECTIONS.map((section) => ({
+      ...section,
+      modules: section.modules.filter(
+        (module) =>
+          module.label.toLowerCase().includes(term) ||
+          section.label.toLowerCase().includes(term),
+      ),
+    })).filter((section) => section.modules.length > 0);
+  }, [search]);
+
+  const grantedModuleCount = Object.values(grants).filter(
+    (grant) => (grant?.actions.size ?? 0) > 0,
+  ).length;
+
+  const submit = async () => {
+    setSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/admin/team/${employeeId}/access`, {
+        method: mode === 'grant' ? 'POST' : 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grants: grantStateToPayload(grants) }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: string;
+        access?: GrantAccessResult;
+      } | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Could not save dashboard access.');
+      }
+
+      if (mode === 'grant' && payload?.access?.requiresClaim) {
+        setResult(payload.access);
+      } else {
+        onSaved();
+        onClose();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save dashboard access.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const copyLink = async () => {
+    if (!result?.inviteLink) return;
+
+    try {
+      await navigator.clipboard.writeText(result.inviteLink);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <ModalShell open={open} onClose={onClose} labelledBy={titleId} size="lg">
+      <div className="px-5 pb-5 pt-5 sm:px-6 sm:pt-6">
+        {result ? (
+          <>
+            <div className="flex h-11 w-11 items-center justify-center rounded-[14px] border border-[var(--line)] bg-[var(--surface-muted)] text-[var(--accent)]">
+              <ShieldCheck size={18} strokeWidth={1.8} />
+            </div>
+
+            <h3 id={titleId} className="mt-4 text-[16px] font-semibold text-[var(--text)]">
+              Access granted — invite ready
+            </h3>
+
+            <p className="mt-2 text-[11px] leading-5 text-[var(--text-muted)]">
+              Send this one-time link to her. It lets her set her own password, then she
+              still has to verify her email before the account activates — the link alone
+              cannot be used to sign in.
+            </p>
+
+            <div className="mt-4 flex items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] px-3 py-2.5">
+              <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-[var(--text)]">
+                {result.inviteLink}
+              </span>
+              <button
+                type="button"
+                onClick={() => void copyLink()}
+                className="shrink-0 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-[9px] font-semibold text-[var(--text-muted)] transition hover:text-[var(--text)]"
+              >
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                onSaved();
+                onClose();
+              }}
+              className="mt-6 h-10 w-full rounded-xl bg-[var(--accent)] text-[11px] font-semibold text-white transition hover:opacity-90"
+            >
+              Done
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 id={titleId} className="text-[16px] font-semibold text-[var(--text)]">
+                  {mode === 'grant' ? 'Grant dashboard access' : 'Change permissions'}
+                </h3>
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  She only ever sees, and can only act on, exactly what’s checked below.
+                </p>
+              </div>
+
+              {grantedModuleCount > 0 ? (
+                <span className="shrink-0 rounded-full bg-[var(--accent)]/10 px-2.5 py-1 text-[9px] font-semibold text-[var(--accent)]">
+                  {grantedModuleCount} module{grantedModuleCount === 1 ? '' : 's'}
+                </span>
+              ) : null}
+            </div>
+
+            {mode === 'grant' ? (
+              <div className="mt-4">
+                <p className="mb-2 text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
+                  Start from a template
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {ACCESS_ROLE_TEMPLATES.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      onClick={() => applyTemplate(template.id)}
+                      title={template.description}
+                      className={cx(
+                        'rounded-full border px-3 py-1.5 text-[10px] font-semibold transition',
+                        templateId === template.id
+                          ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                          : 'border-[var(--line)] text-[var(--text-muted)] hover:text-[var(--text)]',
+                      )}
+                    >
+                      {template.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search
+                  size={13}
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]"
+                />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search modules…"
+                  className="h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] pl-8 pr-3 text-[11px] text-[var(--text)] outline-none transition focus:border-[var(--accent)]"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setExpanded(
+                    Object.fromEntries(
+                      PERMISSION_SECTIONS.map((section) => [section.id, true]),
+                    ),
+                  )
+                }
+                className="shrink-0 whitespace-nowrap rounded-lg border border-[var(--line)] px-2.5 py-2 text-[9px] font-semibold text-[var(--text-muted)] transition hover:text-[var(--text)]"
+              >
+                Expand all
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setExpanded(
+                    Object.fromEntries(
+                      PERMISSION_SECTIONS.map((section) => [section.id, false]),
+                    ),
+                  )
+                }
+                className="shrink-0 whitespace-nowrap rounded-lg border border-[var(--line)] px-2.5 py-2 text-[9px] font-semibold text-[var(--text-muted)] transition hover:text-[var(--text)]"
+              >
+                Collapse all
+              </button>
+
+              <button
+                type="button"
+                onClick={clearAllGrants}
+                className="shrink-0 whitespace-nowrap rounded-lg border border-[var(--line)] px-2.5 py-2 text-[9px] font-semibold text-red-600 transition hover:bg-red-500/10"
+              >
+                Clear all
+              </button>
+            </div>
+
+            <div className="mt-3 max-h-[420px] space-y-2 overflow-y-auto pr-1">
+              {filteredSections.map((section) => {
+                const isExpanded = expanded[section.id] ?? false;
+
+                const sectionGrantedCount = section.modules.filter(
+                  (module) => (grants[module.tab]?.actions.size ?? 0) > 0,
+                ).length;
+
+                return (
+                  <div
+                    key={section.id}
+                    className="overflow-hidden rounded-xl border border-[var(--line)]"
+                  >
+                    <div className="flex items-center justify-between gap-2 bg-[var(--surface-muted)] px-3.5 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpanded((current) => ({
+                            ...current,
+                            [section.id]: !isExpanded,
+                          }))
+                        }
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left text-[11px] font-semibold text-[var(--text)]"
+                      >
+                        <ChevronRight
+                          size={13}
+                          className={cx(
+                            'shrink-0 transition-transform',
+                            isExpanded && 'rotate-90',
+                          )}
+                        />
+                        <span className="truncate">{section.label}</span>
+                        {sectionGrantedCount > 0 ? (
+                          <CountPill value={sectionGrantedCount} />
+                        ) : null}
+                      </button>
+
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => selectAllInSection(section.id)}
+                          className="text-[9px] font-semibold text-[var(--accent)] hover:opacity-80"
+                        >
+                          Select all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => clearSection(section.id)}
+                          className="text-[9px] font-semibold text-[var(--text-subtle)] hover:text-[var(--text)]"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+
+                    {isExpanded ? (
+                      <div className="divide-y divide-[var(--line)]">
+                        {section.modules.map((module) => {
+                          const grant = grants[module.tab];
+                          const hasAny = (grant?.actions.size ?? 0) > 0;
+
+                          return (
+                            <div key={module.tab} className="p-3.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-[11px] font-semibold text-[var(--text)]">
+                                  {module.label}
+                                  {!module.secured ? (
+                                    <span className="ml-2 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[8px] font-semibold text-amber-600">
+                                      Not yet enforced
+                                    </span>
+                                  ) : null}
+                                </p>
+
+                                <div className="flex shrink-0 items-center gap-2">
+                                  {hasAny ? (
+                                    <Dropdown
+                                      value={grant!.scope}
+                                      onChange={(scope) =>
+                                        setModuleScope(module.tab, scope)
+                                      }
+                                      options={SCOPE_OPTIONS}
+                                      ariaLabel={`${module.label} scope`}
+                                      minWidth={130}
+                                    />
+                                  ) : null}
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      hasAny
+                                        ? clearModule(module.tab)
+                                        : selectAllForModule(module.tab)
+                                    }
+                                    className="whitespace-nowrap text-[9px] font-semibold text-[var(--text-muted)] hover:text-[var(--text)]"
+                                  >
+                                    {hasAny ? 'No access' : 'Select all'}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="mt-2 flex flex-wrap gap-3">
+                                {PERMISSION_ACTIONS.map((action) => (
+                                  <label
+                                    key={action}
+                                    className="inline-flex items-center gap-1.5 text-[10px] font-medium text-[var(--text-muted)]"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={grant?.actions.has(action) ?? false}
+                                      onChange={() => toggleAction(module.tab, action)}
+                                      className="h-3.5 w-3.5 rounded border-[var(--line)] accent-[var(--accent)]"
+                                    />
+                                    {action}
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+
+              {filteredSections.length === 0 ? (
+                <p className="px-3.5 py-6 text-center text-[11px] text-[var(--text-subtle)]">
+                  No modules match that search.
+                </p>
+              ) : null}
+            </div>
+
+            {error ? (
+              <p className="mt-4 text-[11px] text-red-600">{error}</p>
+            ) : null}
+
+            <div className="mt-6 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={saving}
+                className={cx(
+                  'h-10 flex-1 rounded-xl border border-[var(--line)] px-4 text-[10px] font-semibold text-[var(--text-muted)] transition hover:bg-[var(--surface-muted)] disabled:opacity-50',
+                  focusRing,
+                )}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void submit()}
+                disabled={saving}
+                className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[10px] font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
+              >
+                {saving ? <Loader2 size={13} className="animate-spin" /> : null}
+                {saving
+                  ? 'Saving'
+                  : mode === 'grant'
+                    ? 'Grant access'
+                    : 'Save permissions'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </ModalShell>
+  );
+}
+
+function AccessPanel({
+  employee,
+  notify,
+  onChanged,
+}: {
+  employee: EmployeeDetail;
+  notify: Notify;
+  onChanged: () => void;
+}) {
+  const [grantOpen, setGrantOpen] = useState(false);
+  const [changeOpen, setChangeOpen] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<
+    'suspend' | 'revoke' | null
+  >(null);
+  const [busy, setBusy] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [currentGrants, setCurrentGrants] = useState<
+    { module: string; action: string; scope?: string }[] | null
+  >(null);
 
   const account = employee.adminUser;
 
-  return (
-    <Panel>
-      <div className="flex items-start gap-3">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] border border-[var(--line)] bg-[var(--surface-muted)] text-[var(--accent)]">
-          <ShieldCheck size={18} strokeWidth={1.8} />
-        </span>
+  const runLifecycleAction = async (
+    action: 'suspend' | 'restore' | 'revoke',
+  ) => {
+    setBusy(true);
 
-        <div className="min-w-0">
-          <h3 className="text-[14px] font-semibold tracking-[-0.02em] text-[var(--text)]">
-            Linked dashboard account
-          </h3>
-          <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
-            This person can sign in to the Syntra Grid operating system.
-          </p>
-        </div>
-      </div>
+    try {
+      const response = await fetch(
+        `/api/admin/team/${employee.id}/access/${action}`,
+        { method: 'POST', credentials: 'include' },
+      );
 
-      <div className="mt-5 grid gap-x-8 sm:grid-cols-2">
-        <DetailLine label="Account email" value={account.email} />
-        <DetailLine label="Role" value={prettyEnum(account.role)} />
-        <DetailLine
-          label="Account status"
-          value={
-            <span
-              className={cx(
-                'inline-flex items-center gap-1.5 text-[11px] font-semibold',
-                account.active ? 'text-[var(--success,#047857)]' : 'text-[var(--text-subtle)]',
-              )}
-            >
-              <span
-                className={cx(
-                  'h-1.5 w-1.5 rounded-full',
-                  account.active ? 'bg-[var(--success,#10b981)]' : 'bg-[var(--text-subtle)]',
-                )}
-              />
-              {account.active ? 'Active' : 'Disabled'}
-            </span>
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: string;
+      } | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || `Could not ${action} access.`);
+      }
+
+      notify(
+        'success',
+        action === 'suspend'
+          ? 'Dashboard access suspended'
+          : action === 'restore'
+            ? 'Dashboard access restored'
+            : 'Dashboard access revoked',
+      );
+      setConfirmAction(null);
+      onChanged();
+    } catch (cause) {
+      notify(
+        'error',
+        cause instanceof Error ? cause.message : `Could not ${action} access.`,
+      );
+    } finally {
+      setBusy(false);
+      setRestoring(false);
+    }
+  };
+
+  if (!account) {
+    return (
+      <>
+        <EmptyState
+          icon={<ShieldCheck size={21} strokeWidth={1.7} />}
+          title="No dashboard access"
+          description="This person is on the team but has no linked dashboard account. That is normal for anyone who does not need to sign in to the Syntra Grid operating system."
+          action={
+            <PrimaryButton onClick={() => setGrantOpen(true)}>
+              <ShieldCheck size={14} />
+              Grant dashboard access
+            </PrimaryButton>
           }
         />
-        <DetailLine
-          label="Account ID"
-          value={<span className="font-mono text-[10px]">{account.id}</span>}
+
+        <GrantAccessModal
+          open={grantOpen}
+          mode="grant"
+          employeeId={employee.id}
+          onClose={() => setGrantOpen(false)}
+          onSaved={onChanged}
         />
-      </div>
-    </Panel>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Panel>
+        <div className="flex items-start gap-3">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] border border-[var(--line)] bg-[var(--surface-muted)] text-[var(--accent)]">
+            <ShieldCheck size={18} strokeWidth={1.8} />
+          </span>
+
+          <div className="min-w-0">
+            <h3 className="text-[14px] font-semibold tracking-[-0.02em] text-[var(--text)]">
+              Linked dashboard account
+            </h3>
+            <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
+              This person can sign in to the Syntra Grid operating system.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-x-8 sm:grid-cols-2">
+          <DetailLine label="Account email" value={account.email} />
+          <DetailLine label="Role" value={prettyEnum(account.role)} />
+          <DetailLine
+            label="Account status"
+            value={
+              <span
+                className={cx(
+                  'inline-flex items-center gap-1.5 text-[11px] font-semibold',
+                  account.active ? 'text-[var(--success,#047857)]' : 'text-[var(--text-subtle)]',
+                )}
+              >
+                <span
+                  className={cx(
+                    'h-1.5 w-1.5 rounded-full',
+                    account.active ? 'bg-[var(--success,#10b981)]' : 'bg-[var(--text-subtle)]',
+                  )}
+                />
+                {account.active ? 'Active' : 'Suspended'}
+              </span>
+            }
+          />
+          <DetailLine
+            label="Access type"
+            value={account.restrictedAccess ? 'Restricted (permission-based)' : 'Full (role-based)'}
+          />
+        </div>
+
+        {account.restrictedAccess ? (
+          <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-5">
+            <SecondaryButton
+              onClick={async () => {
+                try {
+                  const response = await fetch(`/api/admin/team/${employee.id}`, {
+                    credentials: 'include',
+                    cache: 'no-store',
+                  });
+                  const payload = await response.json().catch(() => null);
+                  setCurrentGrants(
+                    (payload?.employee?.adminUser?.permissionGrants as
+                      | { module: string; action: string; scope?: string }[]
+                      | undefined) ?? [],
+                  );
+                } catch {
+                  setCurrentGrants([]);
+                }
+                setChangeOpen(true);
+              }}
+            >
+              <Pencil size={13} />
+              Change permissions
+            </SecondaryButton>
+
+            {account.active ? (
+              <SecondaryButton onClick={() => setConfirmAction('suspend')}>
+                <PauseCircle size={13} />
+                Suspend
+              </SecondaryButton>
+            ) : (
+              <SecondaryButton
+                onClick={() => {
+                  setRestoring(true);
+                  void runLifecycleAction('restore');
+                }}
+              >
+                {restoring ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <PlayCircle size={13} />
+                )}
+                Restore
+              </SecondaryButton>
+            )}
+
+            {account.role !== 'OWNER' ? (
+              <button
+                type="button"
+                onClick={() => setConfirmAction('revoke')}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-[10px] font-semibold text-red-600 transition hover:bg-red-500/10"
+              >
+                <ShieldOff size={13} />
+                Revoke access
+              </button>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-[10px] text-[var(--text-subtle)]">
+                <ShieldAlert size={13} />
+                Owner access cannot be revoked here.
+              </span>
+            )}
+          </div>
+        ) : (
+          <p className="mt-5 border-t border-[var(--line)] pt-5 text-[10px] text-[var(--text-subtle)]">
+            This is a full, role-based account (not created through the access/permissions
+            workflow). Manage its role from Settings rather than here.
+          </p>
+        )}
+      </Panel>
+
+      <GrantAccessModal
+        open={changeOpen}
+        mode="change"
+        employeeId={employee.id}
+        initialGrants={currentGrants ?? []}
+        onClose={() => setChangeOpen(false)}
+        onSaved={onChanged}
+      />
+
+      <ConfirmDialog
+        open={confirmAction === 'suspend'}
+        busy={busy}
+        icon={<PauseCircle size={18} strokeWidth={1.8} />}
+        title="Suspend dashboard access?"
+        description="She immediately loses access. Her permissions are kept, so Restore brings her straight back to exactly what she had."
+        cancelLabel="Cancel"
+        confirmLabel="Suspend"
+        busyLabel="Suspending"
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => void runLifecycleAction('suspend')}
+      />
+
+      <ConfirmDialog
+        open={confirmAction === 'revoke'}
+        busy={busy}
+        icon={<ShieldOff size={18} strokeWidth={1.8} />}
+        title="Revoke dashboard access?"
+        description="This permanently removes her login and every permission. Granting access again later starts fresh from a template."
+        cancelLabel="Cancel"
+        confirmLabel="Revoke"
+        busyLabel="Revoking"
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => void runLifecycleAction('revoke')}
+      />
+    </>
   );
 }
 
@@ -4979,6 +6041,195 @@ function Toast({
  * SHARED
  * =============================================================================
  */
+
+/* =============================================================================
+ * EMPLOYEE PHOTO UPLOAD AND CROP
+ * =============================================================================
+ */
+
+async function uploadEmployeeAvatar(file: File): Promise<string> {
+  const data = new FormData();
+  data.append('file', file);
+  const response = await fetch('/api/admin/team/avatar', {
+    method: 'POST',
+    credentials: 'include',
+    body: data,
+  });
+  const payload = (await response.json().catch(() => null)) as {
+    ok?: boolean;
+    url?: string;
+    error?: string;
+  } | null;
+  if (!response.ok || !payload?.ok || !payload.url) {
+    throw new Error(payload?.error || 'Profile photo upload failed.');
+  }
+  return payload.url;
+}
+
+function EmployeePhotoEditor({
+  open,
+  title,
+  existingUrl,
+  busy = false,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  title: string;
+  existingUrl: string | null;
+  busy?: boolean;
+  onClose: () => void;
+  onSave: (file: File | null) => void;
+}) {
+  const titleId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [imageSize, setImageSize] = useState({ width: 1, height: 1 });
+  const [zoom, setZoom] = useState(1);
+  const [offsetX, setOffsetX] = useState(0);
+  const [offsetY, setOffsetY] = useState(0);
+  const [error, setError] = useState('');
+  const [processing, setProcessing] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setFile(null);
+      setZoom(1);
+      setOffsetX(0);
+      setOffsetY(0);
+      setError('');
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!file) {
+      setPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const img = new window.Image();
+    img.onload = () => setImageSize({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => setError('Could not read this image. Choose another one.');
+    img.src = preview;
+  }, [preview]);
+
+  const selectFile = (candidate?: File) => {
+    if (!candidate) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(candidate.type)) {
+      setError('Choose a JPG, PNG or WebP image.');
+      return;
+    }
+    if (!candidate.size || candidate.size > 5 * 1024 * 1024) {
+      setError('The image must be smaller than 5 MB.');
+      return;
+    }
+    setError('');
+    setZoom(1);
+    setOffsetX(0);
+    setOffsetY(0);
+    setFile(candidate);
+  };
+
+  const save = async () => {
+    if (!file || !preview) return;
+    setProcessing(true);
+    setError('');
+    try {
+      const img = new window.Image();
+      img.src = preview;
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Could not process the photo.'));
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Image editing is not supported in this browser.');
+      const base = Math.max(512 / img.naturalWidth, 512 / img.naturalHeight);
+      const drawWidth = img.naturalWidth * base * zoom;
+      const drawHeight = img.naturalHeight * base * zoom;
+      const slackX = Math.max(0, (drawWidth - 512) / 2);
+      const slackY = Math.max(0, (drawHeight - 512) / 2);
+      ctx.drawImage(img,
+        (512 - drawWidth) / 2 + (offsetX / 100) * slackX,
+        (512 - drawHeight) / 2 + (offsetY / 100) * slackY,
+        drawWidth, drawHeight,
+      );
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((result) => result ? resolve(result) : reject(new Error('Could not export photo.')), 'image/jpeg', 0.88);
+      });
+      onSave(new File([blob], 'employee-avatar.jpg', { type: 'image/jpeg' }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not process image.');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const baseScale = Math.max(256 / imageSize.width, 256 / imageSize.height);
+  const width = imageSize.width * baseScale * zoom;
+  const height = imageSize.height * baseScale * zoom;
+  const slackX = Math.max(0, (width - 256) / 2);
+  const slackY = Math.max(0, (height - 256) / 2);
+
+  return (
+    <ModalShell open={open} onClose={busy || processing ? () => {} : onClose} labelledBy={titleId} size="sm">
+      <div className="px-5 pb-5 pt-5 sm:px-6 sm:pt-6">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 id={titleId} className="text-[15px] font-semibold text-[var(--text)]">{title}</h3>
+            <p className="mt-1 text-[10px] text-[var(--text-muted)]">Upload and adjust a square profile image.</p>
+          </div>
+          <IconButton label="Close photo editor" onClick={onClose}><X size={15} /></IconButton>
+        </div>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          className="hidden"
+          onChange={(event) => {
+            selectFile(event.target.files?.[0]);
+            event.target.value = '';
+          }}
+        />
+        <div className="mt-5 flex justify-center">
+          <div className="relative h-64 w-64 overflow-hidden rounded-[24px] border border-[var(--line)] bg-[var(--surface-muted)]">
+            {preview ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={preview} alt="Photo crop preview" draggable={false} className="pointer-events-none absolute max-w-none select-none" style={{
+                width, height,
+                left: (256 - width) / 2 + (offsetX / 100) * slackX,
+                top: (256 - height) / 2 + (offsetY / 100) * slackY,
+              }} />
+            ) : existingUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={existingUrl} alt="Current employee photo" className="h-full w-full object-cover" />
+            ) : <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-[var(--text-subtle)]"><CircleUserRound size={50} /><span className="text-[10px]">No photo selected</span></div>}
+          </div>
+        </div>
+        {preview ? <div className="mt-4 space-y-3">
+          <label className="block text-[10px] text-[var(--text-muted)]"><span className="flex items-center gap-2"><ZoomIn size={13} /> Zoom</span><input className="mt-2 w-full accent-[var(--accent)]" aria-label="Photo zoom" type="range" min="1" max="3" step="0.05" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} /></label>
+          <label className="block text-[10px] text-[var(--text-muted)]">Horizontal position<input className="mt-1 w-full accent-[var(--accent)]" type="range" min="-100" max="100" value={offsetX} onChange={(event) => setOffsetX(Number(event.target.value))} /></label>
+          <label className="block text-[10px] text-[var(--text-muted)]">Vertical position<input className="mt-1 w-full accent-[var(--accent)]" type="range" min="-100" max="100" value={offsetY} onChange={(event) => setOffsetY(Number(event.target.value))} /></label>
+        </div> : null}
+        {error ? <p role="alert" className="mt-3 text-[10px] text-red-600">{error}</p> : null}
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <button type="button" disabled={busy || processing} onClick={() => inputRef.current?.click()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--line)] px-3 text-[10px] font-semibold text-[var(--text)]"><ImagePlus size={14}/>{preview || existingUrl ? 'Choose another' : 'Choose photo'}</button>
+          {existingUrl || preview ? <button type="button" disabled={busy || processing} onClick={() => onSave(null)} className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-red-500/20 px-3 text-[10px] font-semibold text-red-600"><Trash2 size={13}/> Remove</button> : null}
+          <button type="button" disabled={!preview || busy || processing} onClick={() => void save()} className="ml-auto inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[10px] font-semibold text-white disabled:opacity-50">{processing || busy ? <Loader2 size={13} className="animate-spin"/> : <Check size={13}/>} Save photo</button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
 
 function Avatar({
   person,

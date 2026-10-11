@@ -6,13 +6,18 @@ import {
 import type { Prisma } from '@/app/generated/prisma/client';
 
 import {
+  AccessAction,
+  AccessScope,
   EmployeeStatus,
   EmploymentType,
   WorkArrangement,
 } from '@/app/generated/prisma/enums';
 
 import {
-  requireAdmin,
+  AuthenticationError,
+  AuthorisationError,
+  getCurrentIdentity,
+  hasPermission,
   requireTeamManager,
 } from '@/lib/auth/current-admin';
 
@@ -148,8 +153,17 @@ const employeeSelect = {
       avatarUrl: true,
       role: true,
       active: true,
+      restrictedAccess: true,
       createdAt: true,
       updatedAt: true,
+
+      permissionGrants: {
+        select: {
+          module: true,
+          action: true,
+          scope: true,
+        },
+      },
     },
   },
 
@@ -303,24 +317,11 @@ function getErrorMessage(
 function getErrorStatus(
   error: unknown,
 ): number {
-  const message =
-    error instanceof Error
-      ? error.message.toLowerCase()
-      : '';
-
-  if (
-    message.includes(
-      'unauthorized',
-    )
-  ) {
+  if (error instanceof AuthenticationError) {
     return 401;
   }
 
-  if (
-    message.includes(
-      'forbidden',
-    )
-  ) {
+  if (error instanceof AuthorisationError) {
     return 403;
   }
 
@@ -416,12 +417,61 @@ async function wouldCreateManagerCycle(
    GET /api/admin/team/[id]
 ============================================================================ */
 
+const CONFIDENTIAL_EMPLOYEE_FIELDS = [
+  'personalEmail',
+  'phone',
+  'linkedinUrl',
+  'bio',
+  'notes',
+  'emergencyContactName',
+  'emergencyContactPhone',
+  'emergencyContactRelationship',
+] as const;
+
+function stripConfidentialFields<T extends Record<string, unknown>>(
+  employee: T,
+): T {
+  const safe: Record<string, unknown> = { ...employee };
+
+  for (const field of CONFIDENTIAL_EMPLOYEE_FIELDS) {
+    delete safe[field];
+  }
+
+  // A colleague's dashboard permission grants are an access-management
+  // detail, not something another department member needs to see.
+  if (safe.adminUser && typeof safe.adminUser === 'object') {
+    const { permissionGrants, ...adminUserRest } =
+      safe.adminUser as Record<string, unknown>;
+    safe.adminUser = adminUserRest;
+  }
+
+  return safe as T;
+}
+
 export async function GET(
   _request: NextRequest,
   context: RouteContext,
 ) {
   try {
-    await requireAdmin();
+    const identity =
+      await getCurrentIdentity();
+
+    const canManageTeam =
+      identity.isFullAccess;
+
+    const canViewDepartmentTeam =
+      hasPermission(
+        identity,
+        'team',
+        AccessAction.VIEW,
+        { scope: AccessScope.DEPARTMENT },
+      );
+
+    if (!canManageTeam && !canViewDepartmentTeam) {
+      throw new AuthorisationError(
+        'You are not authorised to view the team directory.',
+      );
+    }
 
     const {
       id,
@@ -464,9 +514,32 @@ export async function GET(
       );
     }
 
+    let visibleEmployee = employee;
+
+    if (!canManageTeam) {
+      const isOwnProfile =
+        employee.id === identity.employee?.id;
+
+      const isSameDepartment =
+        identity.employee?.departmentId != null &&
+        employee.departmentId === identity.employee.departmentId;
+
+      if (!isOwnProfile && !isSameDepartment) {
+        throw new AuthorisationError(
+          'You are not authorised to view this employee.',
+        );
+      }
+
+      if (!isOwnProfile) {
+        // A colleague in the same department, not herself — strip
+        // confidential fields regardless of what employeeSelect fetched.
+        visibleEmployee = stripConfidentialFields(employee);
+      }
+    }
+
 return NextResponse.json({
   ok: true,
-  employee,
+  employee: visibleEmployee,
 
   summary: {
     directReports:
@@ -1713,6 +1786,28 @@ export async function DELETE(
       );
     }
 
+    /*
+     * Read the linked AdminUser's role before the transaction disconnects
+     * it below, so we know whether it is safe to auto-disable.
+     */
+    const linkedAdminUser =
+      existing.adminUserId
+        ? await prisma.adminUser.findUnique({
+            where: {
+              id: existing.adminUserId,
+            },
+
+            select: {
+              id: true,
+              role: true,
+              active: true,
+            },
+          })
+        : null;
+
+    let accessAutoDisabled = false;
+    let ownerAccessRequiresManualAction = false;
+
     const employee =
       await prisma.$transaction(
         async (tx) => {
@@ -1755,18 +1850,45 @@ export async function DELETE(
             });
 
           /*
-           * IMPORTANT:
-           *
-           * We detach the AdminUser relation here,
-           * but we deliberately do NOT silently
-           * deactivate the AdminUser account.
-           *
-           * Account/access lifecycle should be
-           * handled explicitly by the access/
-           * permissions workflow rather than
-           * making an HR DELETE endpoint mutate
-           * authentication state unexpectedly.
+           * We detach the AdminUser relation above. Whether that account
+           * is also disabled is the employee access/permissions workflow's
+           * job (lib/access/server.ts and app/api/admin/team/[id]/access),
+           * applied inline here so offboarding always disables access
+           * automatically, except for an Owner account, which is never
+           * silently disabled by this HR action.
            */
+          if (
+            linkedAdminUser &&
+            linkedAdminUser.active
+          ) {
+            if (
+              linkedAdminUser.role ===
+              'OWNER'
+            ) {
+              ownerAccessRequiresManualAction =
+                true;
+            } else {
+              await tx.adminUser.update({
+                where: {
+                  id: linkedAdminUser.id,
+                },
+                data: {
+                  active: false,
+                },
+              });
+
+              await tx.permissionGrant.deleteMany(
+                {
+                  where: {
+                    adminUserId:
+                      linkedAdminUser.id,
+                  },
+                },
+              );
+
+              accessAutoDisabled = true;
+            }
+          }
 
           await tx.auditLog.create({
             data: {
@@ -1800,6 +1922,12 @@ export async function DELETE(
 
                 newStatus:
                   EmployeeStatus.FORMER,
+
+                accessAutoDisabled,
+
+                previousAdminUserRole:
+                  linkedAdminUser?.role ??
+                  null,
               },
             },
           });
@@ -1812,6 +1940,8 @@ export async function DELETE(
       ok: true,
       employee,
       offboarded: true,
+      accessAutoDisabled,
+      ownerAccessRequiresManualAction,
     });
   } catch (error) {
     console.error(

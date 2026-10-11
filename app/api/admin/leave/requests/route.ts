@@ -11,6 +11,8 @@ import {
   normaliseDate,
   requireLeaveIdentity,
 } from "@/lib/leave/server";
+import { requirePermission } from "@/lib/auth/current-admin";
+import { AccessAction, AccessScope } from "@/app/generated/prisma/enums";
 
 import { prisma } from "@/lib/prisma";
 
@@ -62,9 +64,22 @@ export async function GET(
 ) {
   try {
     const {
+      admin,
       employee,
       isLeaveManager,
     } = await requireLeaveIdentity();
+
+    // Hiding a nav tab is a UX convenience, not an access boundary — a
+    // restricted identity must hold an actual grant to read her own leave
+    // data, not just an Employee link. Full-access accounts (every account
+    // that existed before this system) are untouched by this check.
+    if (admin.restrictedAccess) {
+      await requirePermission(
+        "leave",
+        AccessAction.VIEW,
+        { scope: AccessScope.OWN },
+      );
+    }
 
     const url = new URL(request.url);
 
@@ -200,6 +215,14 @@ export async function POST(
       admin,
       employee,
     } = await requireLeaveIdentity();
+
+    if (admin.restrictedAccess) {
+      await requirePermission(
+        "leave",
+        AccessAction.CREATE,
+        { scope: AccessScope.OWN },
+      );
+    }
 
     const body: unknown =
       await request.json();

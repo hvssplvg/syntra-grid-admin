@@ -12,9 +12,13 @@ import {
 } from '@/app/generated/prisma/enums';
 
 import {
-  requireAdmin,
+  AuthenticationError,
+  AuthorisationError,
+  getCurrentIdentity,
+  hasPermission,
   requireTeamManager,
 } from '@/lib/auth/current-admin';
+import { AccessAction, AccessScope } from '@/app/generated/prisma/enums';
 
 import { prisma } from '@/lib/prisma';
 
@@ -62,6 +66,86 @@ const employeeSelect = {
   emergencyContactName: true,
   emergencyContactPhone: true,
   emergencyContactRelationship: true,
+
+  createdAt: true,
+  updatedAt: true,
+
+  department: {
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      code: true,
+      icon: true,
+      colour: true,
+      status: true,
+    },
+  },
+
+  manager: {
+    select: {
+      id: true,
+      employeeRef: true,
+      firstName: true,
+      lastName: true,
+      preferredName: true,
+      jobTitle: true,
+      avatarUrl: true,
+      status: true,
+    },
+  },
+
+  adminUser: {
+    select: {
+      id: true,
+      email: true,
+      firstName: true,
+      lastName: true,
+      avatarUrl: true,
+      role: true,
+      active: true,
+    },
+  },
+
+  _count: {
+    select: {
+      directReports: true,
+    },
+  },
+} satisfies Prisma.EmployeeSelect;
+
+/**
+ * Same shape as employeeSelect, minus personalEmail/phone/linkedinUrl/bio/
+ * notes/emergencyContact* — used for every row a restricted, department-
+ * scoped viewer sees that is not her own profile.
+ */
+const safeColleagueSelect = {
+  id: true,
+  employeeRef: true,
+
+  firstName: true,
+  lastName: true,
+  preferredName: true,
+
+  workEmail: true,
+
+  avatarUrl: true,
+
+  country: true,
+  city: true,
+
+  jobTitle: true,
+
+  status: true,
+  employmentType: true,
+  workArrangement: true,
+
+  startDate: true,
+  endDate: true,
+
+  departmentId: true,
+  managerId: true,
+  adminUserId: true,
 
   createdAt: true,
   updatedAt: true,
@@ -242,20 +326,11 @@ function getErrorMessage(
 function getErrorStatus(
   error: unknown,
 ): number {
-  const message =
-    error instanceof Error
-      ? error.message.toLowerCase()
-      : '';
-
-  if (
-    message.includes('unauthorized')
-  ) {
+  if (error instanceof AuthenticationError) {
     return 401;
   }
 
-  if (
-    message.includes('forbidden')
-  ) {
+  if (error instanceof AuthorisationError) {
     return 403;
   }
 
@@ -288,7 +363,26 @@ export async function GET(
   request: NextRequest,
 ) {
   try {
-    await requireAdmin();
+    const identity = await getCurrentIdentity();
+
+    const canManageTeam = identity.isFullAccess;
+    const canViewDepartmentTeam = hasPermission(
+      identity,
+      'team',
+      AccessAction.VIEW,
+      { scope: AccessScope.DEPARTMENT },
+    );
+
+    if (!canManageTeam && !canViewDepartmentTeam) {
+      throw new AuthorisationError(
+        'You are not authorised to view the team directory.',
+      );
+    }
+
+    // Fail closed: a department-scoped viewer with no department of her
+    // own sees nobody, rather than falling through to an unscoped query.
+    const viewerDepartmentId =
+      identity.employee?.departmentId ?? '__none__';
 
     const params =
       request.nextUrl.searchParams;
@@ -478,12 +572,19 @@ export async function GET(
       }
     }
 
+    if (!canManageTeam) {
+      // Overrides whatever the query string asked for. A restricted viewer
+      // can never widen this by passing a different ?department= value.
+      where.departmentId = viewerDepartmentId;
+    }
+
     const employees =
       await prisma.employee.findMany({
         where,
 
-        select:
-          employeeSelect,
+        select: canManageTeam
+          ? employeeSelect
+          : safeColleagueSelect,
 
         orderBy: [
           {
@@ -498,6 +599,10 @@ export async function GET(
         ],
       });
 
+    const scopeClause: Prisma.EmployeeWhereInput = canManageTeam
+      ? {}
+      : { departmentId: viewerDepartmentId };
+
     const [
       total,
       onboarding,
@@ -509,10 +614,11 @@ export async function GET(
       withAccess,
     ] =
       await prisma.$transaction([
-        prisma.employee.count(),
+        prisma.employee.count({ where: scopeClause }),
 
         prisma.employee.count({
           where: {
+            ...scopeClause,
             status:
               EmployeeStatus.ONBOARDING,
           },
@@ -520,6 +626,7 @@ export async function GET(
 
         prisma.employee.count({
           where: {
+            ...scopeClause,
             status:
               EmployeeStatus.ACTIVE,
           },
@@ -527,6 +634,7 @@ export async function GET(
 
         prisma.employee.count({
           where: {
+            ...scopeClause,
             status:
               EmployeeStatus.ON_LEAVE,
           },
@@ -534,6 +642,7 @@ export async function GET(
 
         prisma.employee.count({
           where: {
+            ...scopeClause,
             status:
               EmployeeStatus.OFFBOARDING,
           },
@@ -541,6 +650,7 @@ export async function GET(
 
         prisma.employee.count({
           where: {
+            ...scopeClause,
             status:
               EmployeeStatus.FORMER,
           },
@@ -548,7 +658,10 @@ export async function GET(
 
         prisma.employee.count({
           where: {
-            departmentId: null,
+            ...scopeClause,
+            departmentId: canManageTeam
+              ? null
+              : viewerDepartmentId,
 
             status: {
               not:
@@ -559,6 +672,7 @@ export async function GET(
 
         prisma.employee.count({
           where: {
+            ...scopeClause,
             adminUserId: {
               not: null,
             },

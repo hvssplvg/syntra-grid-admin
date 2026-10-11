@@ -18,6 +18,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import useSWR from 'swr';
 import {
   AnimatePresence,
   motion,
@@ -60,6 +61,9 @@ import {
 } from 'lucide-react';
 
 import ClientWorkspace from '../../clients/ClientWorkspace';
+import { CLIENTS_ENDPOINT, fetchClientsPayload } from '@/lib/clients/clientsApi';
+import { deleteClientLogo } from '@/lib/clients/uploadClientLogo';
+import { LogoUploader } from '@/lib/clients/LogoUploader';
 
 /* =============================================================================
  * TYPES
@@ -152,12 +156,6 @@ type ClientRecord = {
   openSupportCount: number;
 };
 
-type ClientsResponse = {
-  ok: boolean;
-  clients?: ClientRecord[];
-  error?: string;
-};
-
 type ClientOptionsResponse = {
   ok: boolean;
   accountOwners?: AccountOwner[];
@@ -177,6 +175,8 @@ type ClientForm = {
   description: string;
   country: string;
   city: string;
+  logoUrl: string;
+  logoPublicId: string;
   websiteUrl: string;
   domain: string;
   domainAuto: boolean;
@@ -247,6 +247,8 @@ const DEFAULT_FORM: ClientForm = {
   description: '',
   country: 'Nigeria',
   city: '',
+  logoUrl: '',
+  logoPublicId: '',
   websiteUrl: '',
   domain: '',
   domainAuto: true,
@@ -756,16 +758,12 @@ export default function ClientsTab() {
   const reduceMotion = useReducedMotion();
   const theme = useThemeBridge();
 
-  const [clients, setClients] = useState<ClientRecord[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [accountOwners, setAccountOwners] = useState<AccountOwner[]>([]);
 
-  const [loading, setLoading] = useState(true);
   const [optionsLoading, setOptionsLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [clockTick, setClockTick] = useState(0);
-  const [error, setError] = useState<string | null>(null);
 
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput);
@@ -781,8 +779,6 @@ export default function ClientsTab() {
   const [toast, setToast] = useState<ToastState>(null);
 
   const searchRef = useRef<HTMLInputElement | null>(null);
-  const requestRef = useRef<AbortController | null>(null);
-  const syncRef = useRef<Date | null>(null);
 
   const notify = useCallback<Notify>((tone, message) => {
     setToast({ id: Date.now(), tone, message });
@@ -794,50 +790,56 @@ export default function ClientsTab() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  /* ---------- Data ---------- */
+  /* ---------- Data ----------
+   * Shares its SWR cache/key with AdminHeader's workspace switcher, so
+   * whichever one mounts first primes the data for the other. Revalidates
+   * on focus at the same ~60s cadence the old hand-rolled fetcher used.
+   */
 
-  const loadClients = useCallback(
-    async (silent = false) => {
-      requestRef.current?.abort();
-      const controller = new AbortController();
-      requestRef.current = controller;
+  const {
+    data: clientsPayload,
+    error: clientsError,
+    isLoading: loading,
+    isValidating: clientsValidating,
+    mutate: mutateClients,
+  } = useSWR(CLIENTS_ENDPOINT, fetchClientsPayload, {
+    revalidateOnFocus: true,
+    dedupingInterval: REFRESH_AFTER_MS,
+    focusThrottleInterval: REFRESH_AFTER_MS,
+  });
 
-      if (silent) setRefreshing(true);
-      else setLoading(true);
-      setError(null);
-
-      try {
-        const response = await fetch('/api/admin/clients', {
-          method: 'GET',
-          cache: 'no-store',
-          credentials: 'include',
-          signal: controller.signal,
-          headers: { Accept: 'application/json' },
-        });
-
-        const payload = (await response.json().catch(() => ({ ok: false }))) as ClientsResponse;
-
-        if (!response.ok || !payload.ok) {
-          throw new Error(payload.error || 'Clients could not be loaded.');
-        }
-
-        setClients(payload.clients ?? []);
-        const now = new Date();
-        syncRef.current = now;
-        setLastSyncedAt(now);
-      } catch (cause) {
-        if (cause instanceof DOMException && cause.name === 'AbortError') return;
-        const message = cause instanceof Error ? cause.message : 'Clients could not be loaded.';
-        if (silent) notify('error', message);
-        else setError(message);
-      } finally {
-        if (requestRef.current === controller) requestRef.current = null;
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [notify],
+  const clients = useMemo(
+    () => (clientsPayload?.clients ?? []) as unknown as ClientRecord[],
+    [clientsPayload],
   );
+
+  // While cached data exists, a failed revalidation is a toast, not a
+  // full-page error — the stale list stays on screen (see effect below).
+  const refreshing = clientsValidating && !loading;
+  const error = clientsPayload
+    ? null
+    : clientsError
+      ? clientsError instanceof Error
+        ? clientsError.message
+        : 'Clients could not be loaded.'
+      : null;
+
+  const refreshClients = useCallback(() => {
+    void mutateClients();
+  }, [mutateClients]);
+
+  useEffect(() => {
+    if (clientsPayload) setLastSyncedAt(new Date());
+  }, [clientsPayload]);
+
+  useEffect(() => {
+    if (clientsError && clientsPayload) {
+      notify(
+        'error',
+        clientsError instanceof Error ? clientsError.message : 'Clients could not be refreshed.',
+      );
+    }
+  }, [clientsError, clientsPayload, notify]);
 
   const loadOptions = useCallback(async () => {
     setOptionsLoading(true);
@@ -865,32 +867,13 @@ export default function ClientsTab() {
   }, []);
 
   useEffect(() => {
-    void loadClients();
     void loadOptions();
-    return () => requestRef.current?.abort();
-  }, [loadClients, loadOptions]);
+  }, [loadOptions]);
 
   useEffect(() => {
     const timer = setInterval(() => setClockTick((value) => value + 1), 30_000);
     return () => clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    const maybeRefresh = () => {
-      if (document.visibilityState !== 'visible') return;
-      const last = syncRef.current?.getTime() ?? 0;
-      if (Date.now() - last < REFRESH_AFTER_MS) return;
-      void loadClients(true);
-    };
-
-    window.addEventListener('focus', maybeRefresh);
-    document.addEventListener('visibilitychange', maybeRefresh);
-
-    return () => {
-      window.removeEventListener('focus', maybeRefresh);
-      document.removeEventListener('visibilitychange', maybeRefresh);
-    };
-  }, [loadClients]);
 
   /* ---------- Actions ---------- */
 
@@ -1072,7 +1055,14 @@ export default function ClientsTab() {
   let content: ReactNode;
 
   if (selectedClientId) {
-    content = <ClientWorkspace clientId={selectedClientId} onBack={() => setSelectedClientId(null)} />;
+    content = (
+      <ClientWorkspace
+        clientId={selectedClientId}
+        onBack={() => setSelectedClientId(null)}
+        accountOwners={accountOwners}
+        optionsLoading={optionsLoading}
+      />
+    );
   } else {
     content = (
       <>
@@ -1166,7 +1156,7 @@ export default function ClientsTab() {
                   <Download size={14} strokeWidth={1.9} />
                 </ToolbarIcon>
 
-                <ToolbarIcon label="Refresh clients" onClick={() => void loadClients(true)} disabled={refreshing}>
+                <ToolbarIcon label="Refresh clients" onClick={refreshClients} disabled={refreshing}>
                   <RefreshCw size={14} strokeWidth={1.9} className={cx(refreshing && 'animate-spin')} />
                 </ToolbarIcon>
 
@@ -1228,7 +1218,7 @@ export default function ClientsTab() {
           {loading ? (
             <LoadingState view={viewMode} />
           ) : error ? (
-            <ErrorState title="Clients could not be loaded" message={error} onRetry={() => void loadClients()} />
+            <ErrorState title="Clients could not be loaded" message={error} onRetry={refreshClients} />
           ) : clients.length === 0 ? (
             <EmptyState
               icon={<Building2 size={21} strokeWidth={1.7} />}
@@ -1290,9 +1280,25 @@ export default function ClientsTab() {
           optionsLoading={optionsLoading}
           onClose={() => setAddOpen(false)}
           onCreated={(client) => {
-            setClients((current) => [client, ...current.filter((item) => item.id !== client.id)]);
+            // Insert into the cached list immediately, then revalidate so
+            // counts/meta reconcile with the server in the background.
+            void mutateClients(
+              (current) =>
+                current
+                  ? {
+                      ...current,
+                      clients: [
+                        client as unknown as Record<string, unknown>,
+                        ...current.clients.filter(
+                          (item) => (item as { id?: string }).id !== client.id,
+                        ),
+                      ],
+                    }
+                  : current,
+              { revalidate: false },
+            );
             notify('success', `${clientTitle(client)} added to the portfolio`);
-            void loadClients(true);
+            void mutateClients();
           }}
           onOpen={openClient}
           onAddAnother={() => setAddKey((key) => key + 1)}
@@ -2166,6 +2172,7 @@ function AddClientWizard({
   };
 
   const startOver = () => {
+    if (form.logoPublicId) void deleteClientLogo(form.logoPublicId);
     try {
       window.localStorage.removeItem(DRAFT_KEY);
     } catch {
@@ -2206,6 +2213,7 @@ function AddClientWizard({
           description: form.description.trim() || null,
           country: form.country.trim() || null,
           city: form.city.trim() || null,
+          logoUrl: form.logoUrl.trim() || null,
           websiteUrl: form.websiteUrl.trim() ? normaliseUrl(form.websiteUrl) : null,
           domain: values.domain.trim() || null,
           status: values.status,
@@ -2294,7 +2302,7 @@ function AddClientWizard({
               exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.7 }}
               className="flex"
             >
-              <ClientLogo client={{ logoUrl: null, displayName: form.displayName, name: form.name }} size="lg" />
+              <ClientLogo client={{ logoUrl: form.logoUrl || null, displayName: form.displayName, name: form.name }} size="lg" />
             </motion.span>
           </AnimatePresence>
 
@@ -2470,7 +2478,19 @@ function CompanyStep({ form, errors, update }: { form: ClientForm; errors: Field
     <div>
       <StepIntro icon={<Building2 size={16} />} title="Who is the client?" description="The organisation itself. Only the name is required." />
 
-      <Field label="Company name" required error={errors.name} className="mt-5">
+      <div className="mt-5">
+        <LogoUploader
+          logoUrl={form.logoUrl}
+          logoPublicId={form.logoPublicId}
+          title={form.displayName.trim() || form.name.trim()}
+          onChange={(logoUrl, logoPublicId) => {
+            update('logoUrl', logoUrl);
+            update('logoPublicId', logoPublicId);
+          }}
+        />
+      </div>
+
+      <Field label="Company name" required error={errors.name} className="mt-4">
         <input
           data-autofocus
           value={form.name}
@@ -2757,7 +2777,7 @@ function ReviewStep({ form, accountOwners, onEdit }: { form: ClientForm; account
       <StepIntro icon={<Check size={16} />} title="Check everything looks right" description="Anything here can be changed later in the client workspace." />
 
       <div className="mt-5 flex items-center gap-4 rounded-[18px] border border-[var(--line)] p-4">
-        <ClientLogo client={{ logoUrl: null, displayName: form.displayName, name: form.name }} />
+        <ClientLogo client={{ logoUrl: form.logoUrl || null, displayName: form.displayName, name: form.name }} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[14px] font-semibold tracking-[-0.02em] text-[var(--text)]">{title}</p>
           <p className="truncate text-[10px] text-[var(--text-subtle)]">

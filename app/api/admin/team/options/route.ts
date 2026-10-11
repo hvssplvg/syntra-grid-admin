@@ -10,8 +10,12 @@ import {
 } from '@/app/generated/prisma/enums';
 
 import {
-  requireAdmin,
+  AuthenticationError,
+  AuthorisationError,
+  getCurrentIdentity,
+  hasPermission,
 } from '@/lib/auth/current-admin';
+import { AccessAction, AccessScope } from '@/app/generated/prisma/enums';
 
 import { prisma } from '@/lib/prisma';
 
@@ -33,24 +37,11 @@ function getErrorMessage(
 function getErrorStatus(
   error: unknown,
 ): number {
-  const message =
-    error instanceof Error
-      ? error.message.toLowerCase()
-      : '';
-
-  if (
-    message.includes(
-      'unauthorized',
-    )
-  ) {
+  if (error instanceof AuthenticationError) {
     return 401;
   }
 
-  if (
-    message.includes(
-      'forbidden',
-    )
-  ) {
+  if (error instanceof AuthorisationError) {
     return 403;
   }
 
@@ -74,7 +65,21 @@ export async function GET(
   _request: NextRequest,
 ) {
   try {
-    await requireAdmin();
+    const identity = await getCurrentIdentity();
+
+    const canManageTeam = identity.isFullAccess;
+    const canViewDepartmentTeam = hasPermission(
+      identity,
+      'team',
+      AccessAction.VIEW,
+      { scope: AccessScope.DEPARTMENT },
+    );
+
+    if (!canManageTeam && !canViewDepartmentTeam) {
+      throw new AuthorisationError(
+        'You are not authorised to view the team directory.',
+      );
+    }
 
     /*
      * First find AdminUser accounts that are already attached
@@ -115,7 +120,6 @@ export async function GET(
     const [
       departments,
       managers,
-      adminUsers,
     ] =
       await prisma.$transaction([
         /* --------------------------------------------------------------------
@@ -197,24 +201,25 @@ export async function GET(
           ],
         }),
 
-        /* --------------------------------------------------------------------
-           AVAILABLE SYSTEM ACCOUNTS
+      ]);
 
-           Only active AdminUser records that are not already attached
-           to an Employee are returned.
+    /* ------------------------------------------------------------------------
+       AVAILABLE SYSTEM ACCOUNTS
 
-           When there are no linked AdminUsers, we omit the id filter.
-        -------------------------------------------------------------------- */
+       Only active AdminUser records that are not already attached to an
+       Employee are returned. Linking an existing AdminUser is a management
+       action, so a restricted viewer never gets this list at all.
+    ------------------------------------------------------------------------ */
 
-        prisma.adminUser.findMany({
+    const adminUsers = canManageTeam
+      ? await prisma.adminUser.findMany({
           where: {
             active: true,
 
             ...(linkedAdminUserIds.length
               ? {
                   id: {
-                    notIn:
-                      linkedAdminUserIds,
+                    notIn: linkedAdminUserIds,
                   },
                 }
               : {}),
@@ -234,18 +239,12 @@ export async function GET(
           },
 
           orderBy: [
-            {
-              firstName: 'asc',
-            },
-            {
-              lastName: 'asc',
-            },
-            {
-              email: 'asc',
-            },
+            { firstName: 'asc' },
+            { lastName: 'asc' },
+            { email: 'asc' },
           ],
-        }),
-      ]);
+        })
+      : [];
 
     /* ------------------------------------------------------------------------
        RESPONSE
@@ -257,6 +256,16 @@ export async function GET(
       departments,
       managers,
       adminUsers,
+
+      permissions: {
+        canAddEmployee: canManageTeam,
+        canOffboard: canManageTeam,
+        canGrantAccess: canManageTeam,
+        canManageTeam,
+        canViewDepartmentTeam,
+        viewerDepartmentId: identity.employee?.departmentId ?? null,
+        viewerEmployeeId: identity.employee?.id ?? null,
+      },
 
       enums: {
         employeeStatuses:

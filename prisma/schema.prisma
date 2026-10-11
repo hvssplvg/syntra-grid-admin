@@ -23,13 +23,18 @@ model AdminUser {
   role       AdminRole @default(VIEWER)
   active     Boolean   @default(true)
 
+  // True only for accounts created by the employee access/permissions
+  // system (Employee -> Access -> Grant Dashboard Access). False for every
+  // pre-existing account and every account created any other way, which
+  // keeps full, unfiltered access regardless of role. See PermissionGrant.
+  restrictedAccess Boolean @default(false)
+
   departmentId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  department     Department?  @relation("DepartmentMembers", fields: [departmentId], references: [id])
-  departmentsLed Department[] @relation("DepartmentLead")
+  department Department? @relation("DepartmentMembers", fields: [departmentId], references: [id])
 
   employee Employee?
 
@@ -69,6 +74,30 @@ model AdminUser {
   timesheetsLocked    Timesheet[]         @relation("TimesheetLockedBy")
   timesheetActivities TimesheetActivity[] @relation("TimesheetActivityActor")
 
+  // Contracts
+  contractsCreated   Contract[]         @relation("ContractCreatedBy")
+  contractsUpdated   Contract[]         @relation("ContractUpdatedBy")
+  contractActivities ContractActivity[] @relation("ContractActivityActor")
+
+  // Access & permissions
+  permissionGrants       PermissionGrant[] @relation("AdminUserPermissionGrants")
+  permissionGrantsIssued PermissionGrant[] @relation("PermissionGrantGrantedBy")
+  accessInvite           AccessInvite?     @relation("AdminUserAccessInvite")
+  accessInvitesCreated   AccessInvite[]    @relation("AccessInviteCreatedBy")
+
+  // Overview personalisation & notifications
+  overviewPreference AdminOverviewPreference?
+  notifications      Notification[]
+
+  // Social media
+  socialAccountsConnected  SocialAccount[]        @relation("SocialAccountConnectedBy")
+  socialCampaignsCreated   SocialCampaign[]       @relation("SocialCampaignCreatedBy")
+  socialPostsCreated       SocialPost[]           @relation("SocialPostCreatedBy")
+  socialPostsUpdated       SocialPost[]           @relation("SocialPostUpdatedBy")
+  socialPostsReviewed      SocialPost[]           @relation("SocialPostReviewedBy")
+  socialMediaAssetsUploaded SocialMediaAsset[]    @relation("SocialMediaAssetUploadedBy")
+  socialPostActivities     SocialPostActivity[]   @relation("SocialPostActivityActor")
+
   @@index([departmentId])
 }
 
@@ -100,7 +129,7 @@ model Department {
   updatedAt DateTime @updatedAt
 
   members AdminUser[] @relation("DepartmentMembers")
-  lead    AdminUser?  @relation("DepartmentLead", fields: [leadId], references: [id])
+  lead    Employee?   @relation("DepartmentLead", fields: [leadId], references: [id])
 
   parent   Department?  @relation("DepartmentHierarchy", fields: [parentId], references: [id])
   children Department[] @relation("DepartmentHierarchy")
@@ -177,6 +206,8 @@ model Employee {
   manager       Employee?  @relation("EmployeeManagement", fields: [managerId], references: [id])
   directReports Employee[] @relation("EmployeeManagement")
 
+  departmentsLed Department[] @relation("DepartmentLead")
+
   hiredFromApplication JobApplication? @relation("HiredEmployee")
 
   // Leave
@@ -204,6 +235,78 @@ model Employee {
   @@index([managerId])
   @@index([startDate])
   @@index([status])
+}
+
+/**
+ * =============================================================================
+ * ACCESS & PERMISSIONS
+ * =============================================================================
+ * Fine-grained module/action/scope grants layered on top of AdminRole for
+ * restricted employee dashboard accounts (AdminUser.restrictedAccess = true).
+ * Pre-existing, full-access accounts never read these tables.
+ * module is a plain, app-validated string (an adminNav.ts AdminTab key)
+ * rather than a Postgres enum, so adding a new permissionable module never
+ * requires a migration.
+ */
+
+enum AccessAction {
+  VIEW
+  CREATE
+  EDIT
+  MANAGE
+  APPROVE
+}
+
+enum AccessScope {
+  OWN
+  DEPARTMENT
+  ALL
+}
+
+model PermissionGrant {
+  id String @id @default(cuid())
+
+  adminUserId String
+  module      String
+  action      AccessAction
+  scope       AccessScope  @default(ALL)
+
+  grantedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adminUser AdminUser  @relation("AdminUserPermissionGrants", fields: [adminUserId], references: [id], onDelete: Cascade)
+  grantedBy AdminUser? @relation("PermissionGrantGrantedBy", fields: [grantedById], references: [id])
+
+  @@unique([adminUserId, module, action])
+  @@index([adminUserId])
+  @@index([module])
+}
+
+/**
+ * One live row per AdminUser. Re-inviting upserts this row in place (new
+ * tokenHash/expiresAt, usedAt cleared) rather than accumulating history, so
+ * only one invite link can ever be valid for an account at a time and
+ * resending immediately invalidates whatever link was issued before it.
+ */
+model AccessInvite {
+  id String @id @default(cuid())
+
+  adminUserId String    @unique
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adminUser AdminUser  @relation("AdminUserAccessInvite", fields: [adminUserId], references: [id], onDelete: Cascade)
+  createdBy AdminUser? @relation("AccessInviteCreatedBy", fields: [createdById], references: [id])
+
+  @@index([expiresAt])
 }
 
 /**
@@ -262,11 +365,12 @@ model Client {
 
   accountOwner AdminUser? @relation("ClientAccountOwner", fields: [accountOwnerId], references: [id])
 
-  billing  ClientBilling?
-  contacts ClientContact[]
-  invoices ClientInvoice[]
-  projects Project[]
-  tickets  SupportTicket[]
+  billing   ClientBilling?
+  contacts  ClientContact[]
+  contracts Contract[]
+  invoices  ClientInvoice[]
+  projects  Project[]
+  tickets   SupportTicket[]
 
   matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionClient")
 
@@ -388,6 +492,146 @@ model ClientInvoice {
 
 /**
  * =============================================================================
+ * CLIENT CONTRACTS
+ * =============================================================================
+ * Commercial agreements between Syntra Grid and clients.
+ * A client can have multiple contracts over time. Contracts may optionally
+ * belong to a specific project where the agreement is project specific.
+ * Expiring is not stored as a status. lib/contracts/server.ts derives it from
+ * endDate, so a contract can never be marked expiring after it has expired.
+ * =============================================================================
+ */
+
+model Contract {
+  id String @id @default(cuid())
+
+  /**
+   * Human readable contract reference generated by the server.
+   * Example: CTR-2026-0001
+   */
+  contractRef String @unique
+
+  clientId  String
+  projectId String?
+
+  title       String
+  description String?
+
+  type   ContractType
+  status ContractStatus @default(DRAFT)
+
+  /**
+   * Commercial terms for this specific agreement.
+   */
+  value        Decimal?      @db.Decimal(18, 2)
+  currency     CurrencyCode  @default(GBP)
+  billingCycle BillingCycle?
+
+  /**
+   * Contract lifecycle dates.
+   */
+  startDate DateTime?
+  endDate   DateTime?
+
+  /**
+   * Renewal date may be earlier than endDate where notice is required.
+   */
+  renewalAt DateTime?
+
+  autoRenew Boolean @default(false)
+
+  /**
+   * Number of days' notice required for renewal or termination.
+   */
+  noticePeriodDays Int?
+
+  /**
+   * Signature information.
+   */
+  signedAt DateTime?
+
+  signedByClientName  String?
+  signedByCompanyName String?
+
+  /**
+   * Primary contract document.
+   * The file can live in Cloudinary or another document store while this
+   * record keeps its URL and metadata.
+   */
+  documentName      String?
+  documentUrl       String?
+  documentMimeType  String?
+  documentSizeBytes BigInt?
+
+  /**
+   * Internal management notes.
+   */
+  notes String?
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client  Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  createdBy AdminUser? @relation("ContractCreatedBy", fields: [createdById], references: [id])
+  updatedBy AdminUser? @relation("ContractUpdatedBy", fields: [updatedById], references: [id])
+
+  activities ContractActivity[]
+
+  @@index([clientId])
+  @@index([projectId])
+  @@index([type])
+  @@index([status])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([renewalAt])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([clientId, status])
+  @@index([clientId, endDate])
+  @@index([status, endDate])
+  @@index([status, renewalAt])
+}
+
+/**
+ * =============================================================================
+ * CONTRACTS: ACTIVITY
+ * =============================================================================
+ * Audit trail for contract lifecycle changes: created, terms updated, sent
+ * for signature, signed, activated, document replaced, renewed, expired,
+ * terminated and so on. Mirrors LeaveActivity and TimesheetActivity.
+ * =============================================================================
+ */
+
+model ContractActivity {
+  id String @id @default(cuid())
+
+  contractId String
+  actorId    String?
+
+  type ContractActivityType
+
+  description String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  contract Contract   @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  actor    AdminUser? @relation("ContractActivityActor", fields: [actorId], references: [id])
+
+  @@index([contractId])
+  @@index([actorId])
+  @@index([type])
+  @@index([createdAt])
+  @@index([contractId, createdAt])
+}
+
+/**
+ * =============================================================================
  * PROJECTS
  * =============================================================================
  */
@@ -422,6 +666,7 @@ model Project {
   integrations Integration[]
   tickets      SupportTicket[]
   snapshots    UsageSnapshot[]
+  contracts    Contract[]
 
   matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionProject")
 
@@ -2065,6 +2310,55 @@ enum InvoiceStatus {
 
 /**
  * =============================================================================
+ * ENUMS: CONTRACTS
+ * =============================================================================
+ */
+
+enum ContractType {
+  DEVELOPMENT
+  MAINTENANCE
+  SUPPORT
+  RETAINER
+  HOSTING
+  LICENSING
+  CONSULTING
+  PARTNERSHIP
+  OTHER
+}
+
+// EXPIRING is intentionally absent. It is derived from endDate at read time.
+enum ContractStatus {
+  DRAFT
+  PENDING_SIGNATURE
+  ACTIVE
+  EXPIRED
+  TERMINATED
+  CANCELLED
+}
+
+enum ContractActivityType {
+  CONTRACT_CREATED
+  CONTRACT_UPDATED
+
+  SENT_FOR_SIGNATURE
+  SIGNED
+  ACTIVATED
+
+  DOCUMENT_ADDED
+  DOCUMENT_REPLACED
+
+  RENEWAL_UPDATED
+  RENEWED
+
+  EXPIRED
+  TERMINATED
+  CANCELLED
+
+  NOTE_ADDED
+}
+
+/**
+ * =============================================================================
  * ENUMS: PROJECTS
  * =============================================================================
  */
@@ -2509,4 +2803,392 @@ enum TimesheetActivityType {
   LOCKED
   UNLOCKED
   NOTE_ADDED
+}
+
+/**
+ * =============================================================================
+ * ADMIN OVERVIEW — personalisation & notifications
+ *
+ * Purely additive to the existing schema: one preferences row and any
+ * number of notification rows per AdminUser. Nothing else references
+ * these tables, so they carry no migration risk for existing data.
+ * =============================================================================
+ */
+
+/**
+ * One row per admin account. `preferences` mirrors OverviewTab.tsx's
+ * existing client-side DashboardPreferences shape (theme, wallpaper
+ * choice, widget visibility, drag-and-drop layout order/sizes/collapsed
+ * state) so the client can keep its current localStorage-first code path
+ * and simply reconcile against this row. The actual wallpaper photo, if
+ * any, lives in Cloudinary — only its URL is stored here, never base64.
+ */
+model AdminOverviewPreference {
+  id           String   @id @default(cuid())
+  adminUserId  String   @unique
+  version      Int      @default(1)
+  preferences  Json
+  wallpaperUrl String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+}
+
+enum NotificationType {
+  LEAVE_REQUEST_PENDING
+  TICKET_URGENT
+  INVOICE_OVERDUE
+  INTERVIEW_UPCOMING
+  OFFER_EXPIRING
+  CONTRACT_RENEWAL_DUE
+  ACTIVITY
+  SOCIAL_POST_PENDING_APPROVAL
+  SOCIAL_POST_CHANGES_REQUESTED
+  SOCIAL_POST_PUBLISHED
+  SOCIAL_POST_FAILED
+  SOCIAL_ACCOUNT_DISCONNECTED
+}
+
+/**
+ * Materialised, per-recipient notifications. Rows are generated lazily by
+ * lib/notifications/server.ts from existing tables (AuditLog, the domain
+ * Activity tables, overdue invoices, urgent tickets, etc.) rather than by
+ * other modules writing here directly — see sourceKey below.
+ *
+ * sourceKey is a stable, human-readable dedupe key (e.g.
+ * "leave_request:<id>", "invoice_overdue:<id>") unique per recipient, so
+ * re-running the sync step is idempotent and never creates duplicates.
+ */
+model Notification {
+  id                   String           @id @default(cuid())
+  recipientAdminUserId String
+  type                 NotificationType
+  title                String
+  body                 String?
+  module               String
+  entityType           String?
+  entityId             String?
+  sourceKey            String
+  read                 Boolean          @default(false)
+  readAt               DateTime?
+  createdAt            DateTime         @default(now())
+
+  recipient AdminUser @relation(fields: [recipientAdminUserId], references: [id], onDelete: Cascade)
+
+  @@unique([recipientAdminUserId, sourceKey])
+  @@index([recipientAdminUserId, read])
+  @@index([recipientAdminUserId, createdAt])
+}
+
+/**
+ * =============================================================================
+ * SOCIAL MEDIA MANAGEMENT
+ *
+ * Purely additive — no existing table is touched. SocialPostPlatform is the
+ * per-destination publishing record: a post can target several accounts
+ * (including several accounts on the SAME platform), and each target tracks
+ * its own publish status/retry/error independently. SocialPost.status is the
+ * aggregate the UI shows; it is never set to PUBLISHED unless every target
+ * that was attempted actually succeeded (PARTIALLY_PUBLISHED covers mixed
+ * results) — see lib/social-media/publishing.ts.
+ * =============================================================================
+ */
+
+enum SocialPlatform {
+  INSTAGRAM
+  FACEBOOK
+  LINKEDIN
+  X
+  TIKTOK
+  YOUTUBE
+}
+
+enum SocialAccountStatus {
+  CONNECTED
+  DISCONNECTED
+  EXPIRED
+  ERROR
+}
+
+enum SocialCampaignStatus {
+  PLANNED
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum SocialPostStatus {
+  DRAFT
+  PENDING_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  PARTIALLY_PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+enum SocialPostTargetStatus {
+  PENDING
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+enum SocialAssetType {
+  IMAGE
+  VIDEO
+}
+
+enum SocialPostActivityType {
+  CREATED
+  EDITED
+  SUBMITTED
+  APPROVED
+  CHANGES_REQUESTED
+  SCHEDULED
+  PUBLISHING_STARTED
+  PUBLISHED
+  PUBLISH_FAILED
+  CANCELLED
+}
+
+/**
+ * A single connected social account. Tokens are encrypted at rest with
+ * lib/encryption.ts's encryptSecret/decryptSecret (same helper the Monzo
+ * integration already uses — provider-agnostic despite its env var name).
+ * platformAccountId is the platform's own id for the account (so
+ * reconnecting the same account upserts rather than duplicating).
+ */
+model SocialAccount {
+  id String @id @default(cuid())
+
+  platform          SocialPlatform
+  accountName       String
+  platformAccountId String
+  username          String?
+  profileImageUrl   String?
+
+  status SocialAccountStatus @default(DISCONNECTED)
+
+  encryptedAccessToken  String?
+  encryptedRefreshToken String?
+  tokenExpiresAt        DateTime?
+  scopes                String?
+
+  connectedAt    DateTime?
+  connectedById  String?
+  lastSyncedAt   DateTime?
+  lastError      String?
+  lastErrorAt    DateTime?
+  disconnectedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  connectedBy AdminUser? @relation("SocialAccountConnectedBy", fields: [connectedById], references: [id])
+
+  targets SocialPostPlatform[]
+
+  @@unique([platform, platformAccountId])
+  @@index([platform])
+  @@index([status])
+}
+
+model SocialCampaign {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  status      SocialCampaignStatus @default(PLANNED)
+  startDate   DateTime?
+  endDate     DateTime?
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdBy AdminUser? @relation("SocialCampaignCreatedBy", fields: [createdById], references: [id])
+
+  posts SocialPost[]
+
+  @@index([status])
+}
+
+model SocialPost {
+  id String @id @default(cuid())
+
+  title    String?
+  caption  String
+  category String?
+
+  status SocialPostStatus @default(DRAFT)
+
+  campaignId String?
+
+  scheduledAt DateTime?
+  publishedAt DateTime?
+
+  createdById  String?
+  updatedById  String?
+  reviewedById String?
+  reviewNotes  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign SocialCampaign? @relation(fields: [campaignId], references: [id])
+
+  createdBy  AdminUser? @relation("SocialPostCreatedBy", fields: [createdById], references: [id])
+  updatedBy  AdminUser? @relation("SocialPostUpdatedBy", fields: [updatedById], references: [id])
+  reviewedBy AdminUser? @relation("SocialPostReviewedBy", fields: [reviewedById], references: [id])
+
+  targets    SocialPostPlatform[]
+  assets     SocialPostAsset[]
+  activities SocialPostActivity[]
+
+  @@index([status])
+  @@index([campaignId])
+  @@index([scheduledAt])
+}
+
+/**
+ * One row per (post, connected account) — deliberately NOT unique per
+ * platform, so two different connected accounts on the same platform can
+ * both be targeted by the same post.
+ */
+model SocialPostPlatform {
+  id String @id @default(cuid())
+
+  postId    String
+  accountId String
+  platform  SocialPlatform
+
+  caption String?
+
+  status SocialPostTargetStatus @default(PENDING)
+
+  scheduledAt DateTime?
+  publishedAt DateTime?
+
+  remotePostId  String?
+  remotePostUrl String?
+
+  lastError     String?
+  retryCount    Int      @default(0)
+  lastAttemptAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  post    SocialPost     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  account SocialAccount  @relation(fields: [accountId], references: [id])
+
+  metrics SocialPostMetric[]
+
+  @@unique([postId, accountId])
+  @@index([postId])
+  @@index([accountId])
+  @@index([status, scheduledAt])
+}
+
+/**
+ * Real uploaded media, hosted in Cloudinary — never binary data in Postgres,
+ * only the URL/public_id/metadata. See lib/social-media/media.ts.
+ */
+model SocialMediaAsset {
+  id String @id @default(cuid())
+
+  url                String
+  cloudinaryPublicId String
+  type               SocialAssetType
+
+  fileSizeBytes   Int?
+  width           Int?
+  height          Int?
+  durationSeconds Float?
+
+  uploadedById String?
+
+  createdAt DateTime @default(now())
+
+  uploadedBy AdminUser? @relation("SocialMediaAssetUploadedBy", fields: [uploadedById], references: [id])
+
+  postAssets SocialPostAsset[]
+
+  @@index([type])
+}
+
+model SocialPostAsset {
+  id String @id @default(cuid())
+
+  postId   String
+  assetId  String
+  position Int    @default(0)
+
+  createdAt DateTime @default(now())
+
+  post  SocialPost       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  asset SocialMediaAsset @relation(fields: [assetId], references: [id])
+
+  @@unique([postId, assetId])
+  @@index([postId])
+}
+
+/**
+ * Audit trail for a post's lifecycle. Mirrors ContractActivity/LeaveActivity/
+ * TimesheetActivity/RecruitmentActivity — same shape, same convention.
+ */
+model SocialPostActivity {
+  id String @id @default(cuid())
+
+  postId  String
+  actorId String?
+
+  type SocialPostActivityType
+
+  description String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  post  SocialPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  actor AdminUser? @relation("SocialPostActivityActor", fields: [actorId], references: [id])
+
+  @@index([postId])
+  @@index([createdAt])
+}
+
+/**
+ * Real metric snapshots only — populated by a provider sync, never invented.
+ * One row per capture per target, so a trend over time is just rows ordered
+ * by capturedAt.
+ */
+model SocialPostMetric {
+  id String @id @default(cuid())
+
+  postPlatformId String
+
+  capturedAt DateTime @default(now())
+
+  impressions    Int?
+  reach          Int?
+  likes          Int?
+  comments       Int?
+  shares         Int?
+  saves          Int?
+  clicks         Int?
+  engagementRate Float?
+  followerCount  Int?
+
+  postPlatform SocialPostPlatform @relation(fields: [postPlatformId], references: [id], onDelete: Cascade)
+
+  @@index([postPlatformId, capturedAt])
 }

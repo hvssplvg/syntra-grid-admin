@@ -8,7 +8,7 @@ import {
 
 import {
   AuthorisationError,
-  requireAdmin,
+  getCurrentAdmin,
 } from "@/lib/auth/current-admin";
 
 import { prisma } from "@/lib/prisma";
@@ -104,7 +104,10 @@ export type CalendarRange = {
 ============================================================================ */
 
 export async function requireCalendarIdentity(): Promise<CalendarIdentity> {
-  const admin = await requireAdmin();
+  // getCurrentAdmin, not requireAdmin: a restricted employee is allowed
+  // this far, but every route built on top of this must still check
+  // requirePermission('calendar', ...) for her — see app/api/admin/calendar/**.
+  const admin = await getCurrentAdmin();
 
   const employee = await prisma.employee.findUnique({
     where: {

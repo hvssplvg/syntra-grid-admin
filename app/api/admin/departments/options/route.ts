@@ -3,7 +3,10 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAdmin } from '@/lib/auth/current-admin';
 
-import { DepartmentStatus } from '@/app/generated/prisma/enums';
+import {
+  DepartmentStatus,
+  EmployeeStatus,
+} from '@/app/generated/prisma/enums';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,17 +16,27 @@ export async function GET() {
 
     const [people, departments] =
       await prisma.$transaction([
-        prisma.adminUser.findMany({
+        // Department leads are chosen from employees, not dashboard
+        // (AdminUser) accounts, so a lead can be assigned whether or not
+        // they ever sign in to Syntra Grid.
+        prisma.employee.findMany({
           where: {
-            active: true,
+            status: {
+              notIn: [
+                EmployeeStatus.FORMER,
+                EmployeeStatus.OFFBOARDING,
+              ],
+            },
           },
           select: {
             id: true,
             firstName: true,
             lastName: true,
-            email: true,
+            preferredName: true,
+            workEmail: true,
             avatarUrl: true,
-            role: true,
+            jobTitle: true,
+            status: true,
             departmentId: true,
           },
           orderBy: [
@@ -32,9 +45,6 @@ export async function GET() {
             },
             {
               lastName: 'asc',
-            },
-            {
-              email: 'asc',
             },
           ],
         }),

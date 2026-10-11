@@ -1,0 +1,7 @@
+-- This migration's original content (AccessAction/AccessScope enums,
+-- AdminUser.restrictedAccess, PermissionGrant/AccessInvite tables) is now
+-- created earlier in history by 20261010000000_backfill_untracked_schema,
+-- which captures everything that had drifted from the tracked migration
+-- history at that point. Left empty rather than deleted so the already-
+-- recorded entry in the real database's migration history stays intact
+-- (same pattern as 20261006140919_add_contracts).

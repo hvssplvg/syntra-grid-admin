@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { useSWRConfig } from 'swr';
 import {
   AnimatePresence,
   motion,
@@ -44,6 +45,7 @@ import {
   Globe2,
   LayoutDashboard,
   LifeBuoy,
+  Loader2,
   Mail,
   MapPin,
   MessageSquareText,
@@ -59,6 +61,10 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
+
+import { CLIENTS_ENDPOINT } from '@/lib/clients/clientsApi';
+import { LogoUploader } from '@/lib/clients/LogoUploader';
+import { deleteClientLogo } from '@/lib/clients/uploadClientLogo';
 
 /* =============================================================================
  * TYPES
@@ -224,6 +230,8 @@ type WorkspaceTab =
 type ClientWorkspaceProps = {
   clientId: string;
   onBack: () => void;
+  accountOwners: AccountOwner[];
+  optionsLoading: boolean;
 };
 
 type ToastState = {
@@ -381,12 +389,14 @@ function safeHref(value: string | null | undefined) {
  * =============================================================================
  */
 
-export default function ClientWorkspace({ clientId, onBack }: ClientWorkspaceProps) {
+export default function ClientWorkspace({ clientId, onBack, accountOwners, optionsLoading }: ClientWorkspaceProps) {
   const reduceMotion = useReducedMotion();
   const theme = useThemeBridge();
   const tabsId = useId();
+  const { mutate: mutateGlobal } = useSWRConfig();
 
   const [client, setClient] = useState<ClientRecord | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('overview');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -449,6 +459,59 @@ export default function ClientWorkspace({ clientId, onBack }: ClientWorkspacePro
     void loadClient();
     return () => requestRef.current?.abort();
   }, [loadClient]);
+
+  const handleClientSaved = useCallback(
+    (updated: ClientRecord) => {
+      setClient(updated);
+      setEditOpen(false);
+      notify('success', 'Client updated');
+
+      // Keep the Clients tab's SWR cache in sync without waiting for its
+      // next revalidation. Only the fields this form can change are
+      // patched in — counts/contacts/projects on the list are untouched
+      // since this edit never changes them.
+      const patch = {
+        name: updated.name,
+        displayName: updated.displayName,
+        description: updated.description,
+        industry: updated.industry,
+        country: updated.country,
+        city: updated.city,
+        logoUrl: updated.logoUrl,
+        websiteUrl: updated.websiteUrl,
+        status: updated.status,
+        priority: updated.priority,
+        relationshipType: updated.relationshipType,
+        relationshipStartedAt: updated.relationshipStartedAt,
+        liveSince: updated.liveSince,
+        domain: updated.domain,
+        adminUrl: updated.adminUrl,
+        billingCycle: updated.billingCycle,
+        contractValue: updated.contractValue,
+        currency: updated.currency,
+        renewalAt: updated.renewalAt,
+        integrationLive: updated.integrationLive,
+        accountOwner: updated.accountOwner,
+        updatedAt: updated.updatedAt,
+      };
+
+      void mutateGlobal(
+        CLIENTS_ENDPOINT,
+        (current: { clients: Array<Record<string, unknown>> } | undefined) =>
+          current
+            ? {
+                ...current,
+                clients: current.clients.map((item) =>
+                  (item as { id?: string }).id === updated.id ? { ...item, ...patch } : item,
+                ),
+              }
+            : current,
+        { revalidate: false },
+      );
+      void mutateGlobal(CLIENTS_ENDPOINT);
+    },
+    [mutateGlobal, notify],
+  );
 
   const copyValue = useCallback(
     async (value: string, message: string) => {
@@ -616,7 +679,17 @@ export default function ClientWorkspace({ clientId, onBack }: ClientWorkspacePro
                   </a>
                 ) : null}
 
-                <SoonButton icon={<Pencil size={13} />} label="Edit client" primary />
+                <button
+                  type="button"
+                  onClick={() => setEditOpen(true)}
+                  className={cx(
+                    'inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--accent)] px-3.5 text-[11px] font-semibold text-white shadow-sm transition hover:opacity-90',
+                    focusRing,
+                  )}
+                >
+                  <Pencil size={13} />
+                  Edit client
+                </button>
               </div>
             </div>
           </div>
@@ -739,6 +812,16 @@ export default function ClientWorkspace({ clientId, onBack }: ClientWorkspacePro
       <div ref={theme.ref} className="mx-auto w-full min-w-0 max-w-[1600px]">
         {content}
         <Toast toast={toast} onDismiss={() => setToast(null)} />
+        {client ? (
+          <EditClientDialog
+            open={editOpen}
+            client={client}
+            accountOwners={accountOwners}
+            optionsLoading={optionsLoading}
+            onClose={() => setEditOpen(false)}
+            onSaved={handleClientSaved}
+          />
+        ) : null}
       </div>
     </PortalTheme.Provider>
   );
@@ -1884,5 +1967,725 @@ function SecondaryButton({
     >
       {children}
     </button>
+  );
+}
+
+/* =============================================================================
+ * EDIT CLIENT
+ *
+ * Same ModalShell chrome (portal, backdrop, Escape, focus trap, scroll
+ * lock, PortalTheme) as the Add Client wizard in ClientsTab.tsx — copied in
+ * rather than imported, matching how the rest of this component's building
+ * blocks (ClientLogo, Toast, etc.) are each kept local to their own file.
+ * =============================================================================
+ */
+
+const MODAL_VARS = {
+  '--surface': '#FFFFFF',
+  '--surface-muted': '#F4F4F5',
+  '--line': '#D4D4D8',
+  '--text': '#0A0A0A',
+  '--text-muted': '#27272A',
+  '--text-subtle': '#52525B',
+} as CSSProperties;
+
+function focusableIn(root: HTMLElement) {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.offsetParent !== null);
+}
+
+function ModalShell({
+  open,
+  onClose,
+  labelledBy,
+  size = 'lg',
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  labelledBy: string;
+  size?: 'sm' | 'lg';
+  children: ReactNode;
+}) {
+  const reduceMotion = useReducedMotion();
+  const isClient = useIsClient();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  const inherited = useContext(PortalTheme);
+  const modalTheme = useMemo(() => ({ ...inherited, ...MODAL_VARS }), [inherited]);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const frame = window.requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      const target = panel.querySelector<HTMLElement>('[data-autofocus]') ?? focusableIn(panel)[0];
+      target?.focus({ preventScroll: true });
+    });
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+
+      const panel = panelRef.current;
+      if (!panel || !panel.contains(document.activeElement)) return;
+
+      const items = focusableIn(panel);
+      if (items.length === 0) return;
+
+      const first = items[0];
+      const last = items[items.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previous?.focus({ preventScroll: true });
+    };
+  }, [open]);
+
+  if (!isClient) return null;
+
+  return createPortal(
+    <AnimatePresence>
+      {open ? (
+        <div
+          key="modal"
+          style={modalTheme}
+          className="fixed inset-0 z-[120] flex items-end justify-center text-[var(--text)] sm:items-center sm:p-6"
+        >
+          <motion.div
+            aria-hidden="true"
+            className="absolute inset-0 bg-black/30 backdrop-blur-[3px]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0.12 : 0.22 }}
+            onClick={() => onCloseRef.current()}
+          />
+
+          <motion.div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={labelledBy}
+            className={cx(
+              'relative flex w-full flex-col overflow-hidden rounded-t-[26px] border border-[var(--line)] bg-white shadow-2xl sm:rounded-[26px]',
+              size === 'lg' ? 'sm:max-w-[720px]' : 'sm:max-w-[440px]',
+            )}
+            initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 28, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 14, scale: 0.98 }}
+            transition={
+              reduceMotion
+                ? { duration: 0.15 }
+                : { type: 'spring', stiffness: 420, damping: 36, mass: 0.9 }
+            }
+          >
+            <div className="mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-[var(--line)] sm:hidden" />
+            <PortalTheme.Provider value={modalTheme}>{children}</PortalTheme.Provider>
+          </motion.div>
+        </div>
+      ) : null}
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+/* ---------- Form primitives ---------- */
+
+function Field({
+  label,
+  required,
+  error,
+  hint,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  error?: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1 text-[9px] font-semibold text-[var(--text-muted)]">
+          {label}
+          {required ? <span className="text-[var(--accent)]">*</span> : null}
+        </span>
+        {hint ? <span className="truncate text-[8px] text-[var(--text-subtle)]">{hint}</span> : null}
+      </span>
+      {children}
+      {error ? <span className="mt-1 block text-[9px] font-medium text-red-600">{error}</span> : null}
+    </label>
+  );
+}
+
+const inputBase =
+  'h-10 w-full rounded-xl border bg-[var(--surface)] px-3 text-[11px] text-[var(--text)] outline-none transition placeholder:text-[var(--text-subtle)] focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60';
+
+function inputClass(error?: string) {
+  return cx(
+    inputBase,
+    error
+      ? 'border-red-500/60 focus:border-red-500 focus:ring-red-500/10'
+      : 'border-[var(--line)] focus:border-[var(--accent)] focus:ring-[var(--accent)]/10',
+  );
+}
+
+function normaliseUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function isValidUrl(value: string) {
+  try {
+    const url = new URL(normaliseUrl(value));
+    return Boolean(url.hostname) && url.hostname.includes('.');
+  } catch {
+    return false;
+  }
+}
+
+/* ---------- Enum options ---------- */
+
+const EDIT_STATUS_OPTIONS: Array<{ value: ClientStatus; label: string }> = [
+  { value: 'LEAD', label: 'Lead' },
+  { value: 'ONBOARDING', label: 'Onboarding' },
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'PAUSED', label: 'Paused' },
+  { value: 'ARCHIVED', label: 'Archived' },
+];
+
+const EDIT_PRIORITY_OPTIONS: Array<{ value: ClientPriority; label: string }> = [
+  { value: 'STANDARD', label: 'Standard' },
+  { value: 'IMPORTANT', label: 'Important' },
+  { value: 'STRATEGIC', label: 'Strategic' },
+];
+
+const EDIT_RELATIONSHIP_OPTIONS: Array<{ value: ClientRelationship; label: string }> = [
+  { value: 'CLIENT', label: 'Client' },
+  { value: 'PARTNER', label: 'Partner' },
+  { value: 'STRATEGIC_PARTNER', label: 'Strategic partner' },
+];
+
+const EDIT_BILLING_OPTIONS: Array<{ value: BillingCycle; label: string }> = [
+  { value: 'MONTHLY', label: 'Monthly' },
+  { value: 'QUARTERLY', label: 'Quarterly' },
+  { value: 'ANNUAL', label: 'Annual' },
+  { value: 'CUSTOM', label: 'Custom' },
+];
+
+const EDIT_CURRENCY_OPTIONS: Array<{ value: Currency; label: string }> = [
+  { value: 'NGN', label: 'NGN' },
+  { value: 'GBP', label: 'GBP' },
+  { value: 'USD', label: 'USD' },
+  { value: 'EUR', label: 'EUR' },
+];
+
+/* ---------- Edit form ---------- */
+
+type EditClientForm = {
+  name: string;
+  displayName: string;
+  description: string;
+  industry: string;
+  country: string;
+  city: string;
+  logoUrl: string;
+  logoPublicId: string;
+  websiteUrl: string;
+  domain: string;
+  adminUrl: string;
+  status: ClientStatus;
+  priority: ClientPriority;
+  relationshipType: ClientRelationship;
+  relationshipStartedAt: string;
+  liveSince: string;
+  accountOwnerId: string;
+  integrationLive: boolean;
+  billingCycle: BillingCycle;
+  contractValue: string;
+  currency: Currency;
+  renewalAt: string;
+  notes: string;
+};
+
+type EditFieldErrors = Partial<Record<keyof EditClientForm, string>>;
+
+function toDateInputValue(value: string | null | undefined) {
+  if (!value) return '';
+  return value.slice(0, 10);
+}
+
+function buildEditForm(client: ClientRecord): EditClientForm {
+  return {
+    name: client.name,
+    displayName: client.displayName ?? '',
+    description: client.description ?? '',
+    industry: client.industry ?? '',
+    country: client.country ?? '',
+    city: client.city ?? '',
+    logoUrl: client.logoUrl ?? '',
+    logoPublicId: '',
+    websiteUrl: client.websiteUrl ?? '',
+    domain: client.domain ?? '',
+    adminUrl: client.adminUrl ?? '',
+    status: client.status,
+    priority: client.priority,
+    relationshipType: client.relationshipType,
+    relationshipStartedAt: toDateInputValue(client.relationshipStartedAt),
+    liveSince: toDateInputValue(client.liveSince),
+    accountOwnerId: client.accountOwner?.id ?? '',
+    integrationLive: client.integrationLive,
+    billingCycle: client.billingCycle,
+    contractValue: client.contractValue ?? '0',
+    currency: client.currency,
+    renewalAt: toDateInputValue(client.renewalAt),
+    notes: client.notes ?? '',
+  };
+}
+
+function validateEditForm(form: EditClientForm): EditFieldErrors {
+  const errors: EditFieldErrors = {};
+
+  if (!form.name.trim()) errors.name = 'Enter a company name.';
+  if (form.websiteUrl.trim() && !isValidUrl(form.websiteUrl)) errors.websiteUrl = 'Enter a valid website.';
+
+  return errors;
+}
+
+function EditClientDialog({
+  open,
+  client,
+  accountOwners,
+  optionsLoading,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  client: ClientRecord;
+  accountOwners: AccountOwner[];
+  optionsLoading: boolean;
+  onClose: () => void;
+  onSaved: (client: ClientRecord) => void;
+}) {
+  const titleId = useId();
+  const clientRef = useRef(client);
+  clientRef.current = client;
+
+  const [form, setForm] = useState<EditClientForm>(() => buildEditForm(client));
+  const [errors, setErrors] = useState<EditFieldErrors>({});
+  const [issue, setIssue] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+
+  const initialSnapshotRef = useRef(JSON.stringify(buildEditForm(client)));
+
+  // Re-seed from the freshest client data every time the dialog opens, but
+  // never while it's open — a background refresh of `client` must not
+  // clobber what the admin is typing.
+  useEffect(() => {
+    if (!open) return;
+
+    const built = buildEditForm(clientRef.current);
+    setForm(built);
+    initialSnapshotRef.current = JSON.stringify(built);
+    setErrors({});
+    setIssue(null);
+    setConfirmDiscard(false);
+  }, [open]);
+
+  const isDirty = JSON.stringify(form) !== initialSnapshotRef.current;
+
+  const update = useCallback(<K extends keyof EditClientForm>(key: K, value: EditClientForm[K]) => {
+    setForm((current) => ({ ...current, [key]: value }));
+    setErrors((current) => (current[key] ? { ...current, [key]: undefined } : current));
+    setIssue(null);
+  }, []);
+
+  const discardTempLogo = useCallback(() => {
+    // Only ever a temp upload from this session — the persisted logo (if
+    // any) has no tracked publicId here and is never touched this way.
+    if (form.logoPublicId) void deleteClientLogo(form.logoPublicId);
+  }, [form.logoPublicId]);
+
+  const requestClose = useCallback(() => {
+    if (saving) return;
+
+    if (isDirty) {
+      setConfirmDiscard(true);
+      return;
+    }
+
+    discardTempLogo();
+    onClose();
+  }, [discardTempLogo, isDirty, onClose, saving]);
+
+  const confirmDiscardChanges = useCallback(() => {
+    discardTempLogo();
+    setConfirmDiscard(false);
+    onClose();
+  }, [discardTempLogo, onClose]);
+
+  const submit = useCallback(async () => {
+    const validationErrors = validateEditForm(form);
+
+    if (Object.keys(validationErrors).length) {
+      setErrors(validationErrors);
+      return;
+    }
+
+    setSaving(true);
+    setIssue(null);
+
+    try {
+      const response = await fetch(`/api/admin/clients/${encodeURIComponent(client.id)}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          name: form.name.trim(),
+          displayName: form.displayName.trim() || null,
+          description: form.description.trim() || null,
+          industry: form.industry.trim() || null,
+          country: form.country.trim() || null,
+          city: form.city.trim() || null,
+          logoUrl: form.logoUrl.trim() || null,
+          websiteUrl: form.websiteUrl.trim() ? normaliseUrl(form.websiteUrl) : null,
+          domain: form.domain.trim() || null,
+          adminUrl: form.adminUrl.trim() || null,
+          status: form.status,
+          priority: form.priority,
+          relationshipType: form.relationshipType,
+          relationshipStartedAt: form.relationshipStartedAt || null,
+          liveSince: form.liveSince || null,
+          accountOwnerId: form.accountOwnerId || null,
+          integrationLive: form.integrationLive,
+          billingCycle: form.billingCycle,
+          contractValue: form.contractValue || 0,
+          currency: form.currency,
+          renewalAt: form.renewalAt || null,
+          notes: form.notes.trim() || null,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => ({ ok: false }))) as {
+        ok: boolean;
+        client?: ClientRecord;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.ok || !payload.client) {
+        throw new Error(payload.error || 'The client could not be updated.');
+      }
+
+      // The temp upload (if any) is now the persisted logo — it must
+      // survive, so no cleanup call happens on this path.
+      onSaved(payload.client);
+    } catch (cause) {
+      // Keep the temp logo and the entered values so the admin can retry
+      // without re-uploading or re-typing anything.
+      setIssue(cause instanceof Error ? cause.message : 'The client could not be updated.');
+    } finally {
+      setSaving(false);
+    }
+  }, [client.id, form, onSaved]);
+
+  return (
+    <ModalShell open={open} onClose={requestClose} labelledBy={titleId} size="lg">
+      <div className="relative flex max-h-[92dvh] min-h-0 flex-col sm:max-h-[min(88dvh,900px)]">
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--line)] px-5 pb-4 pt-4 sm:px-7 sm:pt-6">
+          <div>
+            <h2 id={titleId} className="text-[15px] font-semibold tracking-[-0.02em] text-[var(--text)]">
+              Edit client
+            </h2>
+            <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">{client.displayName || client.name}</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={requestClose}
+            disabled={saving}
+            aria-label="Close"
+            className={cx(
+              'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-subtle)] transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)] disabled:opacity-60',
+              focusRing,
+            )}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-5 sm:px-7">
+          <div className="space-y-6">
+            <section>
+              <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">Company</h3>
+
+              <div className="mt-3">
+                <LogoUploader
+                  logoUrl={form.logoUrl}
+                  logoPublicId={form.logoPublicId}
+                  title={form.displayName.trim() || form.name.trim()}
+                  onChange={(logoUrl, logoPublicId) => {
+                    update('logoUrl', logoUrl);
+                    update('logoPublicId', logoPublicId);
+                  }}
+                />
+              </div>
+
+              <div className="mt-4">
+                <Field label="Company name" required error={errors.name}>
+                  <input
+                    data-autofocus
+                    value={form.name}
+                    onChange={(event) => update('name', event.target.value)}
+                    aria-invalid={Boolean(errors.name)}
+                    className={inputClass(errors.name)}
+                  />
+                </Field>
+              </div>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <Field label="Short name">
+                  <input value={form.displayName} onChange={(event) => update('displayName', event.target.value)} className={inputClass()} />
+                </Field>
+                <Field label="Industry">
+                  <input value={form.industry} onChange={(event) => update('industry', event.target.value)} className={inputClass()} />
+                </Field>
+                <Field label="Country">
+                  <input value={form.country} onChange={(event) => update('country', event.target.value)} className={inputClass()} />
+                </Field>
+                <Field label="City">
+                  <input value={form.city} onChange={(event) => update('city', event.target.value)} className={inputClass()} />
+                </Field>
+                <Field label="Website" error={errors.websiteUrl}>
+                  <input
+                    value={form.websiteUrl}
+                    onChange={(event) => update('websiteUrl', event.target.value)}
+                    inputMode="url"
+                    aria-invalid={Boolean(errors.websiteUrl)}
+                    className={inputClass(errors.websiteUrl)}
+                  />
+                </Field>
+                <Field label="Domain">
+                  <input value={form.domain} onChange={(event) => update('domain', event.target.value)} className={inputClass()} />
+                </Field>
+                <Field label="Their admin URL">
+                  <input value={form.adminUrl} onChange={(event) => update('adminUrl', event.target.value)} className={inputClass()} />
+                </Field>
+              </div>
+
+              <div className="mt-4">
+                <Field label="Description">
+                  <textarea
+                    value={form.description}
+                    onChange={(event) => update('description', event.target.value)}
+                    rows={3}
+                    maxLength={600}
+                    className={cx(inputClass(), 'h-auto resize-none py-2.5 leading-5')}
+                  />
+                </Field>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">Relationship</h3>
+
+              <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                <Field label="Status">
+                  <select value={form.status} onChange={(event) => update('status', event.target.value as ClientStatus)} className={inputClass()}>
+                    {EDIT_STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Priority">
+                  <select value={form.priority} onChange={(event) => update('priority', event.target.value as ClientPriority)} className={inputClass()}>
+                    {EDIT_PRIORITY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Relationship type">
+                  <select
+                    value={form.relationshipType}
+                    onChange={(event) => update('relationshipType', event.target.value as ClientRelationship)}
+                    className={inputClass()}
+                  >
+                    {EDIT_RELATIONSHIP_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Account owner" hint={optionsLoading ? 'Loading…' : undefined}>
+                  <select
+                    value={form.accountOwnerId}
+                    onChange={(event) => update('accountOwnerId', event.target.value)}
+                    disabled={optionsLoading}
+                    className={inputClass()}
+                  >
+                    <option value="">No owner</option>
+                    {accountOwners.map((owner) => (
+                      <option key={owner.id} value={owner.id}>{personName(owner)}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Relationship started">
+                  <input
+                    type="date"
+                    value={form.relationshipStartedAt}
+                    onChange={(event) => update('relationshipStartedAt', event.target.value)}
+                    className={inputClass()}
+                  />
+                </Field>
+                <Field label="Live since">
+                  <input type="date" value={form.liveSince} onChange={(event) => update('liveSince', event.target.value)} className={inputClass()} />
+                </Field>
+              </div>
+
+              <label className="mt-4 flex items-center gap-2 text-[11px] font-medium text-[var(--text)]">
+                <input
+                  type="checkbox"
+                  checked={form.integrationLive}
+                  onChange={(event) => update('integrationLive', event.target.checked)}
+                  className="h-4 w-4 rounded border-[var(--line)] text-[var(--accent)] focus:ring-[var(--accent)]/30"
+                />
+                Integration is live
+              </label>
+            </section>
+
+            <section>
+              <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">Commercial</h3>
+
+              <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                <Field label="Billing cycle">
+                  <select value={form.billingCycle} onChange={(event) => update('billingCycle', event.target.value as BillingCycle)} className={inputClass()}>
+                    {EDIT_BILLING_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Currency">
+                  <select value={form.currency} onChange={(event) => update('currency', event.target.value as Currency)} className={inputClass()}>
+                    {EDIT_CURRENCY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Contract value">
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={form.contractValue}
+                    onChange={(event) => update('contractValue', event.target.value)}
+                    className={inputClass()}
+                  />
+                </Field>
+                <Field label="Renewal date">
+                  <input type="date" value={form.renewalAt} onChange={(event) => update('renewalAt', event.target.value)} className={inputClass()} />
+                </Field>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">Internal</h3>
+
+              <div className="mt-3">
+                <Field label="Notes" hint="Not visible to the client">
+                  <textarea
+                    value={form.notes}
+                    onChange={(event) => update('notes', event.target.value)}
+                    rows={4}
+                    className={cx(inputClass(), 'h-auto resize-none py-2.5 leading-5')}
+                  />
+                </Field>
+              </div>
+            </section>
+
+            {issue ? (
+              <p role="alert" className="flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3.5 py-3 text-[10px] font-medium leading-5 text-red-600">
+                <AlertCircle size={13} className="mt-0.5 shrink-0" />
+                {issue}
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="border-t border-[var(--line)] bg-white px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-7">
+          <div className="flex items-center justify-end gap-2">
+            <SecondaryButton onClick={requestClose}>Cancel</SecondaryButton>
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={saving}
+              className={cx(
+                'inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[11px] font-semibold text-white shadow-sm transition hover:opacity-90 disabled:opacity-60',
+                focusRing,
+              )}
+            >
+              {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+              {saving ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </div>
+
+        {confirmDiscard ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/90 p-6">
+            <div className="w-full max-w-[320px] rounded-[18px] border border-[var(--line)] bg-[var(--surface)] p-5 text-center shadow-xl">
+              <p className="text-[12px] font-semibold text-[var(--text)]">Discard unsaved changes?</p>
+              <p className="mt-1.5 text-[10px] text-[var(--text-muted)]">Your edits to this client haven&apos;t been saved.</p>
+              <div className="mt-4 flex items-center justify-center gap-2">
+                <SecondaryButton onClick={() => setConfirmDiscard(false)}>Keep editing</SecondaryButton>
+                <button
+                  type="button"
+                  onClick={confirmDiscardChanges}
+                  className={cx(
+                    'inline-flex h-9 items-center gap-2 rounded-xl bg-red-600 px-3.5 text-[10px] font-semibold text-white transition hover:opacity-90',
+                    focusRing,
+                  )}
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </ModalShell>
   );
 }

@@ -69,14 +69,19 @@ type SortMode =
   | 'members-desc'
   | 'newest';
 
-type Person = {
+// A department lead or employee. Department leads and membership are both
+// drawn from Employee records, not AdminUser (dashboard login) accounts, so
+// a department lead never needs a dashboard account.
+type EmployeeRef = {
   id: string;
+  employeeRef?: string | null;
   firstName: string | null;
   lastName: string | null;
-  email: string;
+  preferredName?: string | null;
+  workEmail?: string | null;
   avatarUrl: string | null;
-  role?: string;
-  active?: boolean;
+  jobTitle?: string | null;
+  status?: string;
   departmentId?: string | null;
 };
 
@@ -89,7 +94,7 @@ type DepartmentSummary = {
   parentId?: string | null;
   displayOrder: number;
   _count?: {
-    members?: number;
+    employees?: number;
   };
 };
 
@@ -107,7 +112,7 @@ type Department = {
   displayOrder: number;
   createdAt: string;
   updatedAt: string;
-  lead: Person | null;
+  lead: EmployeeRef | null;
   parent: {
     id: string;
     name: string;
@@ -116,9 +121,9 @@ type Department = {
     status: DepartmentStatus;
   } | null;
   children: DepartmentSummary[];
-  members: Person[];
+  employees: EmployeeRef[];
   _count: {
-    members: number;
+    employees: number;
     children: number;
   };
 };
@@ -142,7 +147,7 @@ type DepartmentsResponse = {
 
 type OptionsResponse = {
   ok?: boolean;
-  leads?: Person[];
+  leads?: EmployeeRef[];
   departments?: DepartmentSummary[];
   statuses?: DepartmentStatus[];
   error?: string;
@@ -459,7 +464,7 @@ function useThemeBridge() {
   return { ref, vars };
 }
 
-function personName(person: Person | null) {
+function personName(person: EmployeeRef | null) {
   if (!person) {
     return '';
   }
@@ -469,10 +474,10 @@ function personName(person: Person | null) {
     .join(' ')
     .trim();
 
-  return full || person.email;
+  return full || person.preferredName || person.workEmail || '';
 }
 
-function initials(person: Person) {
+function initials(person: EmployeeRef) {
   const first = person.firstName?.trim()?.[0] ?? '';
   const last = person.lastName?.trim()?.[0] ?? '';
 
@@ -480,7 +485,7 @@ function initials(person: Person) {
     return `${first}${last}`.toUpperCase();
   }
 
-  return person.email.slice(0, 2).toUpperCase();
+  return (person.workEmail ?? '??').slice(0, 2).toUpperCase();
 }
 
 function slugify(value: string) {
@@ -698,7 +703,7 @@ export default function DepartmentsTab() {
 
   const [departments, setDepartments] = useState<Department[]>([]);
   const [meta, setMeta] = useState<DepartmentMeta>(EMPTY_META);
-  const [leads, setLeads] = useState<Person[]>([]);
+  const [leads, setLeads] = useState<EmployeeRef[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<
     DepartmentSummary[]
   >([]);
@@ -985,7 +990,7 @@ export default function DepartmentsTab() {
         break;
       case 'members-desc':
         next.sort(
-          (a, b) => b._count.members - a._count.members,
+          (a, b) => b._count.employees - a._count.employees,
         );
         break;
       case 'newest':
@@ -1509,10 +1514,10 @@ function DepartmentCard({
   onEdit: () => void;
   onMenu: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }) {
-  const visibleMembers = department.members.slice(0, 4);
+  const visibleMembers = department.employees.slice(0, 4);
   const remaining = Math.max(
     0,
-    department._count.members - visibleMembers.length,
+    department._count.employees - visibleMembers.length,
   );
 
   return (
@@ -1620,13 +1625,13 @@ function DepartmentCard({
                 Members
               </p>
               <p className="mt-1 text-[16px] font-semibold tabular-nums tracking-[-0.03em] text-[var(--text)]">
-                {department._count.members}
+                {department._count.employees}
               </p>
             </div>
           </div>
 
           <div className="mt-4 flex items-center justify-between gap-3">
-            {department._count.members > 0 ? (
+            {department._count.employees > 0 ? (
               <div className="flex -space-x-2">
                 {visibleMembers.map((member) => (
                   <PersonAvatar key={member.id} person={member} />
@@ -1652,7 +1657,7 @@ function DepartmentCard({
                 focusRing,
               )}
             >
-              {department._count.members > 0
+              {department._count.employees > 0
                 ? 'Manage'
                 : 'Edit department'}
               <ChevronRight
@@ -1771,7 +1776,7 @@ function DepartmentList({
               </div>
 
               <p className="hidden text-[10px] font-semibold tabular-nums text-[var(--text)] lg:block">
-                {department._count.members}
+                {department._count.employees}
               </p>
 
               <p className="hidden text-[9px] text-[var(--text-subtle)] lg:block">
@@ -1810,7 +1815,7 @@ function DepartmentList({
             <div className="mt-3 flex flex-wrap items-center gap-2 lg:hidden">
               <StatusBadge status={department.status} compact />
               <span className="text-[9px] text-[var(--text-subtle)]">
-                {department._count.members} members
+                {department._count.employees} members
               </span>
               {department.lead ? (
                 <span className="text-[9px] text-[var(--text-subtle)]">
@@ -2018,7 +2023,7 @@ function DepartmentEditor({
 }: {
   open: boolean;
   department: Department | null;
-  leads: Person[];
+  leads: EmployeeRef[];
   options: DepartmentSummary[];
   departments: Department[];
   optionsLoading: boolean;
@@ -2108,7 +2113,7 @@ function EditorForm({
 }: {
   titleId: string;
   department: Department | null;
-  leads: Person[];
+  leads: EmployeeRef[];
   options: DepartmentSummary[];
   departments: Department[];
   optionsLoading: boolean;
@@ -2277,10 +2282,8 @@ function EditorForm({
       ...leads.map((person) => ({
         value: person.id,
         label: personName(person),
-        hint: person.role
-          ? person.role.replace(/_/g, ' ').toLowerCase()
-          : person.email,
-        keywords: person.email,
+        hint: person.jobTitle ?? person.workEmail ?? undefined,
+        keywords: person.workEmail ?? undefined,
         leading: <PersonAvatar person={person} size="small" />,
       })),
     ],
@@ -2935,13 +2938,13 @@ function ConfirmArchiveDialog({
 
         <p className="mt-2 text-[11px] leading-5 text-[var(--text-muted)]">
           It stays in historical records and appears under the
-          Archived filter. Members keep their accounts.
+          Archived filter. Employees keep their profiles.
         </p>
 
-        {department && department._count.members > 0 ? (
+        {department && department._count.employees > 0 ? (
           <p className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] px-3 py-2.5 text-[10px] leading-5 text-[var(--text-muted)]">
-            {department._count.members}{' '}
-            {department._count.members === 1
+            {department._count.employees}{' '}
+            {department._count.employees === 1
               ? 'person is'
               : 'people are'}{' '}
             currently assigned here.
@@ -4038,7 +4041,7 @@ function PersonAvatar({
   person,
   size = 'normal',
 }: {
-  person: Person | null;
+  person: EmployeeRef | null;
   size?: 'small' | 'normal';
 }) {
   const dimension =

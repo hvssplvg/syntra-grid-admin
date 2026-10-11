@@ -10,6 +10,8 @@ import {
   calendarApiError,
   requireCalendarIdentity,
 } from "@/lib/calendar/server";
+import { requirePermission } from "@/lib/auth/current-admin";
+import { AccessAction, AccessScope } from "@/app/generated/prisma/enums";
 
 import { prisma } from "@/lib/prisma";
 
@@ -108,6 +110,14 @@ export async function GET(
   try {
     const identity =
       await requireCalendarIdentity();
+
+    if (identity.admin.restrictedAccess) {
+      await requirePermission(
+        "calendar",
+        AccessAction.VIEW,
+        { scope: AccessScope.OWN },
+      );
+    }
 
     const { id } = await context.params;
 
@@ -293,6 +303,14 @@ export async function PATCH(
   try {
     const identity =
       await requireCalendarIdentity();
+
+    if (identity.admin.restrictedAccess) {
+      await requirePermission(
+        "calendar",
+        AccessAction.EDIT,
+        { scope: AccessScope.OWN },
+      );
+    }
 
     const { id } = await context.params;
 
@@ -774,6 +792,14 @@ export async function DELETE(
   try {
     const identity =
       await requireCalendarIdentity();
+
+    if (identity.admin.restrictedAccess) {
+      await requirePermission(
+        "calendar",
+        AccessAction.EDIT,
+        { scope: AccessScope.OWN },
+      );
+    }
 
     const { id } =
       await context.params;

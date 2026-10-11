@@ -18,6 +18,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import SmartPlanner from './SmartPlanner';
 import {
   AnimatePresence,
   motion,
@@ -205,6 +206,10 @@ type EventTypeMeta = {
   soft: string;
   text: string;
   border: string;
+  /* Solid, high contrast block used for events on the grid. */
+  chip: string;
+  /* Hex used for bars and charts where a class cannot be used. */
+  hex: string;
 };
 
 type NewEventForm = {
@@ -335,21 +340,21 @@ const PRIORITY_LABELS: Record<EventPriority, string> = {
 };
 
 const EVENT_TYPES: Record<EventType, EventTypeMeta> = {
-  MEETING: { label: 'Meeting', icon: Users, dot: 'bg-blue-500', soft: 'bg-blue-500/10', text: 'text-blue-700', border: 'border-l-blue-500' },
-  DEADLINE: { label: 'Deadline', icon: Flag, dot: 'bg-red-500', soft: 'bg-red-500/10', text: 'text-red-700', border: 'border-l-red-500' },
-  MILESTONE: { label: 'Milestone', icon: Sparkles, dot: 'bg-violet-500', soft: 'bg-violet-500/10', text: 'text-violet-700', border: 'border-l-violet-500' },
-  DEPLOYMENT: { label: 'Deployment', icon: Code2, dot: 'bg-emerald-500', soft: 'bg-emerald-500/10', text: 'text-emerald-700', border: 'border-l-emerald-500' },
-  RELEASE: { label: 'Release', icon: Rocket, dot: 'bg-cyan-500', soft: 'bg-cyan-500/10', text: 'text-cyan-700', border: 'border-l-cyan-500' },
-  FINANCE: { label: 'Finance', icon: CircleDollarSign, dot: 'bg-[var(--accent)]', soft: 'bg-[color:var(--accent)]/12', text: 'text-[var(--text)]', border: 'border-l-[var(--accent)]' },
-  SUPPORT: { label: 'Support', icon: Headphones, dot: 'bg-orange-500', soft: 'bg-orange-500/10', text: 'text-orange-700', border: 'border-l-orange-500' },
-  MAINTENANCE: { label: 'Maintenance', icon: Wrench, dot: 'bg-slate-500', soft: 'bg-slate-500/10', text: 'text-slate-700', border: 'border-l-slate-500' },
-  COMPANY: { label: 'Company', icon: BriefcaseBusiness, dot: 'bg-fuchsia-500', soft: 'bg-fuchsia-500/10', text: 'text-fuchsia-700', border: 'border-l-fuchsia-500' },
-  PERSONAL: { label: 'Personal', icon: CalendarDays, dot: 'bg-teal-500', soft: 'bg-teal-500/10', text: 'text-teal-700', border: 'border-l-teal-500' },
-  FOCUS: { label: 'Focus', icon: Clock3, dot: 'bg-indigo-500', soft: 'bg-indigo-500/10', text: 'text-indigo-700', border: 'border-l-indigo-500' },
-  REMINDER: { label: 'Reminder', icon: BellRing, dot: 'bg-yellow-500', soft: 'bg-yellow-500/10', text: 'text-yellow-800', border: 'border-l-yellow-500' },
-  OTHER: { label: 'Other', icon: CalendarDays, dot: 'bg-zinc-400', soft: 'bg-zinc-500/10', text: 'text-zinc-700', border: 'border-l-zinc-400' },
-  LEAVE: { label: 'Leave', icon: CalendarDays, dot: 'bg-rose-500', soft: 'bg-rose-500/10', text: 'text-rose-700', border: 'border-l-rose-500' },
-  INTERVIEW: { label: 'Interview', icon: UserRound, dot: 'bg-purple-500', soft: 'bg-purple-500/10', text: 'text-purple-700', border: 'border-l-purple-500' },
+  MEETING: { label: 'Meeting', icon: Users, dot: 'bg-blue-500', soft: 'bg-blue-500/10', text: 'text-blue-700', border: 'border-l-blue-500', chip: 'bg-blue-100 text-blue-950 hover:bg-blue-200/80', hex: '#3B82F6' },
+  DEADLINE: { label: 'Deadline', icon: Flag, dot: 'bg-red-500', soft: 'bg-red-500/10', text: 'text-red-700', border: 'border-l-red-500', chip: 'bg-red-100 text-red-950 hover:bg-red-200/80', hex: '#EF4444' },
+  MILESTONE: { label: 'Milestone', icon: Sparkles, dot: 'bg-violet-500', soft: 'bg-violet-500/10', text: 'text-violet-700', border: 'border-l-violet-500', chip: 'bg-violet-100 text-violet-950 hover:bg-violet-200/80', hex: '#8B5CF6' },
+  DEPLOYMENT: { label: 'Deployment', icon: Code2, dot: 'bg-emerald-500', soft: 'bg-emerald-500/10', text: 'text-emerald-700', border: 'border-l-emerald-500', chip: 'bg-emerald-100 text-emerald-950 hover:bg-emerald-200/80', hex: '#10B981' },
+  RELEASE: { label: 'Release', icon: Rocket, dot: 'bg-cyan-500', soft: 'bg-cyan-500/10', text: 'text-cyan-700', border: 'border-l-cyan-500', chip: 'bg-cyan-100 text-cyan-950 hover:bg-cyan-200/80', hex: '#06B6D4' },
+  FINANCE: { label: 'Finance', icon: CircleDollarSign, dot: 'bg-[var(--accent)]', soft: 'bg-[color:var(--accent)]/12', text: 'text-[var(--text)]', border: 'border-l-[var(--accent)]', chip: 'bg-amber-100 text-amber-950 hover:bg-amber-200/80', hex: '#D4A017' },
+  SUPPORT: { label: 'Support', icon: Headphones, dot: 'bg-orange-500', soft: 'bg-orange-500/10', text: 'text-orange-700', border: 'border-l-orange-500', chip: 'bg-orange-100 text-orange-950 hover:bg-orange-200/80', hex: '#F97316' },
+  MAINTENANCE: { label: 'Maintenance', icon: Wrench, dot: 'bg-slate-500', soft: 'bg-slate-500/10', text: 'text-slate-700', border: 'border-l-slate-500', chip: 'bg-slate-200 text-slate-900 hover:bg-slate-300/80', hex: '#64748B' },
+  COMPANY: { label: 'Company', icon: BriefcaseBusiness, dot: 'bg-fuchsia-500', soft: 'bg-fuchsia-500/10', text: 'text-fuchsia-700', border: 'border-l-fuchsia-500', chip: 'bg-fuchsia-100 text-fuchsia-950 hover:bg-fuchsia-200/80', hex: '#D946EF' },
+  PERSONAL: { label: 'Personal', icon: CalendarDays, dot: 'bg-teal-500', soft: 'bg-teal-500/10', text: 'text-teal-700', border: 'border-l-teal-500', chip: 'bg-teal-100 text-teal-950 hover:bg-teal-200/80', hex: '#14B8A6' },
+  FOCUS: { label: 'Focus', icon: Clock3, dot: 'bg-indigo-500', soft: 'bg-indigo-500/10', text: 'text-indigo-700', border: 'border-l-indigo-500', chip: 'bg-indigo-100 text-indigo-950 hover:bg-indigo-200/80', hex: '#6366F1' },
+  REMINDER: { label: 'Reminder', icon: BellRing, dot: 'bg-yellow-500', soft: 'bg-yellow-500/10', text: 'text-yellow-800', border: 'border-l-yellow-500', chip: 'bg-yellow-100 text-yellow-950 hover:bg-yellow-200/80', hex: '#EAB308' },
+  OTHER: { label: 'Other', icon: CalendarDays, dot: 'bg-zinc-400', soft: 'bg-zinc-500/10', text: 'text-zinc-700', border: 'border-l-zinc-400', chip: 'bg-zinc-200 text-zinc-900 hover:bg-zinc-300/80', hex: '#A1A1AA' },
+  LEAVE: { label: 'Leave', icon: CalendarDays, dot: 'bg-rose-500', soft: 'bg-rose-500/10', text: 'text-rose-700', border: 'border-l-rose-500', chip: 'bg-rose-100 text-rose-950 hover:bg-rose-200/80', hex: '#F43F5E' },
+  INTERVIEW: { label: 'Interview', icon: UserRound, dot: 'bg-purple-500', soft: 'bg-purple-500/10', text: 'text-purple-700', border: 'border-l-purple-500', chip: 'bg-purple-100 text-purple-950 hover:bg-purple-200/80', hex: '#A855F7' },
 };
 
 const TYPE_KEYWORDS: Array<{ type: ManualEventType; words: string[] }> = [
@@ -647,6 +652,30 @@ export default function CalendarTab() {
 
   const [draft, setDraft] = useState<EventDraft | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [smartPlannerOpen, setSmartPlannerOpen] = useState(false);
+
+  /*
+   * Smart Planner renders in a portal on document.body, outside the element
+   * that defines the dashboard colour variables, so its surfaces resolved to
+   * nothing and looked transparent. While it is open, give body the same solid
+   * white and gold palette the other modals use, then restore it on close.
+   */
+  useEffect(() => {
+    if (!smartPlannerOpen) return;
+
+    const body = document.body;
+    const palette = { ...(theme.vars as Record<string, string>), ...(MODAL_VARS as Record<string, string>) };
+    const previous = Object.keys(palette).map((name) => [name, body.style.getPropertyValue(name)] as const);
+
+    Object.entries(palette).forEach(([name, value]) => body.style.setProperty(name, String(value)));
+
+    return () => {
+      previous.forEach(([name, value]) => {
+        if (value) body.style.setProperty(name, value);
+        else body.style.removeProperty(name);
+      });
+    };
+  }, [smartPlannerOpen, theme.vars]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -990,7 +1019,7 @@ export default function CalendarTab() {
   const shortcutRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
 
   shortcutRef.current = (event: KeyboardEvent) => {
-    if (createOpen || detailOpen || event.defaultPrevented) return;
+    if (createOpen || detailOpen || smartPlannerOpen || event.defaultPrevented) return;
 
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
       event.preventDefault();
@@ -1044,7 +1073,7 @@ export default function CalendarTab() {
 
   return (
     <PortalTheme.Provider value={theme.vars}>
-      <div ref={theme.ref} className="mx-auto w-full min-w-0 max-w-[1800px] space-y-4">
+      <div ref={theme.ref} className="mx-auto flex min-h-[calc(100dvh-96px)] w-full min-w-0 max-w-[1800px] flex-col gap-4">
         <section className="rounded-[26px] border border-[var(--line)] bg-[var(--surface)] p-3 shadow-sm sm:p-4">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex min-w-0 items-center gap-3">
@@ -1166,6 +1195,20 @@ export default function CalendarTab() {
 
               <button
                 type="button"
+                onClick={() => setSmartPlannerOpen(true)}
+                disabled={!canCreate}
+                title={canCreate ? 'Import a schedule with Smart Planner' : 'Read-only calendar'}
+                className={cx(
+                  'inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3.5 text-[11px] font-semibold text-[var(--text)] transition hover:border-[var(--accent)] hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-50',
+                  focusRing,
+                )}
+              >
+                <Sparkles size={14} className="text-[var(--accent)]" />
+                Smart Planner
+              </button>
+
+              <button
+                type="button"
                 onClick={() => openCreate(selectedDate)}
                 disabled={!canCreate}
                 className={cx(
@@ -1220,11 +1263,11 @@ export default function CalendarTab() {
           </div>
         ) : null}
 
-        <section className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="relative min-w-0 overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-sm">
+        <section className="grid min-w-0 flex-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="relative flex min-h-[calc(100dvh-230px)] min-w-0 flex-col overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-sm">
             <AnimatePresence>{loading ? <CalendarLoadingOverlay /> : null}</AnimatePresence>
 
-            <div className="overflow-x-auto">
+            <div className="flex min-h-0 flex-1 flex-col overflow-x-auto [&>*]:flex-1">
               {view === 'month' ? (
                 <MonthView
                   currentDate={currentDate}
@@ -1297,8 +1340,8 @@ export default function CalendarTab() {
             </footer>
           </div>
 
-          <aside className="min-w-0 overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-sm 2xl:self-start">
-            <div className="grid divide-y divide-[var(--line)] md:grid-cols-2 md:divide-x md:divide-y-0 2xl:grid-cols-1 2xl:divide-x-0 2xl:divide-y">
+          <aside className="flex min-w-0 flex-col overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-sm">
+            <div className="grid flex-1 divide-y divide-[var(--line)] md:grid-cols-2 md:divide-x md:divide-y-0 2xl:flex 2xl:flex-col 2xl:divide-x-0 2xl:divide-y">
               <MiniCalendar selectedDate={selectedDate} today={today} eventsByDate={eventsByDate} onSelect={jumpToDate} />
 
               <div className="md:row-span-2 2xl:row-span-1">
@@ -1313,9 +1356,30 @@ export default function CalendarTab() {
               </div>
 
               <UpcomingPanel events={upcomingEvents} today={today} onSelectEvent={openEvent} />
+
+              <MonthPulse
+                monthDate={currentDate}
+                events={filteredEvents}
+                today={today}
+                onJump={jumpToDate}
+              />
             </div>
           </aside>
         </section>
+
+        <SmartPlanner
+          open={smartPlannerOpen}
+          onClose={() => setSmartPlannerOpen(false)}
+          onImported={async (result) => {
+            if (result.summary.imported > 0) {
+              notify('success', result.message);
+              await loadEvents(true);
+            }
+          }}
+          canCreate={canCreate}
+          isManager={options?.permissions.isManager ?? false}
+          defaultTimezone={typeof window !== 'undefined' ? (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC') : 'UTC'}
+        />
 
         {options && draft ? (
           <CreateEventModal
@@ -1457,15 +1521,38 @@ function MonthView({
     return Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
   }, [currentDate]);
 
+  /*
+   * The grid stretches to fill the screen, so the number of events each day
+   * can show is measured from the real row height instead of being fixed.
+   */
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [maxEvents, setMaxEvents] = useState(MAX_MONTH_EVENTS);
+
+  useEffect(() => {
+    const element = gridRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+
+    const measure = () => {
+      const rowHeight = element.clientHeight / 6;
+      // 40px for the date header and padding, 27px per event row.
+      setMaxEvents(Math.max(2, Math.min(8, Math.floor((rowHeight - 40) / 27))));
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   return (
-    <div className="min-w-[760px]">
-      <div className="grid grid-cols-7 border-b border-[var(--line)]">
+    <div className="flex h-full min-w-[760px] flex-col">
+      <div className="grid grid-cols-7 border-b border-[var(--line)] bg-[var(--surface-muted)]/40">
         {WEEK_DAYS.map((day, index) => (
           <div
             key={day}
             className={cx(
-              'px-3 py-2.5 text-[9px] font-bold uppercase tracking-[0.12em]',
-              index >= 5 ? 'text-[var(--text-subtle)]/70' : 'text-[var(--text-subtle)]',
+              'px-3 py-2.5 text-[10px] font-bold uppercase tracking-[0.12em]',
+              index >= 5 ? 'text-[var(--text-subtle)]' : 'text-[var(--text-muted)]',
             )}
           >
             {day}
@@ -1473,7 +1560,7 @@ function MonthView({
         ))}
       </div>
 
-      <div className="grid grid-cols-7">
+      <div ref={gridRef} className="grid flex-1 grid-cols-7 grid-rows-[repeat(6,minmax(128px,1fr))]">
         {days.map((date, index) => {
           const key = toDateKey(date);
 
@@ -1488,6 +1575,7 @@ function MonthView({
               isWeekend={index % 7 >= 5}
               isLastColumn={index % 7 === 6}
               isLastRow={index >= 35}
+              maxEvents={maxEvents}
               canCreate={canCreate}
               onSelect={() => onSelectDate(date)}
               onCreate={() => onCreate(date)}
@@ -1509,11 +1597,13 @@ function DayCell({
   isWeekend,
   isLastColumn,
   isLastRow,
+  maxEvents,
   canCreate,
   onSelect,
   onCreate,
   onSelectEvent,
 }: {
+  maxEvents: number;
   date: Date;
   events: CalendarItem[];
   inMonth: boolean;
@@ -1527,8 +1617,11 @@ function DayCell({
   onCreate: () => void;
   onSelectEvent: (event: CalendarItem) => void;
 }) {
-  const visible = events.slice(0, MAX_MONTH_EVENTS);
+  // Keep one row free for the "more" link when the day overflows.
+  const limit = events.length > maxEvents ? Math.max(1, maxEvents - 1) : maxEvents;
+  const visible = events.slice(0, limit);
   const remaining = events.length - visible.length;
+  const busy = events.length >= 3;
   const label = date.getDate() === 1 ? formatShortDate(date) : String(date.getDate());
 
   return (
@@ -1536,18 +1629,20 @@ function DayCell({
       onClick={onSelect}
       onDoubleClick={canCreate ? onCreate : undefined}
       className={cx(
-        'group relative flex min-h-[122px] cursor-default flex-col gap-1 border-[var(--line)] p-1.5 transition-colors',
+        'group relative flex min-h-0 cursor-default flex-col gap-1 overflow-hidden border-[var(--line)] p-1.5 transition-colors',
         isSelected
-          ? 'bg-[color:var(--accent)]/[0.06]'
-          : isWeekend
-            ? 'bg-[var(--surface-muted)]/40 hover:bg-[var(--surface-muted)]/70'
-            : 'hover:bg-[var(--surface-muted)]/50',
+          ? 'bg-[color:var(--accent)]/[0.08]'
+          : isToday
+            ? 'bg-[color:var(--accent)]/[0.04] hover:bg-[color:var(--accent)]/[0.07]'
+            : isWeekend
+              ? 'bg-[var(--surface-muted)]/50 hover:bg-[var(--surface-muted)]/80'
+              : 'hover:bg-[var(--surface-muted)]/60',
         !isLastColumn && 'border-r',
         !isLastRow && 'border-b',
       )}
     >
       {isSelected ? (
-        <span className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-[color:var(--accent)]/40" />
+        <span className="pointer-events-none absolute inset-0 ring-2 ring-inset ring-[color:var(--accent)]/55" />
       ) : null}
 
       <div className={cx('flex items-center justify-between', !inMonth && 'opacity-45')}>
@@ -1558,13 +1653,27 @@ function DayCell({
             onSelect();
           }}
           className={cx(
-            'flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold tabular-nums',
-            isToday ? 'bg-[var(--accent)] text-white' : 'text-[var(--text)] hover:bg-[var(--surface-muted)]',
+            'flex h-7 min-w-7 items-center justify-center rounded-full px-2 text-[12.5px] font-bold tabular-nums',
+            isToday
+              ? 'bg-[var(--accent)] text-white shadow-[0_4px_12px_-4px_var(--accent)]'
+              : 'text-[var(--text)] hover:bg-[var(--surface-muted)]',
             focusRing,
           )}
         >
           {label}
         </button>
+
+        {events.length > 0 ? (
+          <span
+            className={cx(
+              'ml-auto mr-1 rounded-full px-1.5 py-px text-[9.5px] font-bold tabular-nums transition-opacity group-hover:opacity-0',
+              busy ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface-muted)] text-[var(--text-muted)]',
+            )}
+            aria-label={`${events.length} ${events.length === 1 ? 'event' : 'events'}`}
+          >
+            {events.length}
+          </span>
+        ) : null}
 
         {canCreate ? (
           <button
@@ -1575,7 +1684,7 @@ function DayCell({
               onCreate();
             }}
             className={cx(
-              'flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-subtle)] opacity-0 transition hover:bg-[var(--surface)] hover:text-[var(--accent)] group-hover:opacity-100 focus-visible:opacity-100',
+              'absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--surface)] text-[var(--accent)] opacity-0 shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent)] hover:text-white group-hover:opacity-100 focus-visible:opacity-100',
               focusRing,
             )}
           >
@@ -1584,7 +1693,7 @@ function DayCell({
         ) : null}
       </div>
 
-      <div className={cx('space-y-px', !inMonth && 'opacity-45')}>
+      <div className={cx('space-y-[3px]', !inMonth && 'opacity-45')}>
         {visible.map((event) => (
           <MonthEventChip key={event.id} event={event} onClick={() => onSelectEvent(event)} />
         ))}
@@ -1598,11 +1707,11 @@ function DayCell({
             onSelect();
           }}
           className={cx(
-            'self-start rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-[var(--text-muted)] hover:bg-[var(--surface)] hover:text-[var(--accent)]',
+            'self-start rounded-md px-1.5 py-0.5 text-[10.5px] font-bold text-[var(--text)] hover:bg-[var(--surface)] hover:text-[var(--accent)]',
             focusRing,
           )}
         >
-          {remaining} more
+          +{remaining} more
         </button>
       ) : null}
     </div>
@@ -1622,20 +1731,23 @@ function MonthEventChip({ event, onClick }: { event: CalendarItem; onClick: () =
       onDoubleClick={(doubleClick) => doubleClick.stopPropagation()}
       title={`${eventTimeLabel(event)}, ${displayTitle(event)}`}
       className={cx(
-        'flex w-full items-center gap-1.5 overflow-hidden rounded-md px-1.5 py-[3px] text-left transition-colors',
-        event.allDay ? `border-l-2 ${meta.border} ${meta.soft}` : 'hover:bg-[var(--surface)]',
+        'flex h-[24px] w-full items-center gap-1.5 overflow-hidden rounded-[7px] border-l-[3px] pl-1.5 pr-2 text-left shadow-[0_1px_0_rgba(0,0,0,0.04)] transition-colors',
+        meta.chip,
+        meta.border,
         event.status === 'CANCELLED' && 'opacity-50 line-through',
         focusRing,
       )}
     >
-      {!event.allDay ? <span className={cx('h-1.5 w-1.5 shrink-0 rounded-full', meta.dot)} /> : null}
+      {event.private ? <Lock size={10} className="shrink-0 opacity-70" /> : null}
+      <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold leading-none">{displayTitle(event)}</span>
       {!event.allDay ? (
-        <span className="shrink-0 text-[9.5px] tabular-nums text-[var(--text-subtle)]">{formatTime(event.startAt)}</span>
+        <span className="shrink-0 text-[10px] font-medium tabular-nums leading-none opacity-70">
+          {formatTime(event.startAt)}
+        </span>
       ) : null}
-      {event.private ? <Lock size={9} className="shrink-0 text-[var(--text-subtle)]" /> : null}
-      <span className={cx('truncate text-[10.5px] font-medium', event.allDay ? meta.text : 'text-[var(--text)]')}>
-        {displayTitle(event)}
-      </span>
+      {event.priority === 'HIGH' || event.priority === 'URGENT' ? (
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" aria-label="High priority" />
+      ) : null}
     </button>
   );
 }
@@ -1748,7 +1860,7 @@ function WeekView({
         </div>
       ) : null}
 
-      <div ref={scrollRef} className="max-h-[640px] overflow-y-auto overscroll-contain">
+      <div ref={scrollRef} className="h-[max(520px,calc(100dvh-330px))] overflow-y-auto overscroll-contain">
         <div className={cx(WEEK_GRID, 'relative')} style={{ height: 24 * HOUR_HEIGHT }}>
           <div className="relative">
             {HOURS.slice(1).map((hour) => (
@@ -1812,7 +1924,7 @@ function TimeGridEvent({ item, onClick }: { item: PositionedEvent; onClick: () =
 
   return (
     <div
-      className="absolute z-10 rounded-lg bg-[var(--surface)] shadow-sm transition-shadow hover:z-20 hover:shadow-md"
+      className="absolute z-10 rounded-[9px] bg-[var(--surface)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-white transition-shadow hover:z-20 hover:shadow-md"
       style={{
         top,
         height,
@@ -1824,21 +1936,21 @@ function TimeGridEvent({ item, onClick }: { item: PositionedEvent; onClick: () =
         type="button"
         onClick={onClick}
         className={cx(
-          'flex h-full w-full flex-col overflow-hidden rounded-lg border-l-[3px] px-2 text-left',
-          meta.soft,
+          'flex h-full w-full flex-col overflow-hidden rounded-[9px] border-l-[4px] px-2 text-left transition-colors',
+          meta.chip,
           meta.border,
           compact ? 'justify-center' : 'py-1.5',
           event.status === 'CANCELLED' && 'opacity-50',
           focusRing,
         )}
       >
-        <span className={cx('flex items-center gap-1 truncate text-[10.5px] font-semibold', meta.text)}>
+        <span className="flex items-center gap-1 truncate text-[11.5px] font-semibold">
           {event.private ? <Lock size={9} className="shrink-0" /> : null}
-          {compact ? <span className="font-normal tabular-nums opacity-80">{formatTime(event.startAt)}</span> : null}
+          {compact ? <span className="font-medium tabular-nums opacity-70">{formatTime(event.startAt)}</span> : null}
           <span className="truncate">{displayTitle(event)}</span>
         </span>
         {!compact ? (
-          <span className="mt-0.5 truncate text-[9.5px] tabular-nums text-[var(--text-muted)]">
+          <span className="mt-0.5 truncate text-[10px] font-medium tabular-nums opacity-75">
             {formatTime(event.startAt)} to {minutesToTime(end)}
           </span>
         ) : null}
@@ -2140,11 +2252,11 @@ function SelectedDayPanel({
         ) : null}
       </div>
 
-      <div className="-mx-2 mt-2">
+      <div className="mt-3">
         {events.length ? (
           events.map((event) => <SidebarEventRow key={event.id} event={event} onClick={() => onSelectEvent(event)} />)
         ) : (
-          <p className="px-2 py-5 text-[10px] text-[var(--text-subtle)]">
+          <p className="rounded-[12px] border border-dashed border-[var(--line)] px-3 py-5 text-center text-[10.5px] text-[var(--text-subtle)]">
             Nothing scheduled.{canCreate ? ' Double click a day to add something.' : ''}
           </p>
         )}
@@ -2165,7 +2277,7 @@ function UpcomingPanel({
   return (
     <section className="p-4">
       <p className="text-[12px] font-semibold text-[var(--text)]">Coming up</p>
-      <div className="-mx-2 mt-2">
+      <div className="mt-3">
         {events.length ? (
           events.map((event) => {
             const date = parseDate(event.startAt);
@@ -2179,7 +2291,7 @@ function UpcomingPanel({
             );
           })
         ) : (
-          <p className="px-2 py-5 text-[10px] text-[var(--text-subtle)]">Nothing else coming up.</p>
+          <p className="rounded-[12px] border border-dashed border-[var(--line)] px-3 py-5 text-center text-[10.5px] text-[var(--text-subtle)]">Nothing else coming up.</p>
         )}
       </div>
     </section>
@@ -2196,36 +2308,182 @@ function SidebarEventRow({
   onClick: () => void;
 }) {
   const meta = eventMeta(event);
+  const Icon = meta.icon;
 
   return (
     <button
       type="button"
       onClick={onClick}
       className={cx(
-        'flex w-full items-stretch gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-[var(--surface-muted)]',
+        'mb-1.5 flex w-full items-center gap-3 rounded-[12px] border-l-[4px] px-3 py-2.5 text-left transition-colors',
+        meta.chip,
+        meta.border,
+        event.status === 'CANCELLED' && 'opacity-50',
         focusRing,
       )}
     >
-      <span className="w-[46px] shrink-0 pt-px">
-        {dateLabel ? <span className="block text-[9px] text-[var(--text-subtle)]">{dateLabel}</span> : null}
-        <span className="block text-[10.5px] font-semibold tabular-nums text-[var(--text)]">
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          {event.private ? <Lock size={10} className="shrink-0 opacity-70" /> : null}
+          <span className="truncate text-[12px] font-semibold">{displayTitle(event)}</span>
+        </span>
+        <span className="mt-1 flex items-center gap-1.5 text-[10px] font-medium opacity-75">
+          <Icon size={11} className="shrink-0" />
+          <span className="truncate">{event.client?.name ?? event.project?.name ?? meta.label}</span>
+        </span>
+      </span>
+      <span className="shrink-0 text-right">
+        {dateLabel ? <span className="block text-[9.5px] font-semibold opacity-70">{dateLabel}</span> : null}
+        <span className="block text-[11px] font-bold tabular-nums">
           {event.allDay ? 'All day' : formatTime(event.startAt)}
         </span>
       </span>
-      <span className={cx('w-[3px] shrink-0 rounded-full', meta.dot)} />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          {event.private ? <Lock size={10} className="text-[var(--text-subtle)]" /> : null}
-          <span className="truncate text-[11px] font-semibold text-[var(--text)]">{displayTitle(event)}</span>
-        </span>
-        <span className="mt-0.5 block truncate text-[9.5px] text-[var(--text-subtle)]">
-          {event.client?.name ?? event.project?.name ?? meta.label}
-        </span>
-      </span>
       {event.priority === 'HIGH' || event.priority === 'URGENT' ? (
-        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" aria-label="High priority" />
+        <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" aria-label="High priority" />
       ) : null}
     </button>
+  );
+}
+
+/* =============================================================================
+ * MONTH PULSE
+ * Fills the space under the sidebar with a quick read of the month.
+ * =============================================================================
+ */
+
+function MonthPulse({
+  monthDate,
+  events,
+  today,
+  onJump,
+}: {
+  monthDate: Date;
+  events: CalendarItem[];
+  today: Date;
+  onJump: (date: Date) => void;
+}) {
+  const stats = useMemo(() => {
+    const year = monthDate.getFullYear();
+    const month = monthDate.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const perDay = Array.from({ length: daysInMonth }, () => 0);
+    const perType = new Map<EventType, number>();
+    let total = 0;
+    let high = 0;
+
+    events.forEach((event) => {
+      if (event.status === 'CANCELLED') return;
+      const date = parseDate(event.startAt);
+      if (date.getFullYear() !== year || date.getMonth() !== month) return;
+      total += 1;
+      perDay[date.getDate() - 1] += 1;
+      const type = eventType(event);
+      perType.set(type, (perType.get(type) ?? 0) + 1);
+      if (event.priority === 'HIGH' || event.priority === 'URGENT') high += 1;
+    });
+
+    const busiestCount = Math.max(0, ...perDay);
+    const busiestIndex = busiestCount > 0 ? perDay.indexOf(busiestCount) : -1;
+    const types = Array.from(perType.entries()).sort((a, b) => b[1] - a[1]);
+    const freeWeekdays = perDay.filter((count, index) => {
+      const day = new Date(year, month, index + 1).getDay();
+      return count === 0 && day !== 0 && day !== 6;
+    }).length;
+
+    return { year, month, perDay, total, high, busiestCount, busiestIndex, types, freeWeekdays };
+  }, [events, monthDate]);
+
+  const peak = Math.max(1, stats.busiestCount);
+
+  return (
+    <section className="flex-1 p-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-[12px] font-semibold text-[var(--text)]">{MONTHS[stats.month]} at a glance</p>
+        <p className="text-[10px] text-[var(--text-subtle)]">{stats.total} events</p>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        {[
+          { label: 'Scheduled', value: stats.total },
+          { label: 'High priority', value: stats.high },
+          { label: 'Free weekdays', value: stats.freeWeekdays },
+        ].map((item) => (
+          <div key={item.label} className="rounded-[12px] border border-[var(--line)] bg-[var(--surface-muted)]/50 px-2.5 py-2">
+            <p className="text-[17px] font-semibold tabular-nums tracking-[-0.03em] text-[var(--text)]">{item.value}</p>
+            <p className="mt-0.5 truncate text-[9px] font-medium text-[var(--text-subtle)]">{item.label}</p>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-4 text-[10px] font-semibold text-[var(--text-muted)]">Daily load</p>
+      <div className="mt-2 flex h-14 items-end gap-[2px]" role="img" aria-label="Events per day this month">
+        {stats.perDay.map((count, index) => {
+          const date = new Date(stats.year, stats.month, index + 1);
+          const isToday = isSameDate(date, today);
+          return (
+            <button
+              key={index}
+              type="button"
+              onClick={() => onJump(date)}
+              title={`${formatShortDate(date)}: ${count} ${count === 1 ? 'event' : 'events'}`}
+              aria-label={`${formatLongDate(date)}, ${count} events`}
+              className={cx('group flex h-full flex-1 items-end rounded-[3px]', focusRing)}
+            >
+              <span
+                className={cx(
+                  'block w-full rounded-[3px] transition-colors',
+                  count === 0
+                    ? 'bg-[var(--line)]'
+                    : isToday
+                      ? 'bg-[var(--accent)]'
+                      : 'bg-[color:var(--accent)]/45 group-hover:bg-[var(--accent)]',
+                )}
+                style={{ height: count === 0 ? 3 : `${Math.max(14, (count / peak) * 100)}%` }}
+              />
+            </button>
+          );
+        })}
+      </div>
+
+      {stats.busiestIndex >= 0 ? (
+        <button
+          type="button"
+          onClick={() => onJump(new Date(stats.year, stats.month, stats.busiestIndex + 1))}
+          className={cx(
+            'mt-3 flex w-full items-center justify-between rounded-[12px] border border-[var(--line)] px-3 py-2 text-left transition hover:border-[var(--accent)]',
+            focusRing,
+          )}
+        >
+          <span className="text-[10.5px] text-[var(--text-muted)]">Busiest day</span>
+          <span className="text-[11px] font-semibold text-[var(--text)]">
+            {formatShortDate(new Date(stats.year, stats.month, stats.busiestIndex + 1))} · {stats.busiestCount}
+          </span>
+        </button>
+      ) : null}
+
+      {stats.types.length ? (
+        <div className="mt-4 space-y-2">
+          <p className="text-[10px] font-semibold text-[var(--text-muted)]">By type</p>
+          {stats.types.slice(0, 5).map(([type, count]) => {
+            const meta = EVENT_TYPES[type];
+            return (
+              <div key={type} className="flex items-center gap-2.5">
+                <span className="w-[74px] shrink-0 truncate text-[10.5px] font-medium text-[var(--text)]">{meta.label}</span>
+                <span className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--surface-muted)]">
+                  <span
+                    className="block h-full rounded-full"
+                    style={{ width: `${(count / Math.max(1, stats.total)) * 100}%`, background: meta.hex }}
+                  />
+                </span>
+                <span className="w-5 shrink-0 text-right text-[10.5px] font-semibold tabular-nums text-[var(--text)]">{count}</span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="mt-4 text-[10px] text-[var(--text-subtle)]">Nothing scheduled this month yet.</p>
+      )}
+    </section>
   );
 }
 

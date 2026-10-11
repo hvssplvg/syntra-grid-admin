@@ -1,42 +1,33 @@
 import { redirect } from 'next/navigation';
 
 import AdminHome from '@/app/components/admin/AdminHome';
-import { auth } from '@/lib/auth/server';
-import { prisma } from '@/lib/prisma';
+import { getCurrentIdentity } from '@/lib/auth/current-admin';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage() {
-  const { data: session } = await auth.getSession();
+  let identity;
 
-  if (!session?.user?.id) {
+  try {
+    identity = await getCurrentIdentity();
+  } catch {
     redirect('/login');
   }
 
-  const admin = await prisma.adminUser.findUnique({
-    where: {
-      authUserId: session.user.id,
-    },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      role: true,
-      active: true,
-    },
-  });
-
-  if (!admin?.active) {
-    redirect('/login');
-  }
+  const { admin, employee, isFullAccess, permissions } = identity;
 
   const fullName =
-    [admin.firstName, admin.lastName]
-      .filter(Boolean)
-      .join(' ') ||
-    session.user.name ||
+    [admin.firstName, admin.lastName].filter(Boolean).join(' ') ||
     admin.email;
+
+  const flatPermissions = Array.from(permissions.entries()).flatMap(
+    ([module, actions]) =>
+      Array.from(actions.entries()).map(([action, scope]) => ({
+        module,
+        action,
+        scope,
+      })),
+  );
 
   return (
     <AdminHome
@@ -45,6 +36,12 @@ export default async function DashboardPage() {
         fullName,
         email: admin.email,
         role: admin.role,
+      }}
+      identity={{
+        isFullAccess,
+        employeeId: employee?.id ?? null,
+        departmentId: employee?.departmentId ?? null,
+        permissions: flatPermissions,
       }}
     />
   );

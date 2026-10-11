@@ -9,6 +9,12 @@ import {
   employeeName,
   requireCalendarIdentity,
 } from "@/lib/calendar/server";
+import {
+  getCurrentIdentity,
+  hasPermission,
+  requirePermission,
+} from "@/lib/auth/current-admin";
+import { AccessAction, AccessScope } from "@/app/generated/prisma/enums";
 
 import { prisma } from "@/lib/prisma";
 
@@ -32,8 +38,24 @@ export async function GET() {
   try {
     const identity = await requireCalendarIdentity();
 
+    if (identity.admin.restrictedAccess) {
+      await requirePermission(
+        "calendar",
+        AccessAction.VIEW,
+        { scope: AccessScope.OWN },
+      );
+    }
+
     const isManager = identity.isCalendarManager;
-    const canCreate = isManager || !READ_ONLY_ROLES.has(identity.admin.role);
+
+    const canCreate = identity.admin.restrictedAccess
+      ? hasPermission(
+          await getCurrentIdentity(),
+          "calendar",
+          AccessAction.CREATE,
+          { scope: AccessScope.OWN },
+        )
+      : isManager || !READ_ONLY_ROLES.has(identity.admin.role);
 
     const [employees, departments, clients, projects] = await Promise.all([
       prisma.employee.findMany({

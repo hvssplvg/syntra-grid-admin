@@ -4,7 +4,10 @@ import {
 } from 'next/server';
 
 import type { Prisma } from '@/app/generated/prisma/client';
-import { DepartmentStatus } from '@/app/generated/prisma/enums';
+import {
+  DepartmentStatus,
+  EmployeeStatus,
+} from '@/app/generated/prisma/enums';
 
 import {
   requireAdmin,
@@ -38,10 +41,11 @@ const departmentSelect = {
       id: true,
       firstName: true,
       lastName: true,
-      email: true,
+      preferredName: true,
+      workEmail: true,
       avatarUrl: true,
-      role: true,
-      active: true,
+      jobTitle: true,
+      status: true,
     },
   },
 
@@ -66,7 +70,7 @@ const departmentSelect = {
 
       _count: {
         select: {
-          members: true,
+          employees: true,
         },
       },
     },
@@ -81,15 +85,19 @@ const departmentSelect = {
     ],
   },
 
-  members: {
+  // The employees actually belonging to this department. This is distinct
+  // from dashboard (AdminUser) access, which is tracked separately via
+  // Employee.adminUserId.
+  employees: {
     select: {
       id: true,
+      employeeRef: true,
       firstName: true,
       lastName: true,
-      email: true,
+      preferredName: true,
       avatarUrl: true,
-      role: true,
-      active: true,
+      jobTitle: true,
+      status: true,
     },
 
     orderBy: [
@@ -99,9 +107,6 @@ const departmentSelect = {
       {
         lastName: 'asc',
       },
-      {
-        email: 'asc',
-      },
     ],
 
     take: 8,
@@ -109,7 +114,7 @@ const departmentSelect = {
 
   _count: {
     select: {
-      members: true,
+      employees: true,
       children: true,
     },
   },
@@ -382,10 +387,8 @@ export async function GET(
         },
       }),
 
-      prisma.adminUser.count({
+      prisma.employee.count({
         where: {
-          active: true,
-
           departmentId: {
             not: null,
           },
@@ -697,20 +700,23 @@ if (
 
     if (leadId) {
       const lead =
-        await prisma.adminUser.findUnique({
+        await prisma.employee.findUnique({
           where: {
             id: leadId,
           },
 
           select: {
             id: true,
-            active: true,
+            status: true,
           },
         });
 
       if (
         !lead ||
-        !lead.active
+        lead.status ===
+          EmployeeStatus.FORMER ||
+        lead.status ===
+          EmployeeStatus.OFFBOARDING
       ) {
         return NextResponse.json(
           {

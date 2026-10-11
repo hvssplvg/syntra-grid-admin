@@ -8,6 +8,10 @@ import {
   requireAdmin,
   requireClientEditor,
 } from "@/lib/auth/current-admin";
+import {
+  derivePublicIdFromLogoUrl,
+  destroyCloudinaryAsset,
+} from "@/lib/cloudinary-server";
 
 /* =============================================================================
    TYPES
@@ -651,6 +655,7 @@ export async function PATCH(
           slug: true,
           clientRef: true,
           status: true,
+          logoUrl: true,
         },
       });
 
@@ -1353,6 +1358,35 @@ export async function PATCH(
           return client;
         },
       );
+
+    /* =========================================================================
+       LOGO CLEANUP
+
+       Only runs after the client record has already been updated
+       successfully. If logoUrl changed and the previous value was a managed
+       Syntra Grid logo asset, remove it now that nothing references it.
+       Best-effort: a failed cleanup never fails the request, since the
+       database is already the source of truth at this point.
+    ========================================================================= */
+
+    if (
+      body.logoUrl !== undefined &&
+      existing.logoUrl &&
+      existing.logoUrl !== updated.logoUrl
+    ) {
+      const oldPublicId = derivePublicIdFromLogoUrl(existing.logoUrl);
+
+      if (oldPublicId) {
+        try {
+          await destroyCloudinaryAsset(oldPublicId);
+        } catch (cause) {
+          console.error(
+            "[admin/clients/:id] Could not clean up the replaced logo",
+            cause,
+          );
+        }
+      }
+    }
 
     const activeProjects =
       updated.projects.filter(

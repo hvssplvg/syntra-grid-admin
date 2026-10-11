@@ -3,6 +3,9 @@
 import { auth } from '@/lib/auth/server';
 import { prisma } from '@/lib/prisma';
 
+import type { AdminUser as AdminUserRecord, Employee } from '@/app/generated/prisma/client';
+import { AccessAction, AccessScope } from '@/app/generated/prisma/enums';
+
 export class AuthenticationError extends Error {
   constructor(message = 'Authentication required.') {
     super(message);
@@ -107,9 +110,31 @@ async function claimInvitedAdmin(
   });
 }
 
-/** Any active admin, whatever their role. Use for read-only pages. */
+/**
+ * Any active, FULL-ACCESS admin, whatever their role. Use for read-only
+ * pages and routes that have not been updated to consult the fine-grained
+ * permission system (getCurrentIdentity/hasPermission/requirePermission).
+ *
+ * Restricted accounts (AdminUser.restrictedAccess === true — i.e. every
+ * account created through Employee -> Access -> Grant Dashboard Access)
+ * are rejected here by default. This is a deliberate fail-closed default:
+ * a module is only ever reachable by a restricted employee once its route
+ * has been deliberately updated to resolve identity via getCurrentAdmin()
+ * (bypassing this gate) plus its own requirePermission() checks — see
+ * lib/leave/server.ts and lib/calendar/server.ts for the pattern. Every
+ * pre-existing account has restrictedAccess === false, so this change has
+ * no effect on the Owner or any account that existed before this system.
+ */
 export async function requireAdmin() {
-  return getCurrentAdmin();
+  const admin = await getCurrentAdmin();
+
+  if (admin.restrictedAccess) {
+    throw new AuthorisationError(
+      'Your account does not have access to this area.',
+    );
+  }
+
+  return admin;
 }
 
 async function requireRole(roles: AdminRole[], message: string) {
@@ -143,4 +168,85 @@ export async function requireClientEditor() {
     ['OWNER', 'ADMIN', 'DEVELOPER'],
     'Only the owner, administrators and developers can change client records.',
   );
+}
+
+/**
+ * Fine-grained module/action/scope permissions, additive on top of
+ * everything above.
+ *
+ * isFullAccess is keyed on AdminUser.restrictedAccess, not on role. Every
+ * account that existed before this system, or that gets created any other
+ * way (e.g. the existing team invite flow), has restrictedAccess === false
+ * and therefore full access here regardless of its AdminRole — this system
+ * can only ever grant additional reach to a brand-new restricted account,
+ * never take reach away from an account it didn't create.
+ */
+
+const SCOPE_RANK: Record<AccessScope, number> = {
+  [AccessScope.OWN]: 0,
+  [AccessScope.DEPARTMENT]: 1,
+  [AccessScope.ALL]: 2,
+};
+
+export type ResolvedIdentity = {
+  admin: AdminUserRecord;
+  employee: Employee | null;
+  isFullAccess: boolean;
+  permissions: Map<string, Map<AccessAction, AccessScope>>;
+};
+
+export async function getCurrentIdentity(): Promise<ResolvedIdentity> {
+  const admin = await getCurrentAdmin();
+  const isFullAccess = !admin.restrictedAccess;
+
+  const [employee, grants] = await Promise.all([
+    prisma.employee.findUnique({ where: { adminUserId: admin.id } }),
+    isFullAccess
+      ? Promise.resolve([])
+      : prisma.permissionGrant.findMany({ where: { adminUserId: admin.id } }),
+  ]);
+
+  const permissions = new Map<string, Map<AccessAction, AccessScope>>();
+
+  for (const grant of grants) {
+    if (!permissions.has(grant.module)) {
+      permissions.set(grant.module, new Map());
+    }
+
+    permissions.get(grant.module)!.set(grant.action, grant.scope);
+  }
+
+  return { admin, employee, isFullAccess, permissions };
+}
+
+export function hasPermission(
+  identity: ResolvedIdentity,
+  module: string,
+  action: AccessAction,
+  opts?: { scope?: AccessScope },
+): boolean {
+  if (identity.isFullAccess) return true;
+
+  const grantedScope = identity.permissions.get(module)?.get(action);
+
+  if (!grantedScope) return false;
+  if (!opts?.scope) return true;
+
+  return SCOPE_RANK[grantedScope] >= SCOPE_RANK[opts.scope];
+}
+
+export async function requirePermission(
+  module: string,
+  action: AccessAction,
+  opts?: { scope?: AccessScope },
+): Promise<ResolvedIdentity> {
+  const identity = await getCurrentIdentity();
+
+  if (!hasPermission(identity, module, action, opts)) {
+    throw new AuthorisationError(
+      `You are not authorised to ${action.toLowerCase()} ${module.replace(/_/g, ' ')}.`,
+    );
+  }
+
+  return identity;
 }

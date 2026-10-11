@@ -341,14 +341,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const existing = await prisma.client.findUnique({
-      where: {
-        slug,
-      },
-      select: {
-        id: true,
-      },
-    });
+    const clientRef = cleanString(body.clientRef);
+    const accountOwnerId = cleanString(body.accountOwnerId) ?? admin.id;
+
+    // These three lookups are independent of each other, so run them
+    // concurrently rather than as sequential round trips.
+    const [existing, existingReference, accountOwner] = await Promise.all([
+      prisma.client.findUnique({
+        where: { slug },
+        select: { id: true },
+      }),
+      clientRef
+        ? prisma.client.findUnique({
+            where: { clientRef },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+      prisma.adminUser.findFirst({
+        where: { id: accountOwnerId, active: true },
+        select: { id: true },
+      }),
+    ]);
 
     if (existing) {
       return NextResponse.json(
@@ -360,41 +373,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const clientRef = cleanString(body.clientRef);
-
-    if (clientRef) {
-      const existingReference = await prisma.client.findUnique({
-        where: {
-          clientRef,
+    if (clientRef && existingReference) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'This client reference is already in use.',
         },
-        select: {
-          id: true,
-        },
-      });
-
-      if (existingReference) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error: 'This client reference is already in use.',
-          },
-          { status: 409 },
-        );
-      }
+        { status: 409 },
+      );
     }
-
-    const accountOwnerId =
-      cleanString(body.accountOwnerId) ?? admin.id;
-
-    const accountOwner = await prisma.adminUser.findFirst({
-      where: {
-        id: accountOwnerId,
-        active: true,
-      },
-      select: {
-        id: true,
-      },
-    });
 
     if (!accountOwner) {
       return NextResponse.json(

@@ -11,7 +11,10 @@ import {
 } from '@/lib/auth/current-admin';
 
 import type { Prisma } from '@/app/generated/prisma/client';
-import { DepartmentStatus } from '@/app/generated/prisma/enums';
+import {
+  DepartmentStatus,
+  EmployeeStatus,
+} from '@/app/generated/prisma/enums';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,10 +44,11 @@ const departmentSelect = {
       id: true,
       firstName: true,
       lastName: true,
-      email: true,
+      preferredName: true,
+      workEmail: true,
       avatarUrl: true,
-      role: true,
-      active: true,
+      jobTitle: true,
+      status: true,
     },
   },
 
@@ -76,14 +80,14 @@ const departmentSelect = {
           id: true,
           firstName: true,
           lastName: true,
-          email: true,
+          preferredName: true,
           avatarUrl: true,
         },
       },
 
       _count: {
         select: {
-          members: true,
+          employees: true,
           children: true,
         },
       },
@@ -99,15 +103,19 @@ const departmentSelect = {
     ],
   },
 
-  members: {
+  // The employees actually belonging to this department. This is distinct
+  // from dashboard (AdminUser) access, which is tracked separately via
+  // Employee.adminUserId.
+  employees: {
     select: {
       id: true,
+      employeeRef: true,
       firstName: true,
       lastName: true,
-      email: true,
+      preferredName: true,
       avatarUrl: true,
-      role: true,
-      active: true,
+      jobTitle: true,
+      status: true,
       createdAt: true,
     },
 
@@ -118,15 +126,12 @@ const departmentSelect = {
       {
         lastName: 'asc',
       },
-      {
-        email: 'asc',
-      },
     ],
   },
 
   _count: {
     select: {
-      members: true,
+      employees: true,
       children: true,
     },
   },
@@ -550,19 +555,22 @@ export async function PATCH(
 
       if (leadId) {
         const lead =
-          await prisma.adminUser.findUnique({
+          await prisma.employee.findUnique({
             where: {
               id: leadId,
             },
             select: {
               id: true,
-              active: true,
+              status: true,
             },
           });
 
         if (
           !lead ||
-          !lead.active
+          lead.status ===
+            EmployeeStatus.FORMER ||
+          lead.status ===
+            EmployeeStatus.OFFBOARDING
         ) {
           return NextResponse.json(
             {
@@ -859,7 +867,7 @@ export async function DELETE(
 
           _count: {
             select: {
-              members: true,
+              employees: true,
               children: true,
             },
           },
@@ -925,9 +933,9 @@ export async function DELETE(
                   existing.name,
                 slug:
                   existing.slug,
-                memberCount:
+                employeeCount:
                   existing._count
-                    .members,
+                    .employees,
                 childCount:
                   existing._count
                     .children,

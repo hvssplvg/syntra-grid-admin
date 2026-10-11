@@ -8,7 +8,7 @@ import {
 
 import {
   AuthorisationError,
-  requireAdmin,
+  getCurrentAdmin,
 } from "@/lib/auth/current-admin";
 
 import { prisma } from "@/lib/prisma";
@@ -20,7 +20,10 @@ export type LeaveIdentity = {
 };
 
 export async function requireLeaveIdentity(): Promise<LeaveIdentity> {
-  const admin = await requireAdmin();
+  // getCurrentAdmin, not requireAdmin: a restricted employee is allowed
+  // this far, but every route built on top of this must still check
+  // requirePermission('leave', ...) for her — see app/api/admin/leave/**.
+  const admin = await getCurrentAdmin();
 
   const employee = await prisma.employee.findUnique({
     where: {

@@ -1,4 +1,5 @@
-'use client';
+/* eslint-disable react-hooks/set-state-in-effect */
+"use client";
 
 import {
   useCallback,
@@ -10,7 +11,14 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
-} from 'react';
+} from "react";
+
+import useSWR, { preload } from "swr";
+
+import {
+  CLIENTS_ENDPOINT,
+  fetchClientsPayload,
+} from "@/lib/clients/clientsApi";
 
 import {
   Bell,
@@ -29,31 +37,32 @@ import {
   Users,
   X,
   type LucideIcon,
-} from 'lucide-react';
+} from "lucide-react";
 
 import type {
   AdminSection,
   AdminTab,
   AdminUser,
-} from './adminNav';
+} from "./adminNav";
 
 import {
-  useAdminTheme,
-} from './AdminThemeProvider';
+  isCommandSection,
+  shouldShowSectionTabBar,
+} from "./adminNav";
 
-/* ============================================================================
+import { useAdminTheme } from "./AdminThemeProvider";
+
+/* =============================================================================
    TYPES
-============================================================================ */
+============================================================================= */
 
 type AdminHeaderProps = {
   admin: AdminUser;
   sections: AdminSection[];
   activeSection: AdminSection;
   activeTab: AdminTab;
-
-  onTabSelect: (
-    tab: AdminTab,
-  ) => void;
+  onTabSelect: (tab: AdminTab) => void;
+  isFullAccess?: boolean;
 };
 
 type SearchResult = {
@@ -64,9 +73,7 @@ type SearchResult = {
   section: string;
 };
 
-type ThemeMode =
-  | 'light'
-  | 'dark';
+type ThemeMode = "light" | "dark";
 
 type TabIndicatorPosition = {
   left: number;
@@ -74,128 +81,274 @@ type TabIndicatorPosition = {
   ready: boolean;
 };
 
-/* ============================================================================
-   WORKSPACE CONTEXT TYPES
-============================================================================ */
-
-type WorkspaceContextType =
-  | 'company'
-  | 'client';
+type WorkspaceContextType = "company" | "client";
 
 type WorkspaceContext = {
   id: string;
   type: WorkspaceContextType;
-
-  /**
-   * Database Client.id when type === "client".
-   *
-   * Company-wide Syntra Grid context has no entityId.
-   */
   entityId: string | null;
-
   label: string;
   shortLabel: string;
   description: string;
-
   logoUrl?: string | null;
-
-  status?:
-    | string
-    | null;
+  status?: string | null;
 };
-
-/* ============================================================================
-   CLIENT API TYPES
-
-   Keep this deliberately small.
-
-   AdminHeader only needs enough information to render the workspace selector.
-   It does not need the entire Client model.
-============================================================================ */
 
 type ClientApiRecord = {
   id: string;
-
   name: string;
-
-  displayName?:
-    | string
-    | null;
-
-  slug?:
-    | string
-    | null;
-
-  industry?:
-    | string
-    | null;
-
-  description?:
-    | string
-    | null;
-
-  logo?:
-    | string
-    | null;
-
-  logoUrl?:
-    | string
-    | null;
-
-  status:
-    | string;
-
-  productName?:
-    | string
-    | null;
+  displayName?: string | null;
+  slug?: string | null;
+  industry?: string | null;
+  description?: string | null;
+  logo?: string | null;
+  logoUrl?: string | null;
+  status: string;
+  productName?: string | null;
 };
 
-type ClientsApiResponse = {
-  clients?: ClientApiRecord[];
+/* =============================================================================
+   CURRENT USER PROFILE
+============================================================================= */
 
-  data?: ClientApiRecord[];
+type EmployeeProfile = {
+  id: string;
+  email: string;
+  role: string;
 
-  items?: ClientApiRecord[];
+  restrictedAccess: boolean;
 
+  firstName: string | null;
+  lastName: string | null;
+  preferredName: string | null;
+  fullName: string;
+
+  avatarUrl: string | null;
+  jobTitle: string | null;
+
+  employeeId: string | null;
+
+  department: {
+    id: string;
+    name: string;
+  } | null;
+};
+
+type ProfileApiResponse = {
+  ok: boolean;
+  profile?: EmployeeProfile;
   error?: string;
-
-  message?: string;
 };
 
-/* ============================================================================
-   CONSTANTS
-============================================================================ */
+/* =============================================================================
+   CONFIGURATION
+============================================================================= */
 
 const WORKSPACE_STORAGE_KEY =
-  'syntragrid.workspace-context';
+  "syntragrid.workspace-context";
 
-const OPERATIONAL_CLIENT_STATUSES =
-  new Set([
-    'ACTIVE',
-    'ONBOARDING',
-    'PAUSED',
-  ]);
+const COMPANY_LOGO_URL =
+  "/images/syntra-logo.png";
 
-const COMPANY_CONTEXT: WorkspaceContext =
-  {
-    id: 'company',
-    type: 'company',
-    entityId: null,
+const OPERATIONAL_CLIENT_STATUSES = new Set([
+  "ACTIVE",
+  "ONBOARDING",
+  "PAUSED",
+]);
 
-    label: 'Syntra Grid',
-    shortLabel: 'SG',
+const COMPANY_CONTEXT: WorkspaceContext = {
+  id: "company",
+  type: "company",
+  entityId: null,
+  label: "Syntra Grid",
+  shortLabel: "SG",
+  description: "Company-wide view",
+  logoUrl: COMPANY_LOGO_URL,
+  status: "ACTIVE",
+};
 
-    description:
-      'Company-wide view',
+/* =============================================================================
+   PROFILE FETCHER
+============================================================================= */
 
-    logoUrl: null,
+/**
+ * Fetch only the authenticated user's profile.
+ *
+ * The /api/admin/me endpoint resolves the linked Employee record and returns:
+ *
+ * - Employee name
+ * - Employee photograph
+ * - Employee job title
+ * - Employee department
+ * - Authenticated account details
+ *
+ * This replaces the previous approach of downloading the entire Team list
+ * just to retrieve the current user's profile photograph.
+ */
 
-    status: 'ACTIVE',
+async function fetchCurrentProfile(
+  _key: string,
+): Promise<EmployeeProfile> {
+  const response = await fetch("/api/admin/me", {
+    method: "GET",
+    credentials: "include",
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Unable to load your profile (${response.status}).`,
+    );
+  }
+
+  const payload =
+    (await response.json()) as ProfileApiResponse;
+
+  if (!payload.ok || !payload.profile) {
+    throw new Error(
+      payload.error || "Unable to load your profile.",
+    );
+  }
+
+  return payload.profile;
+}
+
+/* =============================================================================
+   HELPERS
+============================================================================= */
+
+function cleanText(
+  value: string | null | undefined,
+): string {
+  return typeof value === "string"
+    ? value.trim()
+    : "";
+}
+
+function initials(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join("");
+}
+
+function formatRole(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function createShortLabel(value: string): string {
+  const words = value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!words.length) return "CL";
+
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase();
+  }
+
+  return (
+    words[0].charAt(0) + words[1].charAt(0)
+  ).toUpperCase();
+}
+
+function getClientContextDescription(
+  client: ClientApiRecord,
+): string {
+  return (
+    cleanText(client.productName) ||
+    cleanText(client.industry) ||
+    "Client workspace"
+  );
+}
+
+function adminAvatarFallback(
+  admin: AdminUser,
+): string | null {
+  const record = admin as AdminUser & {
+    avatarUrl?: string | null;
   };
 
-/* ============================================================================
-   COMPONENT
-============================================================================ */
+  return cleanText(record.avatarUrl) || null;
+}
+
+/**
+ * Only show actions whose destination is actually present
+ * in the user's permission-filtered navigation.
+ */
+function hasAccessibleTab(
+  sections: AdminSection[],
+  tab: AdminTab,
+): boolean {
+  return sections.some((section) =>
+    section.items.some((item) => item.tab === tab),
+  );
+}
+
+/* =============================================================================
+   PROFILE AVATAR
+============================================================================= */
+
+function ProfileAvatar({
+  name,
+  url,
+  size = "small",
+}: {
+  name: string;
+  url?: string | null;
+  size?: "small" | "large";
+}) {
+  const [failedUrl, setFailedUrl] =
+    useState<string | null>(null);
+
+  const classes =
+    size === "large"
+      ? "h-10 w-10 text-[10px]"
+      : "h-8 w-8 text-[9px]";
+
+  const imageUrl = cleanText(url);
+
+  const showImage =
+    Boolean(imageUrl) &&
+    failedUrl !== imageUrl;
+
+  return (
+    <span
+      className={`
+        flex shrink-0 items-center justify-center
+        overflow-hidden rounded-full
+        bg-[var(--primary)]
+        font-bold uppercase tracking-[0.03em]
+        text-[var(--primary-foreground)]
+        ${classes}
+      `}
+    >
+      {showImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={imageUrl}
+          alt={`${name}'s profile picture`}
+          className="h-full w-full object-cover"
+          referrerPolicy="no-referrer"
+          onError={() => setFailedUrl(imageUrl)}
+        />
+      ) : (
+        initials(name)
+      )}
+    </span>
+  );
+}
+
+/* =============================================================================
+   MAIN HEADER
+============================================================================= */
 
 export default function AdminHeader({
   admin,
@@ -203,139 +356,281 @@ export default function AdminHeader({
   activeSection,
   activeTab,
   onTabSelect,
+  isFullAccess = true,
 }: AdminHeaderProps) {
-  const {
-    theme,
-    setTheme,
-  } = useAdminTheme();
+  const { theme, setTheme } = useAdminTheme();
+
+  const commandWorkspace =
+    isCommandSection(activeSection);
+
+  const showTabBar =
+    shouldShowSectionTabBar(
+      activeSection,
+      isFullAccess,
+    );
+
+  const ActiveSectionIcon =
+    activeSection.icon;
+
+  /* ===========================================================================
+     REFS
+  =========================================================================== */
 
   const searchInputRef =
-    useRef<HTMLInputElement>(
-      null,
-    );
+    useRef<HTMLInputElement>(null);
 
   const profileRef =
-    useRef<HTMLDivElement>(
-      null,
-    );
+    useRef<HTMLDivElement>(null);
 
   const contextRef =
-    useRef<HTMLDivElement>(
-      null,
-    );
+    useRef<HTMLDivElement>(null);
 
   const notificationsRef =
-    useRef<HTMLDivElement>(
-      null,
-    );
-
-  /* --------------------------------------------------------------------------
-     TAB INDICATOR REFS
-  -------------------------------------------------------------------------- */
+    useRef<HTMLDivElement>(null);
 
   const tabRowRef =
-    useRef<HTMLDivElement>(
-      null,
-    );
+    useRef<HTMLDivElement>(null);
 
   const tabButtonRefs =
-    useRef<
-      Map<
-        AdminTab,
-        HTMLButtonElement
-      >
-    >(new Map());
+    useRef<Map<AdminTab, HTMLButtonElement>>(
+      new Map(),
+    );
+
+  /* ===========================================================================
+     STATE
+  =========================================================================== */
 
   const [
     tabIndicator,
     setTabIndicator,
-  ] =
-    useState<TabIndicatorPosition>({
-      left: 0,
-      width: 0,
-      ready: false,
-    });
+  ] = useState<TabIndicatorPosition>({
+    left: 0,
+    width: 0,
+    ready: false,
+  });
 
-  /* --------------------------------------------------------------------------
-     UI STATE
-  -------------------------------------------------------------------------- */
+  const [searchOpen, setSearchOpen] =
+    useState(false);
 
-  const [
-    searchOpen,
-    setSearchOpen,
-  ] = useState(false);
+  const [searchQuery, setSearchQuery] =
+    useState("");
 
-  const [
-    searchQuery,
-    setSearchQuery,
-  ] = useState('');
+  const [profileOpen, setProfileOpen] =
+    useState(false);
 
-  const [
-    profileOpen,
-    setProfileOpen,
-  ] = useState(false);
-
-  const [
-    contextOpen,
-    setContextOpen,
-  ] = useState(false);
+  const [contextOpen, setContextOpen] =
+    useState(false);
 
   const [
     notificationsOpen,
     setNotificationsOpen,
   ] = useState(false);
 
-  const [
-    signingOut,
-    setSigningOut,
-  ] = useState(false);
+  const [signingOut, setSigningOut] =
+    useState(false);
 
-  /* --------------------------------------------------------------------------
-     WORKSPACE CONTEXT STATE
-  -------------------------------------------------------------------------- */
+  /* ===========================================================================
+     USER PROFILE
+  =========================================================================== */
 
-  const [
-    clients,
-    setClients,
-  ] =
-    useState<ClientApiRecord[]>(
-      [],
+  const {
+    data: employeeProfile,
+    mutate: refreshProfile,
+  } = useSWR(
+    admin.id
+      ? ["syntragrid:current-profile", admin.id] as const
+      : null,
+
+    ([key]) => fetchCurrentProfile(key),
+
+    {
+      dedupingInterval: 15_000,
+      revalidateOnFocus: true,
+      refreshInterval: 120_000,
+      shouldRetryOnError: false,
+    },
+  );
+
+  /**
+   * Prefer the employee's actual name.
+   *
+   * For unrestricted accounts with no linked Employee record,
+   * preserve the existing AdminUser name.
+   */
+  const profileName = useMemo(() => {
+    const preferredName =
+      cleanText(employeeProfile?.preferredName);
+
+    const fullName =
+      cleanText(employeeProfile?.fullName);
+
+    return (
+      preferredName ||
+      fullName ||
+      admin.fullName
+    );
+  }, [
+    employeeProfile?.preferredName,
+    employeeProfile?.fullName,
+    admin.fullName,
+  ]);
+
+  /**
+   * Employee.avatarUrl takes precedence.
+   *
+   * If no Employee photograph exists, use AdminUser.avatarUrl.
+   */
+  const profileAvatarUrl = useMemo(() => {
+    return (
+      cleanText(employeeProfile?.avatarUrl) ||
+      adminAvatarFallback(admin)
+    );
+  }, [employeeProfile?.avatarUrl, admin]);
+
+  /**
+   * Never display VIEWER as the professional job title
+   * for restricted employee accounts.
+   */
+  const profileJobTitle = useMemo(() => {
+    const actualJobTitle =
+      cleanText(employeeProfile?.jobTitle);
+
+    if (!isFullAccess) {
+      return actualJobTitle || "Team member";
+    }
+
+    return actualJobTitle || formatRole(admin.role);
+  }, [
+    employeeProfile?.jobTitle,
+    isFullAccess,
+    admin.role,
+  ]);
+
+  const profileDepartment =
+    cleanText(employeeProfile?.department?.name) ||
+    null;
+
+  /* ===========================================================================
+     PROFILE REFRESH EVENTS
+  =========================================================================== */
+
+  useEffect(() => {
+    const refresh = () => {
+      void refreshProfile();
+    };
+
+    window.addEventListener(
+      "syntragrid:employee-avatar-updated",
+      refresh,
     );
 
-  const [
-    clientsLoading,
-    setClientsLoading,
-  ] = useState(true);
-
-  const [
-    clientsError,
-    setClientsError,
-  ] =
-    useState<string | null>(
-      null,
+    window.addEventListener(
+      "syntragrid:employee-profile-updated",
+      refresh,
     );
+
+    return () => {
+      window.removeEventListener(
+        "syntragrid:employee-avatar-updated",
+        refresh,
+      );
+
+      window.removeEventListener(
+        "syntragrid:employee-profile-updated",
+        refresh,
+      );
+    };
+  }, [refreshProfile]);
+
+  /* ===========================================================================
+     PERMITTED NAVIGATION
+  =========================================================================== */
+
+  const canOpenTeam =
+    hasAccessibleTab(sections, "team");
+
+  const canOpenSettings =
+    hasAccessibleTab(sections, "settings");
+
+  const canOpenNotifications =
+    hasAccessibleTab(sections, "notifications");
+
+  const canOpenClients =
+    isFullAccess &&
+    hasAccessibleTab(sections, "clients");
+
+  /* ===========================================================================
+     CLIENT WORKSPACES
+     
+     Restricted employees must not automatically request the
+     unrestricted Clients API.
+
+     Their workspace selector stays on Syntra Grid until a properly
+     permission-scoped client workspace API is implemented.
+  =========================================================================== */
+
+  const {
+    data: clientsPayload,
+    error: clientsSwrError,
+    isLoading: clientsLoading,
+    mutate: reloadClients,
+  } = useSWR(
+    canOpenClients
+      ? CLIENTS_ENDPOINT
+      : null,
+
+    fetchClientsPayload,
+
+    {
+      dedupingInterval: 60_000,
+      focusThrottleInterval: 60_000,
+      revalidateOnFocus: true,
+    },
+  );
+
+  const clients = useMemo(
+    () =>
+      (
+        clientsPayload?.clients ?? []
+      ) as unknown as ClientApiRecord[],
+    [clientsPayload],
+  );
+
+  const clientsError = clientsSwrError
+    ? clientsSwrError instanceof Error
+      ? clientsSwrError.message
+      : "Could not load clients."
+    : null;
+
+  const loadClients = useCallback(
+    async () => {
+      if (!canOpenClients) return;
+      await reloadClients();
+    },
+    [canOpenClients, reloadClients],
+  );
+
+  /* ===========================================================================
+     WORKSPACE CONTEXT
+  =========================================================================== */
 
   const [
     selectedContextId,
     setSelectedContextId,
-  ] =
-    useState<string>(
-      COMPANY_CONTEXT.id,
-    );
+  ] = useState(COMPANY_CONTEXT.id);
 
   const [
     contextHydrated,
     setContextHydrated,
   ] = useState(false);
 
-  const ActiveSectionIcon =
-    activeSection.icon;
-
-  /* --------------------------------------------------------------------------
-     LOAD SAVED WORKSPACE CONTEXT
-  -------------------------------------------------------------------------- */
-
   useEffect(() => {
+    if (!isFullAccess) {
+      setSelectedContextId(COMPANY_CONTEXT.id);
+      setContextHydrated(true);
+      return;
+    }
+
     try {
       const stored =
         window.localStorage.getItem(
@@ -343,307 +638,101 @@ export default function AdminHeader({
         );
 
       if (stored) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setSelectedContextId(
-          stored,
-        );
+        setSelectedContextId(stored);
       }
     } catch (error) {
       console.warn(
-        'Could not restore workspace context:',
+        "Could not restore workspace context:",
         error,
       );
     } finally {
-      setContextHydrated(
-        true,
-      );
+      setContextHydrated(true);
     }
-  }, []);
-
-  /* --------------------------------------------------------------------------
-     LOAD CLIENTS
-
-     Reuses:
-       GET /api/admin/clients
-
-     No Prisma is imported into this client component.
-  -------------------------------------------------------------------------- */
-
-  const loadClients =
-    useCallback(async () => {
-      setClientsLoading(
-        true,
-      );
-
-      setClientsError(
-        null,
-      );
-
-      try {
-        const response =
-          await fetch(
-            '/api/admin/clients',
-            {
-              method:
-                'GET',
-
-              credentials:
-                'include',
-
-              cache:
-                'no-store',
-
-              headers: {
-                Accept:
-                  'application/json',
-              },
-            },
-          );
-
-        const payload =
-          (await response
-            .json()
-            .catch(
-              () => null,
-            )) as
-            | ClientsApiResponse
-            | ClientApiRecord[]
-            | null;
-
-        if (
-          !response.ok
-        ) {
-          const message =
-            !Array.isArray(
-              payload,
-            )
-              ? payload?.error ??
-                payload?.message
-              : null;
-
-          throw new Error(
-            message ||
-              `Could not load clients (${response.status}).`,
-          );
-        }
-
-        /*
-         * Support the common response shapes so this header remains resilient:
-         *
-         * { clients: [...] }
-         * { data: [...] }
-         * { items: [...] }
-         * [...]
-         */
-
-        let records:
-          ClientApiRecord[] =
-          [];
-
-        if (
-          Array.isArray(
-            payload,
-          )
-        ) {
-          records =
-            payload;
-        } else if (
-          Array.isArray(
-            payload?.clients,
-          )
-        ) {
-          records =
-            payload.clients;
-        } else if (
-          Array.isArray(
-            payload?.data,
-          )
-        ) {
-          records =
-            payload.data;
-        } else if (
-          Array.isArray(
-            payload?.items,
-          )
-        ) {
-          records =
-            payload.items;
-        }
-
-        setClients(
-          records,
-        );
-      } catch (error) {
-        console.error(
-          'Could not load workspace clients:',
-          error,
-        );
-
-        setClients(
-          [],
-        );
-
-        setClientsError(
-          error instanceof
-            Error
-            ? error.message
-            : 'Could not load clients.',
-        );
-      } finally {
-        setClientsLoading(
-          false,
-        );
-      }
-    }, []);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadClients();
-  }, [
-    loadClients,
-  ]);
-
-  /* --------------------------------------------------------------------------
-     CLIENT WORKSPACE CONTEXTS
-  -------------------------------------------------------------------------- */
+  }, [isFullAccess]);
 
   const clientContexts =
-    useMemo<
-      WorkspaceContext[]
-    >(() => {
+    useMemo<WorkspaceContext[]>(() => {
+      if (!canOpenClients) {
+        return [];
+      }
+
       return clients
-        .filter(
-          (client) =>
-            OPERATIONAL_CLIENT_STATUSES.has(
-              client.status
-                .trim()
-                .toUpperCase(),
-            ),
+        .filter((client) =>
+          OPERATIONAL_CLIENT_STATUSES.has(
+            client.status.trim().toUpperCase(),
+          ),
         )
-        .map(
-          (client) => {
-            const label =
-              cleanText(
-                client.displayName,
-              ) ||
-              cleanText(
-                client.name,
-              ) ||
-              'Unnamed client';
+        .map((client) => {
+          const label =
+            cleanText(client.displayName) ||
+            cleanText(client.name) ||
+            "Unnamed client";
 
-            return {
-              id: `client:${client.id}`,
-
-              type:
-                'client' as const,
-
-              entityId:
-                client.id,
-
-              label,
-
-              shortLabel:
-                createShortLabel(
-                  label,
-                ),
-
-              description:
-                getClientContextDescription(
-                  client,
-                ),
-
-              logoUrl:
-                cleanText(
-                  client.logoUrl,
-                ) ||
-                cleanText(
-                  client.logo,
-                ) ||
-                null,
-
-              status:
-                client.status,
-            };
-          },
-        )
+          return {
+            id: `client:${client.id}`,
+            type: "client" as const,
+            entityId: client.id,
+            label,
+            shortLabel:
+              createShortLabel(label),
+            description:
+              getClientContextDescription(client),
+            logoUrl:
+              cleanText(client.logoUrl) ||
+              cleanText(client.logo) ||
+              null,
+            status: client.status,
+          };
+        })
         .sort((a, b) =>
           a.label.localeCompare(
             b.label,
             undefined,
-            {
-              sensitivity:
-                'base',
-            },
+            { sensitivity: "base" },
           ),
         );
-    }, [
-      clients,
-    ]);
-
-  /* --------------------------------------------------------------------------
-     ALL WORKSPACE CONTEXTS
-  -------------------------------------------------------------------------- */
+    }, [clients, canOpenClients]);
 
   const workspaceContexts =
-    useMemo<
-      WorkspaceContext[]
-    >(() => {
-      return [
+    useMemo<WorkspaceContext[]>(
+      () => [
         COMPANY_CONTEXT,
         ...clientContexts,
-      ];
-    }, [
-      clientContexts,
-    ]);
+      ],
+      [clientContexts],
+    );
 
-  /* --------------------------------------------------------------------------
-     CURRENT WORKSPACE CONTEXT
-  -------------------------------------------------------------------------- */
+  const currentContext = useMemo(() => {
+    if (!isFullAccess) {
+      return COMPANY_CONTEXT;
+    }
 
-  const currentContext =
-    useMemo<
-      WorkspaceContext
-    >(() => {
-      return (
-        workspaceContexts.find(
-          (context) =>
-            context.id ===
-            selectedContextId,
-        ) ??
-        COMPANY_CONTEXT
-      );
-    }, [
-      selectedContextId,
-      workspaceContexts,
-    ]);
-
-  /* --------------------------------------------------------------------------
-     VALIDATE SAVED CONTEXT
-
-     If the selected client was archived/deleted/no longer returned by the API,
-     automatically return to the company-wide Syntra Grid context.
-  -------------------------------------------------------------------------- */
+    return (
+      workspaceContexts.find(
+        (context) =>
+          context.id === selectedContextId,
+      ) ?? COMPANY_CONTEXT
+    );
+  }, [
+    isFullAccess,
+    workspaceContexts,
+    selectedContextId,
+  ]);
 
   useEffect(() => {
-    if (
-      !contextHydrated ||
-      clientsLoading
-    ) {
-      return;
-    }
+    if (!isFullAccess) return;
+    if (!contextHydrated) return;
+    if (clientsLoading) return;
+    if (!clientsPayload) return;
+    if (clientsSwrError) return;
 
-    const exists =
-      workspaceContexts.some(
-        (context) =>
-          context.id ===
-          selectedContextId,
-      );
+    const exists = workspaceContexts.some(
+      (context) =>
+        context.id === selectedContextId,
+    );
 
-    if (exists) {
-      return;
-    }
+    if (exists) return;
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedContextId(
       COMPANY_CONTEXT.id,
     );
@@ -654,31 +743,33 @@ export default function AdminHeader({
         COMPANY_CONTEXT.id,
       );
     } catch {
-      // Storage may be unavailable.
+      // Optional local preference.
     }
   }, [
-    clientsLoading,
+    isFullAccess,
     contextHydrated,
-    selectedContextId,
+    clientsLoading,
+    clientsPayload,
+    clientsSwrError,
     workspaceContexts,
+    selectedContextId,
   ]);
-
-  /* --------------------------------------------------------------------------
-     SELECT WORKSPACE CONTEXT
-  -------------------------------------------------------------------------- */
 
   const selectWorkspaceContext =
     useCallback(
-      (
-        contextId: string,
-      ) => {
-        setSelectedContextId(
-          contextId,
-        );
+      (contextId: string) => {
+        if (!isFullAccess) return;
 
-        setContextOpen(
-          false,
-        );
+        const permitted =
+          workspaceContexts.some(
+            (context) =>
+              context.id === contextId,
+          );
+
+        if (!permitted) return;
+
+        setSelectedContextId(contextId);
+        setContextOpen(false);
 
         try {
           window.localStorage.setItem(
@@ -687,159 +778,111 @@ export default function AdminHeader({
           );
         } catch (error) {
           console.warn(
-            'Could not persist workspace context:',
+            "Could not persist workspace context:",
             error,
           );
         }
-
-        /*
-         * For now the selection is persisted locally.
-         *
-         * The next architectural step is moving this state into a
-         * WorkspaceContextProvider so every admin tab can consume the same
-         * selected context.
-         */
       },
-      [],
+      [isFullAccess, workspaceContexts],
     );
 
-  /* --------------------------------------------------------------------------
-     SEARCH INDEX
-  -------------------------------------------------------------------------- */
+  /* ===========================================================================
+     GLOBAL SEARCH
+  =========================================================================== */
 
   const searchIndex =
     useMemo<SearchResult[]>(
-      () => {
-        return sections.flatMap(
-          (section) =>
-            section.items.map(
-              (item) => ({
-                id: `${section.id}-${item.tab}`,
-
-                label:
-                  item.title,
-
-                description:
-                  item.description,
-
-                tab:
-                  item.tab,
-
-                section:
-                  section.label,
-              }),
-            ),
-        );
-      },
-      [
-        sections,
-      ],
+      () =>
+        sections.flatMap((section) =>
+          section.items.map((item) => ({
+            id: `${section.id}-${item.tab}`,
+            label: item.title,
+            description: item.description,
+            tab: item.tab,
+            section: section.label,
+          })),
+        ),
+      [sections],
     );
 
   const searchResults =
     useMemo(() => {
       const query =
-        searchQuery
-          .trim()
-          .toLowerCase();
+        searchQuery.trim().toLowerCase();
 
       if (!query) {
-        return searchIndex.slice(
-          0,
-          8,
-        );
+        return searchIndex.slice(0, 8);
       }
 
       return searchIndex
-        .filter((item) => {
-          const haystack = [
+        .filter((item) =>
+          [
             item.label,
             item.description,
             item.section,
           ]
-            .join(' ')
-            .toLowerCase();
-
-          return haystack.includes(
-            query,
-          );
-        })
+            .join(" ")
+            .toLowerCase()
+            .includes(query),
+        )
         .slice(0, 10);
-    }, [
-      searchIndex,
-      searchQuery,
-    ]);
+    }, [searchIndex, searchQuery]);
 
-  /* --------------------------------------------------------------------------
-     REGISTER TAB BUTTONS
-  -------------------------------------------------------------------------- */
+  /* ===========================================================================
+     TAB INDICATOR
+  =========================================================================== */
 
   const registerTabButton =
     useCallback(
       (
         tab: AdminTab,
-        node:
-          | HTMLButtonElement
-          | null,
+        node: HTMLButtonElement | null,
       ) => {
         if (node) {
           tabButtonRefs.current.set(
             tab,
             node,
           );
-
-          return;
+        } else {
+          tabButtonRefs.current.delete(
+            tab,
+          );
         }
-
-        tabButtonRefs.current.delete(
-          tab,
-        );
       },
       [],
     );
 
-  /* --------------------------------------------------------------------------
-     UPDATE TAB INDICATOR
-  -------------------------------------------------------------------------- */
-
   const updateTabIndicator =
     useCallback(() => {
-      const row =
-        tabRowRef.current;
+      if (!showTabBar) return;
+
+      const row = tabRowRef.current;
 
       const button =
         tabButtonRefs.current.get(
           activeTab,
         );
 
-      if (
-        !row ||
-        !button
-      ) {
-        return;
-      }
+      if (!row || !button) return;
 
-      const horizontalInset =
-        8;
+      const horizontalInset = 8;
 
       setTabIndicator({
         left:
           button.offsetLeft +
           horizontalInset,
 
-        width:
-          Math.max(
-            button.offsetWidth -
-              horizontalInset *
-                2,
-            12,
-          ),
+        width: Math.max(
+          button.offsetWidth -
+            horizontalInset * 2,
+          12,
+        ),
 
-        ready:
-          true,
+        ready: true,
       });
     }, [
       activeTab,
+      showTabBar,
     ]);
 
   useLayoutEffect(() => {
@@ -851,146 +894,114 @@ export default function AdminHeader({
   ]);
 
   useEffect(() => {
-    const handleResize =
-      () => {
-        updateTabIndicator();
-      };
+    if (!showTabBar) return;
 
     window.addEventListener(
-      'resize',
-      handleResize,
+      "resize",
+      updateTabIndicator,
     );
 
     return () => {
       window.removeEventListener(
-        'resize',
-        handleResize,
+        "resize",
+        updateTabIndicator,
       );
     };
   }, [
+    showTabBar,
     updateTabIndicator,
   ]);
 
   useEffect(() => {
+    if (!showTabBar) return;
+
     const button =
       tabButtonRefs.current.get(
         activeTab,
       );
 
-    if (!button) {
-      return;
-    }
+    if (!button) return;
 
-    const reduceMotion =
+    const reduced =
       window.matchMedia(
-        '(prefers-reduced-motion: reduce)',
+        "(prefers-reduced-motion: reduce)",
       ).matches;
 
     button.scrollIntoView({
-      behavior:
-        reduceMotion
-          ? 'auto'
-          : 'smooth',
-
-      block:
-        'nearest',
-
-      inline:
-        'nearest',
+      behavior: reduced
+        ? "auto"
+        : "smooth",
+      block: "nearest",
+      inline: "nearest",
     });
   }, [
     activeTab,
+    showTabBar,
   ]);
-
-  /* --------------------------------------------------------------------------
-     TAB INDICATOR STYLE
-  -------------------------------------------------------------------------- */
 
   const tabIndicatorStyle =
     useMemo<CSSProperties>(
       () => ({
-        width:
-          tabIndicator.width,
-
-        transform: `translate3d(${tabIndicator.left}px, 0, 0)`,
-
+        width: tabIndicator.width,
+        transform: `translate3d(${tabIndicator.left}px,0,0)`,
         opacity:
-          tabIndicator.ready
-            ? 1
-            : 0,
+          tabIndicator.ready ? 1 : 0,
       }),
-      [
-        tabIndicator,
-      ],
+      [tabIndicator],
     );
 
-  /* --------------------------------------------------------------------------
-     CLOSE POPOVERS WHEN CLICKING OUTSIDE
-  -------------------------------------------------------------------------- */
+  /* ===========================================================================
+     CLOSE MENUS ON OUTSIDE CLICK
+  =========================================================================== */
 
   useEffect(() => {
     const handlePointerDown = (
       event: PointerEvent,
     ) => {
-      const target =
-        event.target;
+      const target = event.target;
 
-      if (
-        !(target instanceof Node)
-      ) {
+      if (!(target instanceof Node)) {
         return;
       }
 
       if (
         profileRef.current &&
-        !profileRef.current.contains(
-          target,
-        )
+        !profileRef.current.contains(target)
       ) {
-        setProfileOpen(
-          false,
-        );
+        setProfileOpen(false);
       }
 
       if (
         contextRef.current &&
-        !contextRef.current.contains(
-          target,
-        )
+        !contextRef.current.contains(target)
       ) {
-        setContextOpen(
-          false,
-        );
+        setContextOpen(false);
       }
 
       if (
         notificationsRef.current &&
-        !notificationsRef.current.contains(
-          target,
-        )
+        !notificationsRef.current.contains(target)
       ) {
-        setNotificationsOpen(
-          false,
-        );
+        setNotificationsOpen(false);
       }
     };
 
     window.addEventListener(
-      'pointerdown',
+      "pointerdown",
       handlePointerDown,
     );
 
     return () => {
       window.removeEventListener(
-        'pointerdown',
+        "pointerdown",
         handlePointerDown,
       );
     };
   }, []);
 
-  /* --------------------------------------------------------------------------
+  /* ===========================================================================
      KEYBOARD SHORTCUTS
-  -------------------------------------------------------------------------- */
+  =========================================================================== */
 
   useEffect(() => {
     const handleKeyDown = (
@@ -1002,357 +1013,240 @@ export default function AdminHeader({
 
       if (
         modifier &&
-        event.key.toLowerCase() ===
-          'k'
+        event.key.toLowerCase() === "k"
       ) {
         event.preventDefault();
 
-        setSearchOpen(
-          true,
-        );
-
-        setProfileOpen(
-          false,
-        );
-
-        setContextOpen(
-          false,
-        );
-
-        setNotificationsOpen(
-          false,
-        );
+        setSearchOpen(true);
+        setProfileOpen(false);
+        setContextOpen(false);
+        setNotificationsOpen(false);
 
         window.setTimeout(
-          () => {
-            searchInputRef.current?.focus();
-          },
+          () =>
+            searchInputRef.current?.focus(),
           20,
         );
       }
 
-      if (
-        event.key ===
-        'Escape'
-      ) {
-        setSearchOpen(
-          false,
-        );
-
-        setProfileOpen(
-          false,
-        );
-
-        setContextOpen(
-          false,
-        );
-
-        setNotificationsOpen(
-          false,
-        );
+      if (event.key === "Escape") {
+        setSearchOpen(false);
+        setProfileOpen(false);
+        setContextOpen(false);
+        setNotificationsOpen(false);
       }
     };
 
     window.addEventListener(
-      'keydown',
+      "keydown",
       handleKeyDown,
     );
 
     return () => {
       window.removeEventListener(
-        'keydown',
+        "keydown",
         handleKeyDown,
       );
     };
   }, []);
 
-  /* --------------------------------------------------------------------------
-     OPEN SEARCH
-  -------------------------------------------------------------------------- */
+  /* ===========================================================================
+     ACTIONS
+  =========================================================================== */
 
   const openSearch =
     useCallback(() => {
-      setProfileOpen(
-        false,
-      );
-
-      setContextOpen(
-        false,
-      );
-
-      setNotificationsOpen(
-        false,
-      );
-
-      setSearchOpen(
-        true,
-      );
+      setProfileOpen(false);
+      setContextOpen(false);
+      setNotificationsOpen(false);
+      setSearchOpen(true);
 
       window.setTimeout(
-        () => {
-          searchInputRef.current?.focus();
-        },
+        () =>
+          searchInputRef.current?.focus(),
         20,
       );
     }, []);
 
-  /* --------------------------------------------------------------------------
-     SEARCH RESULT
-  -------------------------------------------------------------------------- */
-
   const selectSearchResult =
     useCallback(
-      (
-        result: SearchResult,
-      ) => {
-        onTabSelect(
-          result.tab,
-        );
-
-        setSearchOpen(
-          false,
-        );
-
-        setSearchQuery(
-          '',
-        );
+      (result: SearchResult) => {
+        onTabSelect(result.tab);
+        setSearchOpen(false);
+        setSearchQuery("");
       },
-      [
-        onTabSelect,
-      ],
+      [onTabSelect],
     );
 
-  /* --------------------------------------------------------------------------
-     SIGN OUT
-  -------------------------------------------------------------------------- */
-const signOut =
-  useCallback(async () => {
-    if (signingOut) {
-      return;
-    }
+  const signOut =
+    useCallback(async () => {
+      if (signingOut) return;
 
-    setSigningOut(true);
+      setSigningOut(true);
 
-    try {
-      const response = await fetch(
-        '/api/admin/signout',
-        {
-          method: 'POST',
-          credentials: 'include',
-          cache: 'no-store',
-        },
-      );
-
-      const payload = await response
-        .json()
-        .catch(() => null);
-
-      if (!response.ok || !payload?.ok) {
-        throw new Error(
-          payload?.error ||
-            'Could not sign out.',
+      try {
+        const response = await fetch(
+          "/api/admin/signout",
+          {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+          },
         );
+
+        const payload = await response
+          .json()
+          .catch(() => null);
+
+        if (
+          !response.ok ||
+          !payload?.ok
+        ) {
+          throw new Error(
+            payload?.error ||
+              "Could not sign out.",
+          );
+        }
+
+        window.location.replace(
+          "/login",
+        );
+      } catch (error) {
+        console.error(
+          "Could not sign out:",
+          error,
+        );
+
+        setSigningOut(false);
       }
+    }, [signingOut]);
 
-      window.location.replace(
-        '/login',
-      );
-    } catch (error) {
-      console.error(
-        'Could not sign out:',
-        error,
-      );
-
-      setSigningOut(false);
-    }
-  }, [signingOut]);
-  /* --------------------------------------------------------------------------
+  /* ===========================================================================
      RENDER
-  -------------------------------------------------------------------------- */
+  =========================================================================== */
 
   return (
     <>
       <header
+        data-workspace={activeSection.id}
+        data-command={
+          commandWorkspace
+            ? "true"
+            : "false"
+        }
         className="
           relative
-          border-b
-          border-[var(--line)]
+          border-b border-[var(--line)]
           bg-[var(--shell-translucent)]
           backdrop-blur-2xl
         "
       >
-        {/* ==================================================================
-            TOP ROW
-        ================================================================== */}
+        {/* ================================================================
+            MAIN HEADER ROW
+        ================================================================ */}
 
         <div
-          className="
-            flex
-            min-h-[70px]
-            items-center
-            gap-4
-            px-5
-            xl:px-7
-          "
+          className={`
+            flex items-center gap-3
+            px-5 xl:px-7
+            ${
+              commandWorkspace
+                ? "min-h-[56px]"
+                : "min-h-[70px]"
+            }
+          `}
         >
-          {/* ---------------------------------------------------------------
-              ACTIVE WORKSPACE
-          --------------------------------------------------------------- */}
+          {/* ACTIVE SECTION */}
 
-          <div
-            className="
-              flex
-              min-w-0
-              items-center
-              gap-3
-            "
-          >
+          <div className="flex min-w-0 items-center gap-3">
             <div
-              className="
-                flex
-                h-9
-                w-9
-                shrink-0
-                items-center
-                justify-center
-                rounded-xl
+              className={`
+                flex shrink-0 items-center
+                justify-center rounded-xl
                 bg-[var(--surface-muted)]
                 text-[var(--text)]
-              "
+                ${
+                  commandWorkspace
+                    ? "h-8 w-8"
+                    : "h-9 w-9"
+                }
+              `}
             >
               <ActiveSectionIcon
-                size={16}
+                size={
+                  commandWorkspace
+                    ? 15
+                    : 16
+                }
                 strokeWidth={1.9}
               />
             </div>
 
             <div className="min-w-0">
-              <p
-                className="
-                  truncate
-                  text-[13px]
-                  font-semibold
-                  tracking-[-0.015em]
-                  text-[var(--text)]
-                "
-              >
-                {
-                  activeSection.label
-                }
+              <p className="truncate text-[13px] font-semibold tracking-[-0.015em] text-[var(--text)]">
+                {activeSection.label}
               </p>
 
-              <p
-                className="
-                  mt-0.5
-                  max-w-[250px]
-                  truncate
-                  text-[10px]
-                  text-[var(--text-subtle)]
-                "
-              >
-                {
-                  activeSection.description
-                }
+              <p className="mt-0.5 max-w-[250px] truncate text-[10px] text-[var(--text-subtle)]">
+                {activeSection.description}
               </p>
             </div>
           </div>
 
           <div className="flex-1" />
 
-          {/* ---------------------------------------------------------------
-              WORKSPACE CONTEXT
-          --------------------------------------------------------------- */}
+          {/* ============================================================
+              WORKSPACE SELECTOR
+          ============================================================ */}
 
           <div
-            ref={
-              contextRef
-            }
+            ref={contextRef}
             className="relative"
           >
             <button
               type="button"
               onClick={() => {
+                if (!isFullAccess) return;
+
                 setContextOpen(
-                  (current) =>
-                    !current,
+                  (value) => !value,
                 );
 
-                setProfileOpen(
-                  false,
-                );
-
-                setNotificationsOpen(
-                  false,
-                );
+                setProfileOpen(false);
+                setNotificationsOpen(false);
               }}
-              aria-expanded={
-                contextOpen
-              }
+              aria-expanded={contextOpen}
               aria-label={`Workspace context: ${currentContext.label}`}
               className="
-                hidden
-                h-10
-                items-center
-                gap-2.5
-                rounded-full
-                border
-                border-[var(--line)]
+                hidden h-10 items-center gap-2.5
+                rounded-full border border-[var(--line)]
                 bg-[var(--surface)]
-                pl-1.5
-                pr-3
-                text-left
-                shadow-sm
+                pl-1.5 pr-3 text-left shadow-sm
                 transition-colors
-                duration-150
                 hover:bg-[var(--surface-muted)]
                 xl:flex
               "
             >
               <WorkspaceAvatar
-                context={
-                  currentContext
-                }
+                context={currentContext}
                 size="small"
               />
 
               <span className="min-w-0">
-                <span
-                  className="
-                    block
-                    max-w-[145px]
-                    truncate
-                    text-[10px]
-                    font-semibold
-                    text-[var(--text)]
-                  "
-                >
-                  {
-                    currentContext.label
-                  }
+                <span className="block max-w-[145px] truncate text-[10px] font-semibold text-[var(--text)]">
+                  {currentContext.label}
                 </span>
 
-                <span
-                  className="
-                    block
-                    max-w-[145px]
-                    truncate
-                    text-[8px]
-                    text-[var(--text-subtle)]
-                  "
-                >
-                  {
-                    currentContext.description
-                  }
+                <span className="block max-w-[145px] truncate text-[8px] text-[var(--text-subtle)]">
+                  {currentContext.description}
                 </span>
               </span>
 
-              {clientsLoading ? (
+              {clientsLoading &&
+              canOpenClients ? (
                 <LoaderCircle
                   size={13}
-                  className="
-                    animate-spin
-                    text-[var(--text-subtle)]
-                  "
+                  className="animate-spin text-[var(--text-subtle)]"
                 />
               ) : (
                 <ChevronDown
@@ -1360,264 +1254,182 @@ const signOut =
                   className={`
                     text-[var(--text-subtle)]
                     transition-transform
-                    duration-150
-
                     ${
                       contextOpen
-                        ? 'rotate-180'
-                        : ''
+                        ? "rotate-180"
+                        : ""
                     }
                   `}
                 />
               )}
             </button>
 
-            {contextOpen && (
-              <ContextMenu
-                currentContextId={
-                  currentContext.id
-                }
-                contexts={
-                  workspaceContexts
-                }
-                loading={
-                  clientsLoading
-                }
-                error={
-                  clientsError
-                }
-                onRetry={() => {
-                  void loadClients();
-                }}
-                onSelect={
-                  selectWorkspaceContext
-                }
-              />
-            )}
+            {contextOpen &&
+              isFullAccess && (
+                <ContextMenu
+                  currentContextId={
+                    currentContext.id
+                  }
+                  contexts={
+                    workspaceContexts
+                  }
+                  loading={
+                    canOpenClients &&
+                    clientsLoading
+                  }
+                  error={
+                    canOpenClients
+                      ? clientsError
+                      : null
+                  }
+                  onRetry={() => {
+                    void loadClients();
+                  }}
+                  onSelect={
+                    selectWorkspaceContext
+                  }
+                />
+              )}
           </div>
 
-          {/* ---------------------------------------------------------------
+          {/* ============================================================
               SEARCH
-          --------------------------------------------------------------- */}
+          ============================================================ */}
 
           <button
             type="button"
-            onClick={
-              openSearch
-            }
+            onClick={openSearch}
+            aria-label="Search Syntra Grid"
             className="
-              flex
-              h-10
-              items-center
-              gap-2
-              rounded-full
-              border
-              border-[var(--line)]
+              flex h-9 items-center gap-2
+              rounded-full border border-[var(--line)]
               bg-[var(--surface)]
-              px-3
-              text-[var(--text-muted)]
-              shadow-sm
-              transition-colors
-              duration-150
+              px-3 text-[var(--text-muted)]
+              shadow-sm transition-colors
               hover:bg-[var(--surface-muted)]
               hover:text-[var(--text)]
               focus-visible:outline-none
               focus-visible:ring-2
               focus-visible:ring-[var(--primary)]
             "
-            aria-label="Search Syntra Grid"
           >
             <Search
               size={15}
               strokeWidth={1.9}
             />
 
-            <span
-              className="
-                hidden
-                text-[10px]
-                font-medium
-                xl:inline
-              "
-            >
+            <span className="hidden text-[10px] font-medium xl:inline">
               Search
             </span>
 
-            <span
-              className="
-                hidden
-                items-center
-                gap-0.5
-                rounded-md
-                border
-                border-[var(--line)]
-                bg-[var(--surface-muted)]
-                px-1.5
-                py-0.5
-                text-[8px]
-                font-semibold
-                text-[var(--text-subtle)]
-                xl:flex
-              "
-            >
-              <Command
-                size={8}
-              />
+            <span className="hidden items-center gap-0.5 rounded-md border border-[var(--line)] bg-[var(--surface-muted)] px-1.5 py-0.5 text-[8px] font-semibold text-[var(--text-subtle)] xl:flex">
+              <Command size={8} />
               K
             </span>
           </button>
 
-          {/* ---------------------------------------------------------------
+          {/* ============================================================
               NOTIFICATIONS
-          --------------------------------------------------------------- */}
+          ============================================================ */}
 
-          <div
-            ref={
-              notificationsRef
-            }
-            className="relative"
-          >
-            <button
-              type="button"
-              onClick={() => {
-                setNotificationsOpen(
-                  (current) =>
-                    !current,
-                );
-
-                setContextOpen(
-                  false,
-                );
-
-                setProfileOpen(
-                  false,
-                );
-              }}
-              aria-label="Notifications"
-              aria-expanded={
-                notificationsOpen
-              }
-              className="
-                relative
-                flex
-                h-10
-                w-10
-                items-center
-                justify-center
-                rounded-full
-                border
-                border-[var(--line)]
-                bg-[var(--surface)]
-                text-[var(--text-muted)]
-                shadow-sm
-                transition-colors
-                duration-150
-                hover:bg-[var(--surface-muted)]
-                hover:text-[var(--text)]
-              "
+          {canOpenNotifications && (
+            <div
+              ref={notificationsRef}
+              className="relative"
             >
-              <Bell
-                size={16}
-                strokeWidth={1.9}
-              />
-
-              <span
-                className="
-                  absolute
-                  right-[8px]
-                  top-[8px]
-                  h-1.5
-                  w-1.5
-                  rounded-full
-                  bg-[var(--accent)]
-                  ring-2
-                  ring-[var(--surface)]
-                "
-              />
-            </button>
-
-            {notificationsOpen && (
-              <NotificationsMenu
-                onOpenNotifications={() => {
-                  onTabSelect(
-                    'notifications',
-                  );
-
+              <button
+                type="button"
+                onClick={() => {
                   setNotificationsOpen(
-                    false,
+                    (value) => !value,
                   );
-                }}
-              />
-            )}
-          </div>
 
-          {/* ---------------------------------------------------------------
+                  setContextOpen(false);
+                  setProfileOpen(false);
+                }}
+                aria-label="Notifications"
+                aria-expanded={
+                  notificationsOpen
+                }
+                className="
+                  relative flex h-9 w-9
+                  items-center justify-center
+                  rounded-full
+                  border border-[var(--line)]
+                  bg-[var(--surface)]
+                  text-[var(--text-muted)]
+                  shadow-sm transition-colors
+                  hover:bg-[var(--surface-muted)]
+                  hover:text-[var(--text)]
+                "
+              >
+                <Bell
+                  size={16}
+                  strokeWidth={1.9}
+                />
+
+                {isFullAccess && (
+                  <span className="absolute right-[7px] top-[7px] h-1.5 w-1.5 rounded-full bg-[var(--accent)] ring-2 ring-[var(--surface)]" />
+                )}
+              </button>
+
+              {notificationsOpen && (
+                <NotificationsMenu
+                  isFullAccess={
+                    isFullAccess
+                  }
+                  onOpenNotifications={() => {
+                    onTabSelect(
+                      "notifications",
+                    );
+
+                    setNotificationsOpen(
+                      false,
+                    );
+                  }}
+                />
+              )}
+            </div>
+          )}
+
+          {/* ============================================================
               PROFILE
-          --------------------------------------------------------------- */}
+          ============================================================ */}
 
           <div
-            ref={
-              profileRef
-            }
+            ref={profileRef}
             className="relative"
           >
             <button
               type="button"
               onClick={() => {
                 setProfileOpen(
-                  (current) =>
-                    !current,
+                  (value) => !value,
                 );
 
-                setContextOpen(
-                  false,
-                );
+                setContextOpen(false);
+                setNotificationsOpen(false);
 
-                setNotificationsOpen(
-                  false,
-                );
+                void refreshProfile();
               }}
+              aria-label="Account menu"
               aria-expanded={
                 profileOpen
               }
               className="
-                flex
-                h-10
-                items-center
-                gap-2
+                flex h-9 items-center gap-2
                 rounded-full
-                border
-                border-[var(--line)]
+                border border-[var(--line)]
                 bg-[var(--surface)]
-                p-1
-                pr-2
-                shadow-sm
-                transition-colors
-                duration-150
+                p-0.5 pr-2
+                shadow-sm transition-colors
                 hover:bg-[var(--surface-muted)]
               "
             >
-              <span
-                className="
-                  flex
-                  h-8
-                  w-8
-                  shrink-0
-                  items-center
-                  justify-center
-                  rounded-full
-                  bg-[var(--primary)]
-                  text-[9px]
-                  font-bold
-                  uppercase
-                  tracking-[0.03em]
-                  text-[var(--primary-foreground)]
-                "
-              >
-                {initials(
-                  admin.fullName,
-                )}
-              </span>
+              <ProfileAvatar
+                name={profileName}
+                url={profileAvatarUrl}
+              />
 
               <ChevronDown
                 size={12}
@@ -1625,13 +1437,11 @@ const signOut =
                   hidden
                   text-[var(--text-subtle)]
                   transition-transform
-                  duration-150
                   xl:block
-
                   ${
                     profileOpen
-                      ? 'rotate-180'
-                      : ''
+                      ? "rotate-180"
+                      : ""
                   }
                 `}
               />
@@ -1639,8 +1449,27 @@ const signOut =
 
             {profileOpen && (
               <ProfileMenu
-                admin={
-                  admin
+                admin={admin}
+                profileName={
+                  profileName
+                }
+                avatarUrl={
+                  profileAvatarUrl
+                }
+                jobTitle={
+                  profileJobTitle
+                }
+                department={
+                  profileDepartment
+                }
+                isFullAccess={
+                  isFullAccess
+                }
+                canOpenTeam={
+                  canOpenTeam
+                }
+                canOpenSettings={
+                  canOpenSettings
                 }
                 theme={
                   theme as ThemeMode
@@ -1652,187 +1481,164 @@ const signOut =
                   setTheme
                 }
                 onTeam={() => {
-                  onTabSelect(
-                    'team',
-                  );
+                  if (!canOpenTeam) return;
 
-                  setProfileOpen(
-                    false,
-                  );
+                  onTabSelect("team");
+                  setProfileOpen(false);
                 }}
                 onSettings={() => {
+                  if (
+                    !canOpenSettings
+                  ) {
+                    return;
+                  }
+
                   onTabSelect(
-                    'settings',
+                    "settings",
                   );
 
-                  setProfileOpen(
-                    false,
-                  );
+                  setProfileOpen(false);
                 }}
-                onSignOut={() =>
-                  void signOut()
-                }
+                onSignOut={() => {
+                  void signOut();
+                }}
               />
             )}
           </div>
         </div>
 
-        {/* ==================================================================
-            WORKSPACE TAB ROW
-        ================================================================== */}
+        {/* ================================================================
+            SECTION TABS
+        ================================================================ */}
 
-        <div
-          ref={
-            tabRowRef
-          }
-          className="
-            no-scrollbar
-            relative
-            flex
-            min-h-[45px]
-            items-end
-            gap-1
-            overflow-x-auto
-            overflow-y-hidden
-            px-5
-            xl:px-7
-          "
-          aria-label={`${activeSection.label} tabs`}
-        >
-          {/* Moving indicator */}
-
-          <span
-            aria-hidden="true"
-            style={
-              tabIndicatorStyle
-            }
+        {showTabBar && (
+          <div
+            ref={tabRowRef}
             className="
-              pointer-events-none
-              absolute
-              bottom-0
-              left-0
-              z-20
-              h-[2px]
-              rounded-full
-              bg-[var(--primary)]
-              transition-[transform,width,opacity]
-              duration-[300ms]
-              ease-[cubic-bezier(0.22,1,0.36,1)]
-              motion-reduce:transition-none
+              no-scrollbar relative
+              flex min-h-[45px] items-end
+              gap-1 overflow-x-auto
+              overflow-y-hidden
+              px-5 xl:px-7
             "
-          />
+            aria-label={`${activeSection.label} tabs`}
+          >
+            <span
+              aria-hidden="true"
+              style={tabIndicatorStyle}
+              className="
+                pointer-events-none
+                absolute bottom-0 left-0 z-20
+                h-[2px] rounded-full
+                bg-[var(--primary)]
+                transition-[transform,width,opacity]
+                duration-[300ms]
+                ease-[cubic-bezier(0.22,1,0.36,1)]
+                motion-reduce:transition-none
+              "
+            />
 
-          {/* Tab buttons */}
+            {activeSection.items.map(
+              (item) => {
+                const selected =
+                  item.tab === activeTab;
 
-          {activeSection.items.map(
-            (item) => {
-              const selected =
-                item.tab ===
-                activeTab;
+                const Icon =
+                  item.icon;
 
-              const Icon =
-                item.icon;
-
-              return (
-                <button
-                  ref={(node) => {
-                    registerTabButton(
-                      item.tab,
-                      node,
-                    );
-                  }}
-                  key={
-                    item.tab
-                  }
-                  type="button"
-                  onClick={() =>
-                    onTabSelect(
-                      item.tab,
-                    )
-                  }
-                  aria-current={
-                    selected
-                      ? 'page'
-                      : undefined
-                  }
-                  className={`
-                    group
-                    relative
-                    z-10
-                    flex
-                    h-[45px]
-                    shrink-0
-                    items-center
-                    gap-2
-                    px-3
-                    text-[11px]
-                    font-semibold
-                    transition-[color,transform]
-                    duration-200
-
-                    ${
-                      selected
-                        ? 'text-[var(--text)]'
-                        : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                return (
+                  <button
+                    key={item.tab}
+                    ref={(node) => {
+                      registerTabButton(
+                        item.tab,
+                        node,
+                      );
+                    }}
+                    type="button"
+                    onClick={() =>
+                      onTabSelect(
+                        item.tab,
+                      )
                     }
-                  `}
-                >
-                  <Icon
-                    size={13}
-                    strokeWidth={
+                    onMouseEnter={() => {
+                      if (
+                        canOpenClients &&
+                        item.tab ===
+                          "clients"
+                      ) {
+                        void preload(
+                          CLIENTS_ENDPOINT,
+                          fetchClientsPayload,
+                        );
+                      }
+                    }}
+                    onFocus={() => {
+                      if (
+                        canOpenClients &&
+                        item.tab ===
+                          "clients"
+                      ) {
+                        void preload(
+                          CLIENTS_ENDPOINT,
+                          fetchClientsPayload,
+                        );
+                      }
+                    }}
+                    aria-current={
                       selected
-                        ? 2.1
-                        : 1.8
+                        ? "page"
+                        : undefined
                     }
-                    className="
+                    className={`
+                      group relative z-10
+                      flex h-[45px] shrink-0
+                      items-center gap-2 px-3
+                      text-[11px] font-semibold
                       transition-[color,transform]
                       duration-200
-                    "
-                  />
+                      ${
+                        selected
+                          ? "text-[var(--text)]"
+                          : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                      }
+                    `}
+                  >
+                    <Icon
+                      size={13}
+                      strokeWidth={
+                        selected
+                          ? 2.1
+                          : 1.8
+                      }
+                    />
 
-                  <span>
-                    {
-                      item.title
-                    }
-                  </span>
-
-                  {item.status ===
-                    'planned' && (
-                    <span
-                      className="
-                        rounded-full
-                        bg-[var(--surface-muted)]
-                        px-1.5
-                        py-0.5
-                        text-[7px]
-                        font-bold
-                        uppercase
-                        tracking-[0.08em]
-                        text-[var(--text-subtle)]
-                      "
-                    >
-                      Soon
+                    <span>
+                      {item.title}
                     </span>
-                  )}
-                </button>
-              );
-            },
-          )}
-        </div>
+
+                    {item.status ===
+                      "planned" && (
+                      <span className="rounded-full bg-[var(--surface-muted)] px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
+                        Soon
+                      </span>
+                    )}
+                  </button>
+                );
+              },
+            )}
+          </div>
+        )}
       </header>
 
-      {/* ====================================================================
-          SEARCH
-      ==================================================================== */}
+      {/* ================================================================
+          SEARCH PALETTE
+      ================================================================ */}
 
       {searchOpen && (
         <SearchPalette
-          query={
-            searchQuery
-          }
-          results={
-            searchResults
-          }
+          query={searchQuery}
+          results={searchResults}
           inputRef={
             searchInputRef
           }
@@ -1843,13 +1649,8 @@ const signOut =
             selectSearchResult
           }
           onClose={() => {
-            setSearchOpen(
-              false,
-            );
-
-            setSearchQuery(
-              '',
-            );
+            setSearchOpen(false);
+            setSearchQuery("");
           }}
         />
       )}
@@ -1857,54 +1658,54 @@ const signOut =
   );
 }
 
-/* ============================================================================
+/* =============================================================================
    WORKSPACE AVATAR
-============================================================================ */
+============================================================================= */
 
 function WorkspaceAvatar({
   context,
-  size = 'medium',
+  size = "medium",
 }: {
   context: WorkspaceContext;
-
-  size?:
-    | 'small'
-    | 'medium';
+  size?: "small" | "medium";
 }) {
   const sizeClass =
-    size === 'small'
-      ? 'h-7 w-7 rounded-full text-[8px]'
-      : 'h-9 w-9 rounded-xl text-[9px]';
+    size === "small"
+      ? "h-7 w-7 rounded-full text-[8px]"
+      : "h-9 w-9 rounded-xl text-[9px]";
+
+  const [failedUrl, setFailedUrl] =
+    useState<string | null>(null);
 
   if (
-    context.logoUrl
+    context.logoUrl &&
+    failedUrl !== context.logoUrl
   ) {
     return (
       <span
         className={`
-          relative
-          flex
-          shrink-0
-          items-center
-          justify-center
+          relative flex shrink-0
+          items-center justify-center
           overflow-hidden
-          border
-          border-[var(--line)]
+          border border-[var(--line)]
           bg-white
           ${sizeClass}
         `}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={
-            context.logoUrl
+          src={context.logoUrl}
+          alt={
+            context.type === "company"
+              ? "Syntra Grid logo"
+              : `${context.label} logo`
           }
-          alt=""
-          className="
-            h-full
-            w-full
-            object-cover
-          "
+          className="h-full w-full object-contain p-0.5"
+          onError={() =>
+            setFailedUrl(
+              context.logoUrl ?? null,
+            )
+          }
         />
       </span>
     );
@@ -1913,27 +1714,22 @@ function WorkspaceAvatar({
   return (
     <span
       className={`
-        flex
-        shrink-0
-        items-center
+        flex shrink-0 items-center
         justify-center
         bg-[var(--primary)]
-        font-bold
-        tracking-[0.02em]
+        font-bold tracking-[0.02em]
         text-[var(--primary-foreground)]
         ${sizeClass}
       `}
     >
-      {
-        context.shortLabel
-      }
+      {context.shortLabel}
     </span>
   );
 }
 
-/* ============================================================================
-   CONTEXT MENU
-============================================================================ */
+/* =============================================================================
+   WORKSPACE CONTEXT MENU
+============================================================================= */
 
 function ContextMenu({
   currentContextId,
@@ -1944,104 +1740,37 @@ function ContextMenu({
   onSelect,
 }: {
   currentContextId: string;
-
-  contexts:
-    WorkspaceContext[];
-
+  contexts: WorkspaceContext[];
   loading: boolean;
-
-  error:
-    | string
-    | null;
-
-  onRetry:
-    () => void;
-
-  onSelect: (
-    contextId: string,
-  ) => void;
+  error: string | null;
+  onRetry: () => void;
+  onSelect: (id: string) => void;
 }) {
   const companyContext =
     contexts.find(
       (context) =>
-        context.type ===
-        'company',
-    ) ??
-    COMPANY_CONTEXT;
+        context.type === "company",
+    ) ?? COMPANY_CONTEXT;
 
   const clientContexts =
     contexts.filter(
       (context) =>
-        context.type ===
-        'client',
+        context.type === "client",
     );
 
   return (
-    <div
-      className="
-        absolute
-        right-0
-        top-[calc(100%+10px)]
-        z-[80]
-        w-[300px]
-        overflow-hidden
-        rounded-[20px]
-        border
-        border-[var(--line)]
-        bg-[var(--surface-elevated)]
-        shadow-[var(--shadow-popover)]
-      "
-    >
-      {/* ---------------------------------------------------------------
-          HEADER
-      --------------------------------------------------------------- */}
-
-      <div
-        className="
-          border-b
-          border-[var(--line)]
-          px-4
-          pb-3
-          pt-3.5
-        "
-      >
-        <p
-          className="
-            text-[9px]
-            font-bold
-            uppercase
-            tracking-[0.14em]
-            text-[var(--text-subtle)]
-          "
-        >
+    <div className="absolute right-0 top-[calc(100%+10px)] z-[80] w-[300px] overflow-hidden rounded-[20px] border border-[var(--line)] bg-[var(--surface-elevated)] shadow-[var(--shadow-popover)]">
+      <div className="border-b border-[var(--line)] px-4 pb-3 pt-3.5">
+        <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-subtle)]">
           Workspace context
         </p>
 
-        <p
-          className="
-            mt-1
-            text-[10px]
-            leading-4
-            text-[var(--text-muted)]
-          "
-        >
-          Choose whose operation
-          you are working with.
+        <p className="mt-1 text-[10px] leading-4 text-[var(--text-muted)]">
+          Choose whose operation you are working with.
         </p>
       </div>
 
-      <div
-        className="
-          no-scrollbar
-          max-h-[390px]
-          overflow-y-auto
-          p-2
-        "
-      >
-        {/* ---------------------------------------------------------------
-            SYNTRA GRID
-        --------------------------------------------------------------- */}
-
+      <div className="no-scrollbar max-h-[390px] overflow-y-auto p-2">
         <ContextMenuItem
           context={
             companyContext
@@ -2050,210 +1779,76 @@ function ContextMenu({
             companyContext.id ===
             currentContextId
           }
-          onSelect={
-            onSelect
-          }
+          onSelect={onSelect}
         />
 
-        {/* ---------------------------------------------------------------
-            CLIENT DIVIDER
-        --------------------------------------------------------------- */}
-
-        <div
-          className="
-            mb-1
-            mt-2
-            flex
-            items-center
-            gap-2
-            px-2.5
-          "
-        >
+        <div className="mb-1 mt-2 flex items-center gap-2 px-2.5">
           <Building2
             size={10}
-            className="
-              text-[var(--text-subtle)]
-            "
+            className="text-[var(--text-subtle)]"
           />
 
-          <span
-            className="
-              text-[8px]
-              font-bold
-              uppercase
-              tracking-[0.12em]
-              text-[var(--text-subtle)]
-            "
-          >
+          <span className="text-[8px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
             Clients
           </span>
 
           {!loading &&
             !error && (
-              <span
-                className="
-                  ml-auto
-                  rounded-full
-                  bg-[var(--surface-muted)]
-                  px-1.5
-                  py-0.5
-                  text-[7px]
-                  font-bold
-                  text-[var(--text-subtle)]
-                "
-              >
-                {
-                  clientContexts.length
-                }
+              <span className="ml-auto rounded-full bg-[var(--surface-muted)] px-1.5 py-0.5 text-[7px] font-bold text-[var(--text-subtle)]">
+                {clientContexts.length}
               </span>
             )}
         </div>
 
-        {/* ---------------------------------------------------------------
-            LOADING
-        --------------------------------------------------------------- */}
-
         {loading && (
-          <div
-            className="
-              flex
-              items-center
-              gap-3
-              rounded-xl
-              px-3
-              py-4
-            "
-          >
-            <span
-              className="
-                flex
-                h-8
-                w-8
-                shrink-0
-                items-center
-                justify-center
-                rounded-xl
-                bg-[var(--surface-muted)]
-              "
-            >
+          <div className="flex items-center gap-3 rounded-xl px-3 py-4">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-muted)]">
               <LoaderCircle
                 size={14}
-                className="
-                  animate-spin
-                  text-[var(--text-subtle)]
-                "
+                className="animate-spin text-[var(--text-subtle)]"
               />
             </span>
 
             <div>
-              <p
-                className="
-                  text-[10px]
-                  font-semibold
-                  text-[var(--text)]
-                "
-              >
+              <p className="text-[10px] font-semibold text-[var(--text)]">
                 Loading clients
               </p>
 
-              <p
-                className="
-                  mt-0.5
-                  text-[8px]
-                  text-[var(--text-muted)]
-                "
-              >
-                Syncing workspace
-                contexts…
+              <p className="mt-0.5 text-[8px] text-[var(--text-muted)]">
+                Syncing workspace contexts…
               </p>
             </div>
           </div>
         )}
 
-        {/* ---------------------------------------------------------------
-            ERROR
-        --------------------------------------------------------------- */}
+        {!loading && error && (
+          <div className="rounded-xl border border-red-500/15 bg-red-500/[0.05] p-3">
+            <p className="text-[10px] font-semibold text-red-500">
+              Clients unavailable
+            </p>
 
-        {!loading &&
-          error && (
-            <div
-              className="
-                rounded-xl
-                border
-                border-red-500/15
-                bg-red-500/[0.05]
-                p-3
-              "
+            <p className="mt-1 line-clamp-2 text-[8px] leading-4 text-[var(--text-muted)]">
+              {error}
+            </p>
+
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 py-1.5 text-[8px] font-semibold text-[var(--text)] hover:bg-[var(--surface-muted)]"
             >
-              <p
-                className="
-                  text-[10px]
-                  font-semibold
-                  text-red-500
-                "
-              >
-                Clients unavailable
-              </p>
-
-              <p
-                className="
-                  mt-1
-                  line-clamp-2
-                  text-[8px]
-                  leading-4
-                  text-[var(--text-muted)]
-                "
-              >
-                {error}
-              </p>
-
-              <button
-                type="button"
-                onClick={
-                  onRetry
-                }
-                className="
-                  mt-2.5
-                  inline-flex
-                  items-center
-                  gap-1.5
-                  rounded-lg
-                  border
-                  border-[var(--line)]
-                  bg-[var(--surface)]
-                  px-2.5
-                  py-1.5
-                  text-[8px]
-                  font-semibold
-                  text-[var(--text)]
-                  transition-colors
-                  hover:bg-[var(--surface-muted)]
-                "
-              >
-                <RefreshCw
-                  size={10}
-                />
-
-                Try again
-              </button>
-            </div>
-          )}
-
-        {/* ---------------------------------------------------------------
-            CLIENTS
-        --------------------------------------------------------------- */}
+              <RefreshCw size={10} />
+              Try again
+            </button>
+          </div>
+        )}
 
         {!loading &&
           !error &&
           clientContexts.map(
             (context) => (
               <ContextMenuItem
-                key={
-                  context.id
-                }
-                context={
-                  context
-                }
+                key={context.id}
+                context={context}
                 selected={
                   context.id ===
                   currentContextId
@@ -2265,173 +1860,79 @@ function ContextMenu({
             ),
           )}
 
-        {/* ---------------------------------------------------------------
-            EMPTY
-        --------------------------------------------------------------- */}
-
         {!loading &&
           !error &&
-          clientContexts.length ===
-            0 && (
-            <div
-              className="
-                rounded-xl
-                border
-                border-dashed
-                border-[var(--line)]
-                px-4
-                py-5
-                text-center
-              "
-            >
+          !clientContexts.length && (
+            <div className="rounded-xl border border-dashed border-[var(--line)] px-4 py-5 text-center">
               <Building2
                 size={17}
-                className="
-                  mx-auto
-                  text-[var(--text-subtle)]
-                "
+                className="mx-auto text-[var(--text-subtle)]"
               />
 
-              <p
-                className="
-                  mt-2
-                  text-[10px]
-                  font-semibold
-                  text-[var(--text)]
-                "
-              >
-                No operational
-                clients
+              <p className="mt-2 text-[10px] font-semibold text-[var(--text)]">
+                No operational clients
               </p>
 
-              <p
-                className="
-                  mt-1
-                  text-[8px]
-                  leading-4
-                  text-[var(--text-muted)]
-                "
-              >
-                Active, onboarding
-                and paused clients
-                will appear here
-                automatically.
+              <p className="mt-1 text-[8px] leading-4 text-[var(--text-muted)]">
+                Active, onboarding and paused clients will appear here automatically.
               </p>
             </div>
           )}
       </div>
 
-      {/* ---------------------------------------------------------------
-          FOOTER
-      --------------------------------------------------------------- */}
-
-      <div
-        className="
-          border-t
-          border-[var(--line)]
-          px-4
-          py-2.5
-        "
-      >
-        <p
-          className="
-            text-[8px]
-            leading-4
-            text-[var(--text-subtle)]
-          "
-        >
-          Client workspaces are
-          connected to the Syntra
-          Grid client directory.
+      <div className="border-t border-[var(--line)] px-4 py-2.5">
+        <p className="text-[8px] leading-4 text-[var(--text-subtle)]">
+          Client workspaces are connected to the Syntra Grid client directory.
         </p>
       </div>
     </div>
   );
 }
 
-/* ============================================================================
-   CONTEXT MENU ITEM
-============================================================================ */
+/* =============================================================================
+   WORKSPACE CONTEXT ITEM
+============================================================================= */
 
 function ContextMenuItem({
   context,
   selected,
   onSelect,
 }: {
-  context:
-    WorkspaceContext;
-
-  selected:
-    boolean;
-
-  onSelect: (
-    contextId: string,
-  ) => void;
+  context: WorkspaceContext;
+  selected: boolean;
+  onSelect: (id: string) => void;
 }) {
   return (
     <button
       type="button"
       onClick={() =>
-        onSelect(
-          context.id,
-        )
+        onSelect(context.id)
       }
       className={`
-        flex
-        w-full
-        items-center
-        gap-3
-        rounded-xl
-        px-2.5
-        py-2.5
-        text-left
-        transition-colors
-        duration-150
+        flex w-full items-center
+        gap-3 rounded-xl
+        px-2.5 py-2.5
+        text-left transition-colors
         hover:bg-[var(--surface-muted)]
-
         ${
           selected
-            ? 'bg-[var(--surface-muted)]'
-            : ''
+            ? "bg-[var(--surface-muted)]"
+            : ""
         }
       `}
     >
       <WorkspaceAvatar
-        context={
-          context
-        }
+        context={context}
       />
 
-      <span
-        className="
-          min-w-0
-          flex-1
-        "
-      >
-        <span
-          className="
-            flex
-            items-center
-            gap-2
-          "
-        >
-          <span
-            className="
-              block
-              min-w-0
-              truncate
-              text-[11px]
-              font-semibold
-              text-[var(--text)]
-            "
-          >
-            {
-              context.label
-            }
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="block min-w-0 truncate text-[11px] font-semibold text-[var(--text)]">
+            {context.label}
           </span>
 
           {context.type ===
-            'client' &&
+            "client" &&
             context.status && (
               <ClientStatusDot
                 status={
@@ -2441,37 +1942,24 @@ function ContextMenuItem({
             )}
         </span>
 
-        <span
-          className="
-            mt-0.5
-            block
-            truncate
-            text-[9px]
-            text-[var(--text-muted)]
-          "
-        >
-          {
-            context.description
-          }
+        <span className="mt-0.5 block truncate text-[9px] text-[var(--text-muted)]">
+          {context.description}
         </span>
       </span>
 
       {selected && (
         <Check
           size={14}
-          className="
-            shrink-0
-            text-[var(--accent)]
-          "
+          className="shrink-0 text-[var(--accent)]"
         />
       )}
     </button>
   );
 }
 
-/* ============================================================================
+/* =============================================================================
    CLIENT STATUS DOT
-============================================================================ */
+============================================================================= */
 
 function ClientStatusDot({
   status,
@@ -2479,46 +1967,22 @@ function ClientStatusDot({
   status: string;
 }) {
   const normalized =
-    status
-      .trim()
-      .toUpperCase();
+    status.trim().toUpperCase();
 
-  let className =
-    'bg-[var(--text-subtle)]';
-
-  if (
-    normalized ===
-    'ACTIVE'
-  ) {
-    className =
-      'bg-[var(--success)]';
-  }
-
-  if (
-    normalized ===
-    'ONBOARDING'
-  ) {
-    className =
-      'bg-[var(--info)]';
-  }
-
-  if (
-    normalized ===
-    'PAUSED'
-  ) {
-    className =
-      'bg-[var(--warning)]';
-  }
+  const className =
+    normalized === "ACTIVE"
+      ? "bg-[var(--success)]"
+      : normalized === "ONBOARDING"
+        ? "bg-[var(--info)]"
+        : normalized === "PAUSED"
+          ? "bg-[var(--warning)]"
+          : "bg-[var(--text-subtle)]";
 
   return (
     <span
-      title={formatRole(
-        normalized,
-      )}
+      title={formatRole(normalized)}
       className={`
-        h-1.5
-        w-1.5
-        shrink-0
+        h-1.5 w-1.5 shrink-0
         rounded-full
         ${className}
       `}
@@ -2526,129 +1990,88 @@ function ClientStatusDot({
   );
 }
 
-/* ============================================================================
-   NOTIFICATIONS
-============================================================================ */
+/* =============================================================================
+   NOTIFICATIONS MENU
+============================================================================= */
 
 function NotificationsMenu({
   onOpenNotifications,
+  isFullAccess,
 }: {
-  onOpenNotifications:
-    () => void;
+  onOpenNotifications: () => void;
+  isFullAccess: boolean;
 }) {
   return (
-    <div
-      className="
-        absolute
-        right-0
-        top-[calc(100%+10px)]
-        z-[80]
-        w-[320px]
-        overflow-hidden
-        rounded-[20px]
-        border
-        border-[var(--line)]
-        bg-[var(--surface-elevated)]
-        shadow-[var(--shadow-popover)]
-      "
-    >
-      <div
-        className="
-          flex
-          items-center
-          justify-between
-          border-b
-          border-[var(--line)]
-          px-4
-          py-3.5
-        "
-      >
+    <div className="absolute right-0 top-[calc(100%+10px)] z-[80] w-[320px] overflow-hidden rounded-[20px] border border-[var(--line)] bg-[var(--surface-elevated)] shadow-[var(--shadow-popover)]">
+      <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3.5">
         <div>
-          <p
-            className="
-              text-[12px]
-              font-semibold
-              text-[var(--text)]
-            "
-          >
+          <p className="text-[12px] font-semibold text-[var(--text)]">
             Notifications
           </p>
 
-          <p
-            className="
-              mt-0.5
-              text-[9px]
-              text-[var(--text-muted)]
-            "
-          >
-            Company activity
-            requiring attention
+          <p className="mt-0.5 text-[9px] text-[var(--text-muted)]">
+            {isFullAccess
+              ? "Company activity requiring attention"
+              : "Your workspace updates"}
           </p>
         </div>
 
-        <span
-          className="
-            rounded-full
-            bg-[var(--accent-tint)]
-            px-2
-            py-1
-            text-[8px]
-            font-bold
-            text-[var(--accent)]
-          "
-        >
-          3 new
-        </span>
+        {isFullAccess && (
+          <span className="rounded-full bg-[var(--accent-tint)] px-2 py-1 text-[8px] font-bold text-[var(--accent)]">
+            3 new
+          </span>
+        )}
       </div>
 
       <div className="p-2">
-        <NotificationItem
-          title="Deployment completed"
-          description="A production deployment completed successfully."
-          time="18m"
-          tone="success"
-        />
+        {isFullAccess ? (
+          <>
+            <NotificationItem
+              title="Deployment completed"
+              description="A production deployment completed successfully."
+              time="18m"
+              tone="success"
+            />
 
-        <NotificationItem
-          title="Support request"
-          description="A client support ticket is waiting for review."
-          time="42m"
-          tone="warning"
-        />
+            <NotificationItem
+              title="Support request"
+              description="A client support ticket is waiting for review."
+              time="42m"
+              tone="warning"
+            />
 
-        <NotificationItem
-          title="Platform check"
-          description="All connected production systems are responding."
-          time="1h"
-          tone="info"
-        />
+            <NotificationItem
+              title="Platform check"
+              description="All connected production systems are responding."
+              time="1h"
+              tone="info"
+            />
+          </>
+        ) : (
+          <div className="px-4 py-8 text-center">
+            <Bell
+              size={19}
+              className="mx-auto text-[var(--text-subtle)]"
+            />
+
+            <p className="mt-3 text-[11px] font-semibold text-[var(--text)]">
+              Your notifications
+            </p>
+
+            <p className="mt-1 text-[9px] leading-5 text-[var(--text-muted)]">
+              Open your notifications workspace to see your updates.
+            </p>
+          </div>
+        )}
       </div>
 
-      <div
-        className="
-          border-t
-          border-[var(--line)]
-          p-2
-        "
-      >
+      <div className="border-t border-[var(--line)] p-2">
         <button
           type="button"
           onClick={
             onOpenNotifications
           }
-          className="
-            w-full
-            rounded-xl
-            px-3
-            py-2.5
-            text-center
-            text-[10px]
-            font-semibold
-            text-[var(--text-muted)]
-            transition-colors
-            hover:bg-[var(--surface-muted)]
-            hover:text-[var(--text)]
-          "
+          className="w-full rounded-xl px-3 py-2.5 text-center text-[10px] font-semibold text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text)]"
         >
           View all notifications
         </button>
@@ -2656,6 +2079,10 @@ function NotificationsMenu({
     </div>
   );
 }
+
+/* =============================================================================
+   NOTIFICATION ITEM
+============================================================================= */
 
 function NotificationItem({
   title,
@@ -2666,94 +2093,39 @@ function NotificationItem({
   title: string;
   description: string;
   time: string;
-
   tone:
-    | 'success'
-    | 'warning'
-    | 'info';
+    | "success"
+    | "warning"
+    | "info";
 }) {
-  const toneClass: Record<
-    | 'success'
-    | 'warning'
-    | 'info',
-    string
-  > = {
-    success:
-      'bg-[var(--success)]',
-
-    warning:
-      'bg-[var(--warning)]',
-
-    info:
-      'bg-[var(--info)]',
-  };
+  const toneClass = {
+    success: "bg-[var(--success)]",
+    warning: "bg-[var(--warning)]",
+    info: "bg-[var(--info)]",
+  }[tone];
 
   return (
-    <div
-      className="
-        flex
-        gap-3
-        rounded-xl
-        px-2.5
-        py-3
-        transition-colors
-        hover:bg-[var(--surface-muted)]
-      "
-    >
+    <div className="flex gap-3 rounded-xl px-2.5 py-3 transition-colors hover:bg-[var(--surface-muted)]">
       <span
         className={`
-          mt-1.5
-          h-2
-          w-2
-          shrink-0
-          rounded-full
-          ${toneClass[tone]}
+          mt-1.5 h-2 w-2
+          shrink-0 rounded-full
+          ${toneClass}
         `}
       />
 
-      <div
-        className="
-          min-w-0
-          flex-1
-        "
-      >
-        <div
-          className="
-            flex
-            items-start
-            justify-between
-            gap-3
-          "
-        >
-          <p
-            className="
-              text-[10px]
-              font-semibold
-              text-[var(--text)]
-            "
-          >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-[10px] font-semibold text-[var(--text)]">
             {title}
           </p>
 
-          <span
-            className="
-              shrink-0
-              text-[8px]
-              text-[var(--text-subtle)]
-            "
-          >
+          <span className="shrink-0 text-[8px] text-[var(--text-subtle)]">
             {time}
           </span>
         </div>
 
-        <p
-          className="
-            mt-1
-            text-[9px]
-            leading-4
-            text-[var(--text-muted)]
-          "
-        >
+        <p className="mt-1 text-[9px] leading-4 text-[var(--text-muted)]">
           {description}
         </p>
       </div>
@@ -2761,12 +2133,19 @@ function NotificationItem({
   );
 }
 
-/* ============================================================================
-   PROFILE
-============================================================================ */
+/* =============================================================================
+   PROFILE MENU
+============================================================================= */
 
 function ProfileMenu({
   admin,
+  profileName,
+  avatarUrl,
+  jobTitle,
+  department,
+  isFullAccess,
+  canOpenTeam,
+  canOpenSettings,
   theme,
   signingOut,
   onThemeChange,
@@ -2775,283 +2154,178 @@ function ProfileMenu({
   onSignOut,
 }: {
   admin: AdminUser;
-
+  profileName: string;
+  avatarUrl?: string | null;
+  jobTitle: string;
+  department: string | null;
+  isFullAccess: boolean;
+  canOpenTeam: boolean;
+  canOpenSettings: boolean;
   theme: ThemeMode;
-
   signingOut: boolean;
-
   onThemeChange: (
     theme: ThemeMode,
   ) => void;
-
   onTeam: () => void;
-
   onSettings: () => void;
-
   onSignOut: () => void;
 }) {
   return (
-    <div
-      className="
-        absolute
-        right-0
-        top-[calc(100%+10px)]
-        z-[80]
-        w-[270px]
-        overflow-hidden
-        rounded-[20px]
-        border
-        border-[var(--line)]
-        bg-[var(--surface-elevated)]
-        shadow-[var(--shadow-popover)]
-      "
-    >
-      {/* Identity */}
+    <div className="absolute right-0 top-[calc(100%+10px)] z-[80] w-[290px] overflow-hidden rounded-[20px] border border-[var(--line)] bg-[var(--surface-elevated)] shadow-[var(--shadow-popover)]">
+      {/* ================================================================
+          PROFILE DETAILS
+      ================================================================ */}
 
-      <div
-        className="
-          border-b
-          border-[var(--line)]
-          p-4
-        "
-      >
-        <div
-          className="
-            flex
-            items-center
-            gap-3
-          "
-        >
-          <span
-            className="
-              flex
-              h-10
-              w-10
-              shrink-0
-              items-center
-              justify-center
-              rounded-full
-              bg-[var(--primary)]
-              text-[10px]
-              font-bold
-              uppercase
-              text-[var(--primary-foreground)]
-            "
-          >
-            {initials(
-              admin.fullName,
-            )}
-          </span>
+      <div className="border-b border-[var(--line)] p-4">
+        <div className="flex items-start gap-3">
+          <ProfileAvatar
+            name={profileName}
+            url={avatarUrl}
+            size="large"
+          />
 
-          <div className="min-w-0">
-            <p
-              className="
-                truncate
-                text-[11px]
-                font-semibold
-                text-[var(--text)]
-              "
-            >
-              {
-                admin.fullName
-              }
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[12px] font-semibold text-[var(--text)]">
+              {profileName}
             </p>
 
-            <p
-              className="
-                mt-0.5
-                truncate
-                text-[9px]
-                text-[var(--text-muted)]
-              "
-            >
-              {
-                admin.email
-              }
+            {!isFullAccess && (
+              <p className="mt-1 text-[10px] font-medium leading-4 text-[var(--text-muted)]">
+                {jobTitle}
+              </p>
+            )}
+
+            {!isFullAccess &&
+              department && (
+                <p className="mt-1 text-[9px] leading-4 text-[var(--text-subtle)]">
+                  {department}
+                </p>
+              )}
+
+            <p className="mt-2 truncate text-[9px] text-[var(--text-muted)]">
+              {admin.email}
             </p>
           </div>
         </div>
 
-        <span
-          className="
-            mt-3
-            inline-flex
-            rounded-full
-            bg-[var(--accent-tint)]
-            px-2
-            py-1
-            text-[8px]
-            font-bold
-            uppercase
-            tracking-[0.08em]
-            text-[var(--accent)]
-          "
-        >
-          {formatRole(
-            admin.role,
-          )}
-        </span>
+        {/* Keep existing role badge for unrestricted users. */}
+
+        {isFullAccess && (
+          <span className="mt-3 inline-flex rounded-full bg-[var(--accent-tint)] px-2 py-1 text-[8px] font-bold uppercase tracking-[0.08em] text-[var(--accent)]">
+            {formatRole(admin.role)}
+          </span>
+        )}
       </div>
 
-      {/* Navigation */}
+      {/* ================================================================
+          ACCOUNT ACTIONS
+      ================================================================ */}
 
       <div className="p-2">
-        <ProfileAction
-          icon={
-            UserRound
-          }
-          label="My account"
-          description="Profile and account details"
-          onClick={
-            onTeam
-          }
-        />
+        {canOpenTeam && (
+          <ProfileAction
+            icon={UserRound}
+            label="My account"
+            description="Profile and account details"
+            onClick={onTeam}
+          />
+        )}
 
-        <ProfileAction
-          icon={
-            Users
-          }
-          label="Team"
-          description="People and access"
-          onClick={
-            onTeam
-          }
-        />
+        {canOpenTeam && (
+          <ProfileAction
+            icon={Users}
+            label="Team"
+            description={
+              isFullAccess
+                ? "People and access"
+                : "My department"
+            }
+            onClick={onTeam}
+          />
+        )}
 
-        <ProfileAction
-          icon={
-            Settings
-          }
-          label="Settings"
-          description="Syntra Grid configuration"
-          onClick={
-            onSettings
-          }
-        />
+        {canOpenSettings && (
+          <ProfileAction
+            icon={Settings}
+            label="Settings"
+            description="Syntra Grid configuration"
+            onClick={
+              onSettings
+            }
+          />
+        )}
       </div>
 
-      {/* Theme */}
+      {/* ================================================================
+          APPEARANCE
+      ================================================================ */}
 
-      <div
-        className="
-          border-y
-          border-[var(--line)]
-          p-3
-        "
-      >
-        <p
-          className="
-            px-1
-            text-[8px]
-            font-bold
-            uppercase
-            tracking-[0.12em]
-            text-[var(--text-subtle)]
-          "
-        >
+      <div className="border-y border-[var(--line)] p-3">
+        <p className="px-1 text-[8px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
           Appearance
         </p>
 
-        <div
-          className="
-            mt-2
-            grid
-            grid-cols-2
-            gap-1
-            rounded-xl
-            bg-[var(--surface-muted)]
-            p-1
-          "
-        >
+        <div className="mt-2 grid grid-cols-2 gap-1 rounded-xl bg-[var(--surface-muted)] p-1">
           <button
             type="button"
             onClick={() =>
-              onThemeChange(
-                'light',
-              )
+              onThemeChange("light")
             }
             className={`
-              flex
-              items-center
-              justify-center
-              gap-1.5
-              rounded-lg
-              px-2
-              py-2
-              text-[9px]
-              font-semibold
+              flex items-center
+              justify-center gap-1.5
+              rounded-lg px-2 py-2
+              text-[9px] font-semibold
               transition-colors
-
               ${
-                theme ===
-                'light'
-                  ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
-                  : 'text-[var(--text-muted)]'
+                theme === "light"
+                  ? "bg-[var(--surface)] text-[var(--text)] shadow-sm"
+                  : "text-[var(--text-muted)]"
               }
             `}
           >
-            <Sun
-              size={12}
-            />
+            <Sun size={12} />
             Light
           </button>
 
           <button
             type="button"
             onClick={() =>
-              onThemeChange(
-                'dark',
-              )
+              onThemeChange("dark")
             }
             className={`
-              flex
-              items-center
-              justify-center
-              gap-1.5
-              rounded-lg
-              px-2
-              py-2
-              text-[9px]
-              font-semibold
+              flex items-center
+              justify-center gap-1.5
+              rounded-lg px-2 py-2
+              text-[9px] font-semibold
               transition-colors
-
               ${
-                theme ===
-                'dark'
-                  ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
-                  : 'text-[var(--text-muted)]'
+                theme === "dark"
+                  ? "bg-[var(--surface)] text-[var(--text)] shadow-sm"
+                  : "text-[var(--text-muted)]"
               }
             `}
           >
-            <Moon
-              size={12}
-            />
+            <Moon size={12} />
             Dark
           </button>
         </div>
       </div>
 
-      {/* Sign out */}
+      {/* ================================================================
+          SIGN OUT
+      ================================================================ */}
 
       <div className="p-2">
         <button
           type="button"
-          disabled={
-            signingOut
-          }
-          onClick={
-            onSignOut
-          }
+          disabled={signingOut}
+          onClick={onSignOut}
           className="
-            flex
-            w-full
-            items-center
-            gap-3
-            rounded-xl
-            px-3
-            py-2.5
-            text-left
-            text-red-500
+            flex w-full items-center
+            gap-3 rounded-xl
+            px-3 py-2.5
+            text-left text-red-500
             transition-colors
             hover:bg-red-500/10
             disabled:pointer-events-none
@@ -3063,21 +2337,20 @@ function ProfileMenu({
             strokeWidth={1.9}
           />
 
-          <span
-            className="
-              text-[10px]
-              font-semibold
-            "
-          >
+          <span className="text-[10px] font-semibold">
             {signingOut
-              ? 'Signing out…'
-              : 'Sign out'}
+              ? "Signing out…"
+              : "Sign out"}
           </span>
         </button>
       </div>
     </div>
   );
 }
+
+/* =============================================================================
+   PROFILE ACTION
+============================================================================= */
 
 function ProfileAction({
   icon: Icon,
@@ -3086,45 +2359,17 @@ function ProfileAction({
   onClick,
 }: {
   icon: LucideIcon;
-
   label: string;
-
   description: string;
-
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      onClick={
-        onClick
-      }
-      className="
-        flex
-        w-full
-        items-center
-        gap-3
-        rounded-xl
-        px-3
-        py-2.5
-        text-left
-        transition-colors
-        hover:bg-[var(--surface-muted)]
-      "
+      onClick={onClick}
+      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[var(--surface-muted)]"
     >
-      <span
-        className="
-          flex
-          h-8
-          w-8
-          shrink-0
-          items-center
-          justify-center
-          rounded-xl
-          bg-[var(--surface-muted)]
-          text-[var(--text-muted)]
-        "
-      >
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-muted)] text-[var(--text-muted)]">
         <Icon
           size={14}
           strokeWidth={1.8}
@@ -3132,25 +2377,11 @@ function ProfileAction({
       </span>
 
       <span className="min-w-0">
-        <span
-          className="
-            block
-            text-[10px]
-            font-semibold
-            text-[var(--text)]
-          "
-        >
+        <span className="block text-[10px] font-semibold text-[var(--text)]">
           {label}
         </span>
 
-        <span
-          className="
-            mt-0.5
-            block
-            text-[8px]
-            text-[var(--text-muted)]
-          "
-        >
+        <span className="mt-1 block text-[8px] text-[var(--text-muted)]">
           {description}
         </span>
       </span>
@@ -3158,9 +2389,9 @@ function ProfileAction({
   );
 }
 
-/* ============================================================================
+/* =============================================================================
    SEARCH PALETTE
-============================================================================ */
+============================================================================= */
 
 function SearchPalette({
   query,
@@ -3171,23 +2402,14 @@ function SearchPalette({
   onClose,
 }: {
   query: string;
-
-  results:
-    SearchResult[];
-
-  inputRef:
-    RefObject<
-      HTMLInputElement | null
-    >;
-
+  results: SearchResult[];
+  inputRef: RefObject<HTMLInputElement | null>;
   onQueryChange: (
     value: string,
   ) => void;
-
   onSelect: (
     result: SearchResult,
   ) => void;
-
   onClose: () => void;
 }) {
   const [
@@ -3197,29 +2419,18 @@ function SearchPalette({
 
   const changeQuery =
     useCallback(
-      (
-        value: string,
-      ) => {
-        setSelectedIndex(
-          0,
-        );
-
-        onQueryChange(
-          value,
-        );
+      (value: string) => {
+        setSelectedIndex(0);
+        onQueryChange(value);
       },
-      [
-        onQueryChange,
-      ],
+      [onQueryChange],
     );
 
   const handleKeyDown = (
-    event:
-      ReactKeyboardEvent<HTMLInputElement>,
+    event: ReactKeyboardEvent<HTMLInputElement>,
   ) => {
     if (
-      event.key ===
-      'ArrowDown'
+      event.key === "ArrowDown"
     ) {
       event.preventDefault();
 
@@ -3228,8 +2439,7 @@ function SearchPalette({
           Math.min(
             current + 1,
             Math.max(
-              results.length -
-                1,
+              results.length - 1,
               0,
             ),
           ),
@@ -3239,8 +2449,7 @@ function SearchPalette({
     }
 
     if (
-      event.key ===
-      'ArrowUp'
+      event.key === "ArrowUp"
     ) {
       event.preventDefault();
 
@@ -3256,16 +2465,13 @@ function SearchPalette({
     }
 
     if (
-      event.key ===
-        'Enter' &&
+      event.key === "Enter" &&
       results[selectedIndex]
     ) {
       event.preventDefault();
 
       onSelect(
-        results[
-          selectedIndex
-        ],
+        results[selectedIndex],
       );
     }
   };
@@ -3273,15 +2479,9 @@ function SearchPalette({
   return (
     <div
       className="
-        fixed
-        inset-0
-        z-[150]
-        flex
-        items-start
-        justify-center
-        bg-black/30
-        px-4
-        pt-[10vh]
+        fixed inset-0 z-[150]
+        flex items-start justify-center
+        bg-black/30 px-4 pt-[10vh]
         backdrop-blur-[3px]
       "
       role="dialog"
@@ -3291,165 +2491,68 @@ function SearchPalette({
       <button
         type="button"
         aria-label="Close search"
-        onClick={
-          onClose
-        }
-        className="
-          absolute
-          inset-0
-          cursor-default
-        "
+        onClick={onClose}
+        className="absolute inset-0 cursor-default"
       />
 
-      <div
-        className="
-          relative
-          z-10
-          w-full
-          max-w-[620px]
-          overflow-hidden
-          rounded-[24px]
-          border
-          border-[var(--line)]
-          bg-[var(--surface-elevated)]
-          shadow-[var(--shadow-popover)]
-        "
-      >
-        {/* Input */}
+      <div className="relative z-10 w-full max-w-[620px] overflow-hidden rounded-[24px] border border-[var(--line)] bg-[var(--surface-elevated)] shadow-[var(--shadow-popover)]">
+        {/* SEARCH FIELD */}
 
-        <div
-          className="
-            flex
-            items-center
-            gap-3
-            border-b
-            border-[var(--line)]
-            px-4
-          "
-        >
+        <div className="flex items-center gap-3 border-b border-[var(--line)] px-4">
           <Search
             size={17}
-            className="
-              shrink-0
-              text-[var(--text-subtle)]
-            "
+            className="shrink-0 text-[var(--text-subtle)]"
           />
 
           <input
-            ref={
-              inputRef
-            }
-            value={
-              query
-            }
-            onChange={(
-              event,
-            ) =>
+            ref={inputRef}
+            value={query}
+            onChange={(event) =>
               changeQuery(
-                event.target
-                  .value,
+                event.target.value,
               )
             }
             onKeyDown={
               handleKeyDown
             }
             placeholder="Search Syntra Grid…"
-            className="
-              h-14
-              min-w-0
-              flex-1
-              bg-transparent
-              text-[13px]
-              text-[var(--text)]
-              outline-none
-              placeholder:text-[var(--text-subtle)]
-            "
+            className="h-14 min-w-0 flex-1 bg-transparent text-[13px] text-[var(--text)] outline-none placeholder:text-[var(--text-subtle)]"
           />
 
           <button
             type="button"
-            onClick={
-              onClose
-            }
+            onClick={onClose}
             aria-label="Close search"
-            className="
-              flex
-              h-8
-              w-8
-              items-center
-              justify-center
-              rounded-full
-              text-[var(--text-muted)]
-              transition-colors
-              hover:bg-[var(--surface-muted)]
-              hover:text-[var(--text)]
-            "
+            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-muted)] hover:bg-[var(--surface-muted)] hover:text-[var(--text)]"
           >
-            <X
-              size={15}
-            />
+            <X size={15} />
           </button>
         </div>
 
-        {/* Results */}
+        {/* RESULTS */}
 
-        <div
-          className="
-            no-scrollbar
-            max-h-[420px]
-            overflow-y-auto
-            p-2
-          "
-        >
+        <div className="no-scrollbar max-h-[420px] overflow-y-auto p-2">
           {results.length ===
           0 ? (
-            <div
-              className="
-                px-5
-                py-12
-                text-center
-              "
-            >
+            <div className="px-5 py-12 text-center">
               <Search
                 size={20}
-                className="
-                  mx-auto
-                  text-[var(--text-subtle)]
-                "
+                className="mx-auto text-[var(--text-subtle)]"
               />
 
-              <p
-                className="
-                  mt-3
-                  text-[11px]
-                  font-semibold
-                  text-[var(--text)]
-                "
-              >
+              <p className="mt-3 text-[11px] font-semibold text-[var(--text)]">
                 Nothing found
               </p>
 
-              <p
-                className="
-                  mt-1
-                  text-[9px]
-                  text-[var(--text-muted)]
-                "
-              >
-                Try another page,
-                client or module.
+              <p className="mt-1 text-[9px] text-[var(--text-muted)]">
+                Try another page, client or module.
               </p>
             </div>
           ) : (
             results.map(
-              (
-                result,
-                index,
-              ) => (
+              (result, index) => (
                 <button
-                  key={
-                    result.id
-                  }
+                  key={result.id}
                   type="button"
                   onMouseEnter={() =>
                     setSelectedIndex(
@@ -3462,103 +2565,40 @@ function SearchPalette({
                     )
                   }
                   className={`
-                    flex
-                    w-full
-                    items-center
-                    gap-3
+                    flex w-full
+                    items-center gap-3
                     rounded-xl
-                    px-3
-                    py-3
+                    px-3 py-3
                     text-left
                     transition-colors
                     duration-100
-
                     ${
                       index ===
                       selectedIndex
-                        ? 'bg-[var(--surface-muted)]'
-                        : ''
+                        ? "bg-[var(--surface-muted)]"
+                        : ""
                     }
                   `}
                 >
-                  <span
-                    className="
-                      flex
-                      h-9
-                      w-9
-                      shrink-0
-                      items-center
-                      justify-center
-                      rounded-xl
-                      border
-                      border-[var(--line)]
-                      bg-[var(--surface)]
-                      text-[var(--text-muted)]
-                    "
-                  >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--line)] bg-[var(--surface)] text-[var(--text-muted)]">
                     <Search
                       size={13}
                     />
                   </span>
 
-                  <span
-                    className="
-                      min-w-0
-                      flex-1
-                    "
-                  >
-                    <span
-                      className="
-                        flex
-                        items-center
-                        gap-2
-                      "
-                    >
-                      <span
-                        className="
-                          truncate
-                          text-[11px]
-                          font-semibold
-                          text-[var(--text)]
-                        "
-                      >
-                        {
-                          result.label
-                        }
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-[11px] font-semibold text-[var(--text)]">
+                        {result.label}
                       </span>
 
-                      <span
-                        className="
-                          shrink-0
-                          rounded-full
-                          bg-[var(--accent-tint)]
-                          px-1.5
-                          py-0.5
-                          text-[7px]
-                          font-bold
-                          uppercase
-                          tracking-[0.06em]
-                          text-[var(--accent)]
-                        "
-                      >
-                        {
-                          result.section
-                        }
+                      <span className="shrink-0 rounded-full bg-[var(--accent-tint)] px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-[0.06em] text-[var(--accent)]">
+                        {result.section}
                       </span>
                     </span>
 
-                    <span
-                      className="
-                        mt-1
-                        block
-                        truncate
-                        text-[9px]
-                        text-[var(--text-muted)]
-                      "
-                    >
-                      {
-                        result.description
-                      }
+                    <span className="mt-1 block truncate text-[9px] text-[var(--text-muted)]">
+                      {result.description}
                     </span>
                   </span>
                 </button>
@@ -3567,22 +2607,11 @@ function SearchPalette({
           )}
         </div>
 
-        <div
-          className="
-            flex
-            items-center
-            justify-between
-            border-t
-            border-[var(--line)]
-            px-4
-            py-2.5
-            text-[8px]
-            text-[var(--text-subtle)]
-          "
-        >
+        {/* FOOTER */}
+
+        <div className="flex items-center justify-between border-t border-[var(--line)] px-4 py-2.5 text-[8px] text-[var(--text-subtle)]">
           <span>
-            ↑ ↓ Navigate · Enter
-            Open
+            ↑ ↓ Navigate · Enter Open
           </span>
 
           <span>
@@ -3592,111 +2621,4 @@ function SearchPalette({
       </div>
     </div>
   );
-}
-
-/* ============================================================================
-   HELPERS
-============================================================================ */
-
-function cleanText(
-  value:
-    | string
-    | null
-    | undefined,
-) {
-  if (
-    typeof value !==
-    'string'
-  ) {
-    return '';
-  }
-
-  return value.trim();
-}
-
-function createShortLabel(
-  value: string,
-) {
-  const words =
-    value
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-
-  if (
-    words.length === 0
-  ) {
-    return 'CL';
-  }
-
-  if (
-    words.length === 1
-  ) {
-    return words[0]
-      .slice(0, 2)
-      .toUpperCase();
-  }
-
-  return (
-    words[0]
-      .charAt(0) +
-    words[1]
-      .charAt(0)
-  ).toUpperCase();
-}
-
-function getClientContextDescription(
-  client: ClientApiRecord,
-) {
-  const productName =
-    cleanText(
-      client.productName,
-    );
-
-  if (productName) {
-    return productName;
-  }
-
-  const industry =
-    cleanText(
-      client.industry,
-    );
-
-  if (industry) {
-    return industry;
-  }
-
-  return 'Client workspace';
-}
-
-function initials(
-  value: string,
-) {
-  return value
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) =>
-      part
-        .charAt(0)
-        .toUpperCase(),
-    )
-    .join('');
-}
-
-function formatRole(
-  value: string,
-) {
-  return value
-    .replaceAll(
-      '_',
-      ' ',
-    )
-    .toLowerCase()
-    .replace(
-      /\b\w/g,
-      (letter) =>
-        letter.toUpperCase(),
-    );
 }
