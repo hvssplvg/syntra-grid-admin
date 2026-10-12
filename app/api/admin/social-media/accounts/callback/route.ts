@@ -29,7 +29,7 @@ function finish(socialMediaUrl: URL, status: string) {
 
 export async function GET(request: NextRequest) {
   const callbackUrl = new URL(request.url);
-  const socialMediaUrl = new URL("/admin?tab=social_media", request.url);
+  const socialMediaUrl = new URL("/dashboard?tab=social_media", request.url);
 
   const code = callbackUrl.searchParams.get("code");
   const providerError = callbackUrl.searchParams.get("error");

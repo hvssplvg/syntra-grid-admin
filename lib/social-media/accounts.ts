@@ -382,7 +382,7 @@ export async function getValidSocialAccessToken(accountId: string): Promise<stri
   }
 }
 
-async function markAccountError(accountId: string, message: string) {
+export async function markAccountError(accountId: string, message: string) {
   await prisma.socialAccount
     .update({
       where: { id: accountId },

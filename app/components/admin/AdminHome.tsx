@@ -45,77 +45,101 @@ import {
 
 /* ============================================================================
    TAB COMPONENTS
+
+   Overview loads eagerly — it's the default landing view, so there is
+   nothing to gain by deferring it. Every other tab is code-split with
+   next/dynamic instead of a static import: this file used to statically
+   import all ~68 tab modules, which meant the very first paint of
+   /dashboard had to download, parse and compile every tab's JS —
+   including multi-thousand-line ones like TeamTab and SocialMediaTab —
+   before any of it was interactive, regardless of which single tab the
+   person actually opened. Each tab's code now only loads the first time
+   that tab is opened; TabLoadingFallback only ever appears during that
+   one-time fetch, since the browser caches the module afterwards.
 ============================================================================ */
 
-import ActivityTab from "./tabs/ActivityTab";
-import AnalyticsTab from "./tabs/AnalyticsTab";
-import APIKeysTab from "./tabs/APIKeysTab";
-import ApprovalsTab from "./tabs/ApprovalsTab";
-import AuditLogsTab from "./tabs/AuditLogsTab";
-import AutomationsTab from "./tabs/AutomationsTab";
-import BackupsTab from "./tabs/BackupsTab";
-import BrandAssetsTab from "./tabs/BrandAssetsTab";
-import BugsTab from "./tabs/BugsTab";
-import CalendarTab from "./tabs/CalendarTab";
-import CampaignsTab from "./tabs/CampaignsTab";
-import ChangelogTab from "./tabs/ChangelogTab";
-import ClientHealthTab from "./tabs/ClientHealthTab";
-import ClientsTab from "./tabs/ClientsTab";
-import ComplianceTab from "./tabs/ComplianceTab";
-import ContactsTab from "./tabs/ContactsTab";
-import ContractsTab from "./tabs/ContractsTab";
-import DepartmentsTab from "./tabs/DepartmentsTab";
-import DeploymentsTab from "./tabs/DeploymentsTab";
-import DocumentsTab from "./tabs/DocumentsTab";
-import DomainsTab from "./tabs/DomainsTab";
-import EnvironmentsTab from "./tabs/EnvironmentsTab";
-import ExpensesTab from "./tabs/ExpensesTab";
-import FeatureRequestsTab from "./tabs/FeatureRequestsTab";
-import FeedbackTab from "./tabs/FeedbackTab";
-import FinanceTab from "./tabs/FinanceTab";
-import IncidentsTab from "./tabs/IncidentsTab";
-import IntegrationsTab from "./tabs/IntegrationsTab";
-import InvoicesTab from "./tabs/InvoicesTab";
-import KnowledgeBaseTab from "./tabs/KnowledgeBaseTab";
-import LeadsTab from "./tabs/LeadsTab";
-import LeaveTab from "./tabs/LeaveTab";
-import MeetingsTab from "./tabs/MeetingsTab";
-import MessagesTab from "./tabs/MessagesTab";
-import MilestonesTab from "./tabs/MilestonesTab";
-import MonitoringTab from "./tabs/MonitoringTab";
-import NotificationsTab from "./tabs/NotificationsTab";
-import OpportunitiesTab from "./tabs/OpportunitiesTab";
+import dynamic from "next/dynamic";
+
 import OverviewTab from "./tabs/OverviewTab";
-import PipelineTab from "./tabs/PipelineTab";
-import PoliciesTab from "./tabs/PoliciesTab";
-import ProductPortfolioTab from "./tabs/ProductPortfolioTab";
-import ProjectsTab from "./tabs/ProjectsTab";
-import ProposalsTab from "./tabs/ProposalsTab";
-import QATab from "./tabs/QATab";
-import QuotesTab from "./tabs/QuotesTab";
-import RecruitmentTab from "./tabs/RecruitmentTab";
-import ReleasesTab from "./tabs/ReleasesTab";
-import RepositoriesTab from "./tabs/RepositoriesTab";
-import RequirementsTab from "./tabs/RequirementsTab";
-import ResearchTab from "./tabs/ResearchTab";
-import RevenueTab from "./tabs/RevenueTab";
-import RisksTab from "./tabs/RisksTab";
-import RoadmapsTab from "./tabs/RoadmapsTab";
-import RolesPermissionsTab from "./tabs/RolesPermissionsTab";
-import SecurityTab from "./tabs/SecurityTab";
-import SEOAnalyticsTab from "./tabs/SEOAnalyticsTab";
-import SettingsTab from "./tabs/SettingsTab";
-import SocialMediaTab from "./tabs/SocialMediaTab";
-import SOPsTab from "./tabs/SOPsTab";
-import SprintsTab from "./tabs/SprintsTab";
-import SubscriptionsTab from "./tabs/SubscriptionsTab";
-import SupportTab from "./tabs/SupportTab";
-import SystemsTab from "./tabs/SystemsTab";
-import TasksTab from "./tabs/TasksTab";
-import TeamTab from "./tabs/TeamTab";
-import TicketsTab from "./tabs/TicketsTab";
-import TimesheetsTab from "./tabs/TimesheetsTab";
-import WorkloadTab from "./tabs/WorkloadTab";
+
+function TabLoadingFallback() {
+  return (
+    <div className="flex min-h-[280px] w-full flex-col gap-3" aria-hidden="true">
+      <div className="h-7 w-44 animate-pulse rounded-lg bg-[var(--surface-muted)]" />
+      <div className="h-28 w-full animate-pulse rounded-2xl bg-[var(--surface-muted)]" />
+      <div className="h-28 w-full animate-pulse rounded-2xl bg-[var(--surface-muted)]" />
+    </div>
+  );
+}
+
+const ActivityTab = dynamic(() => import("./tabs/ActivityTab"), { loading: TabLoadingFallback });
+const AnalyticsTab = dynamic(() => import("./tabs/AnalyticsTab"), { loading: TabLoadingFallback });
+const APIKeysTab = dynamic(() => import("./tabs/APIKeysTab"), { loading: TabLoadingFallback });
+const ApprovalsTab = dynamic(() => import("./tabs/ApprovalsTab"), { loading: TabLoadingFallback });
+const AuditLogsTab = dynamic(() => import("./tabs/AuditLogsTab"), { loading: TabLoadingFallback });
+const AutomationsTab = dynamic(() => import("./tabs/AutomationsTab"), { loading: TabLoadingFallback });
+const BackupsTab = dynamic(() => import("./tabs/BackupsTab"), { loading: TabLoadingFallback });
+const BrandAssetsTab = dynamic(() => import("./tabs/BrandAssetsTab"), { loading: TabLoadingFallback });
+const BugsTab = dynamic(() => import("./tabs/BugsTab"), { loading: TabLoadingFallback });
+const CalendarTab = dynamic(() => import("./tabs/CalendarTab"), { loading: TabLoadingFallback });
+const CampaignsTab = dynamic(() => import("./tabs/CampaignsTab"), { loading: TabLoadingFallback });
+const ChangelogTab = dynamic(() => import("./tabs/ChangelogTab"), { loading: TabLoadingFallback });
+const ClientHealthTab = dynamic(() => import("./tabs/ClientHealthTab"), { loading: TabLoadingFallback });
+const ClientsTab = dynamic(() => import("./tabs/ClientsTab"), { loading: TabLoadingFallback });
+const ComplianceTab = dynamic(() => import("./tabs/ComplianceTab"), { loading: TabLoadingFallback });
+const ContactsTab = dynamic(() => import("./tabs/ContactsTab"), { loading: TabLoadingFallback });
+const ContractsTab = dynamic(() => import("./tabs/ContractsTab"), { loading: TabLoadingFallback });
+const DepartmentsTab = dynamic(() => import("./tabs/DepartmentsTab"), { loading: TabLoadingFallback });
+const DeploymentsTab = dynamic(() => import("./tabs/DeploymentsTab"), { loading: TabLoadingFallback });
+const DocumentsTab = dynamic(() => import("./tabs/DocumentsTab"), { loading: TabLoadingFallback });
+const DomainsTab = dynamic(() => import("./tabs/DomainsTab"), { loading: TabLoadingFallback });
+const EnvironmentsTab = dynamic(() => import("./tabs/EnvironmentsTab"), { loading: TabLoadingFallback });
+const ExpensesTab = dynamic(() => import("./tabs/ExpensesTab"), { loading: TabLoadingFallback });
+const FeatureRequestsTab = dynamic(() => import("./tabs/FeatureRequestsTab"), { loading: TabLoadingFallback });
+const FeedbackTab = dynamic(() => import("./tabs/FeedbackTab"), { loading: TabLoadingFallback });
+const FinanceTab = dynamic(() => import("./tabs/FinanceTab"), { loading: TabLoadingFallback });
+const IncidentsTab = dynamic(() => import("./tabs/IncidentsTab"), { loading: TabLoadingFallback });
+const IntegrationsTab = dynamic(() => import("./tabs/IntegrationsTab"), { loading: TabLoadingFallback });
+const InvoicesTab = dynamic(() => import("./tabs/InvoicesTab"), { loading: TabLoadingFallback });
+const KnowledgeBaseTab = dynamic(() => import("./tabs/KnowledgeBaseTab"), { loading: TabLoadingFallback });
+const LeadsTab = dynamic(() => import("./tabs/LeadsTab"), { loading: TabLoadingFallback });
+const LeaveTab = dynamic(() => import("./tabs/LeaveTab"), { loading: TabLoadingFallback });
+const MeetingsTab = dynamic(() => import("./tabs/MeetingsTab"), { loading: TabLoadingFallback });
+const MessagesTab = dynamic(() => import("./tabs/MessagesTab"), { loading: TabLoadingFallback });
+const MilestonesTab = dynamic(() => import("./tabs/MilestonesTab"), { loading: TabLoadingFallback });
+const MonitoringTab = dynamic(() => import("./tabs/MonitoringTab"), { loading: TabLoadingFallback });
+const NotificationsTab = dynamic(() => import("./tabs/NotificationsTab"), { loading: TabLoadingFallback });
+const OpportunitiesTab = dynamic(() => import("./tabs/OpportunitiesTab"), { loading: TabLoadingFallback });
+const PipelineTab = dynamic(() => import("./tabs/PipelineTab"), { loading: TabLoadingFallback });
+const PoliciesTab = dynamic(() => import("./tabs/PoliciesTab"), { loading: TabLoadingFallback });
+const ProductPortfolioTab = dynamic(() => import("./tabs/ProductPortfolioTab"), { loading: TabLoadingFallback });
+const ProjectsTab = dynamic(() => import("./tabs/ProjectsTab"), { loading: TabLoadingFallback });
+const ProposalsTab = dynamic(() => import("./tabs/ProposalsTab"), { loading: TabLoadingFallback });
+const QATab = dynamic(() => import("./tabs/QATab"), { loading: TabLoadingFallback });
+const QuotesTab = dynamic(() => import("./tabs/QuotesTab"), { loading: TabLoadingFallback });
+const RecruitmentTab = dynamic(() => import("./tabs/RecruitmentTab"), { loading: TabLoadingFallback });
+const ReleasesTab = dynamic(() => import("./tabs/ReleasesTab"), { loading: TabLoadingFallback });
+const RepositoriesTab = dynamic(() => import("./tabs/RepositoriesTab"), { loading: TabLoadingFallback });
+const RequirementsTab = dynamic(() => import("./tabs/RequirementsTab"), { loading: TabLoadingFallback });
+const ResearchTab = dynamic(() => import("./tabs/ResearchTab"), { loading: TabLoadingFallback });
+const RevenueTab = dynamic(() => import("./tabs/RevenueTab"), { loading: TabLoadingFallback });
+const RisksTab = dynamic(() => import("./tabs/RisksTab"), { loading: TabLoadingFallback });
+const RoadmapsTab = dynamic(() => import("./tabs/RoadmapsTab"), { loading: TabLoadingFallback });
+const RolesPermissionsTab = dynamic(() => import("./tabs/RolesPermissionsTab"), { loading: TabLoadingFallback });
+const SecurityTab = dynamic(() => import("./tabs/SecurityTab"), { loading: TabLoadingFallback });
+const SEOAnalyticsTab = dynamic(() => import("./tabs/SEOAnalyticsTab"), { loading: TabLoadingFallback });
+const SettingsTab = dynamic(() => import("./tabs/SettingsTab"), { loading: TabLoadingFallback });
+const SocialMediaTab = dynamic(() => import("./tabs/SocialMediaTab"), { loading: TabLoadingFallback });
+const SOPsTab = dynamic(() => import("./tabs/SOPsTab"), { loading: TabLoadingFallback });
+const SprintsTab = dynamic(() => import("./tabs/SprintsTab"), { loading: TabLoadingFallback });
+const SubscriptionsTab = dynamic(() => import("./tabs/SubscriptionsTab"), { loading: TabLoadingFallback });
+const SupportTab = dynamic(() => import("./tabs/SupportTab"), { loading: TabLoadingFallback });
+const SystemsTab = dynamic(() => import("./tabs/SystemsTab"), { loading: TabLoadingFallback });
+const TasksTab = dynamic(() => import("./tabs/TasksTab"), { loading: TabLoadingFallback });
+const TeamTab = dynamic(() => import("./tabs/TeamTab"), { loading: TabLoadingFallback });
+const TicketsTab = dynamic(() => import("./tabs/TicketsTab"), { loading: TabLoadingFallback });
+const TimesheetsTab = dynamic(() => import("./tabs/TimesheetsTab"), { loading: TabLoadingFallback });
+const WorkloadTab = dynamic(() => import("./tabs/WorkloadTab"), { loading: TabLoadingFallback });
 
 /* ============================================================================
    TYPES

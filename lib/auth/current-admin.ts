@@ -1,5 +1,7 @@
 // lib/auth/current-admin.ts
 
+import { cache } from 'react';
+
 import { auth } from '@/lib/auth/server';
 import { prisma } from '@/lib/prisma';
 
@@ -40,7 +42,14 @@ export type AdminRole =
  * Without that check, anyone who can register an account with a colleague's
  * address inherits their role.
  */
-export async function getCurrentAdmin() {
+/**
+ * Cached with React's `cache()` so every call within the same request
+ * (layout, page, nested Server Components, and any lib/*-server.ts helper
+ * that calls this or getCurrentIdentity) resolves the session and admin
+ * row exactly once, instead of once per call site. Scoped per request —
+ * never shared across different users' requests.
+ */
+export const getCurrentAdmin = cache(async function getCurrentAdmin() {
   const { data: session } = await auth.getSession();
 
   const authUserId = session?.user?.id;
@@ -70,7 +79,7 @@ export async function getCurrentAdmin() {
   }
 
   return claimed;
-}
+});
 
 async function claimInvitedAdmin(
   session: Awaited<ReturnType<typeof auth.getSession>>['data'],
@@ -195,7 +204,10 @@ export type ResolvedIdentity = {
   permissions: Map<string, Map<AccessAction, AccessScope>>;
 };
 
-export async function getCurrentIdentity(): Promise<ResolvedIdentity> {
+/** Cached per request for the same reason as getCurrentAdmin above — this
+ *  is called by requirePermission/hasPermission call sites throughout the
+ *  API routes and server components, often more than once per request. */
+export const getCurrentIdentity = cache(async function getCurrentIdentity(): Promise<ResolvedIdentity> {
   const admin = await getCurrentAdmin();
   const isFullAccess = !admin.restrictedAccess;
 
@@ -217,7 +229,7 @@ export async function getCurrentIdentity(): Promise<ResolvedIdentity> {
   }
 
   return { admin, employee, isFullAccess, permissions };
-}
+});
 
 export function hasPermission(
   identity: ResolvedIdentity,

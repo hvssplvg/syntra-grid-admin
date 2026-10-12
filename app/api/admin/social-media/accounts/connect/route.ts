@@ -35,7 +35,7 @@ const COOKIE_OPTS = {
 ============================================================================ */
 
 export async function GET(request: NextRequest) {
-  const socialMediaUrl = new URL("/admin?tab=social_media", request.url);
+  const socialMediaUrl = new URL("/dashboard?tab=social_media", request.url);
   const loginUrl = new URL("/login", request.url);
 
   try {
@@ -74,7 +74,7 @@ export async function GET(request: NextRequest) {
     return response;
   } catch (error) {
     if (error instanceof AuthenticationError) {
-      loginUrl.searchParams.set("returnTo", "/admin?tab=social_media");
+      loginUrl.searchParams.set("returnTo", "/dashboard?tab=social_media");
       return NextResponse.redirect(loginUrl);
     }
 

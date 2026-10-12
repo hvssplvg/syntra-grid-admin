@@ -2402,6 +2402,12 @@ function AccountsWorkspace({
                         </button>
                       </div>
                     ))}
+                    {platform.id === "LINKEDIN" && (
+                      <p className="px-1 text-[10px] text-[var(--text-subtle)]">
+                        Personal profile only — posts publish as this member. Company-page
+                        publishing isn&apos;t supported yet.
+                      </p>
+                    )}
                   </div>
                 )}
 
