@@ -90,30 +90,55 @@ model AdminUser {
   notifications      Notification[]
 
   // Social media
-  socialAccountsConnected  SocialAccount[]        @relation("SocialAccountConnectedBy")
-  socialCampaignsCreated   SocialCampaign[]       @relation("SocialCampaignCreatedBy")
-  socialPostsCreated       SocialPost[]           @relation("SocialPostCreatedBy")
-  socialPostsUpdated       SocialPost[]           @relation("SocialPostUpdatedBy")
-  socialPostsReviewed      SocialPost[]           @relation("SocialPostReviewedBy")
-  socialMediaAssetsUploaded SocialMediaAsset[]    @relation("SocialMediaAssetUploadedBy")
-  socialPostActivities     SocialPostActivity[]   @relation("SocialPostActivityActor")
+  socialAccountsConnected   SocialAccount[]      @relation("SocialAccountConnectedBy")
+  socialCampaignsCreated    SocialCampaign[]     @relation("SocialCampaignCreatedBy")
+  socialPostsCreated        SocialPost[]         @relation("SocialPostCreatedBy")
+  socialPostsUpdated        SocialPost[]         @relation("SocialPostUpdatedBy")
+  socialPostsReviewed       SocialPost[]         @relation("SocialPostReviewedBy")
+  socialMediaAssetsUploaded SocialMediaAsset[]   @relation("SocialMediaAssetUploadedBy")
+  socialPostActivities      SocialPostActivity[] @relation("SocialPostActivityActor")
 
   // Brand assets
-  brandKitsCreated            BrandKit[]               @relation("BrandKitCreatedBy")
-  brandAssetsUploaded         BrandAsset[]             @relation("BrandAssetUploadedBy")
-  brandAssetVersionsCreated   BrandAssetVersion[]      @relation("BrandAssetVersionCreatedBy")
-  brandGuidelinesUpdated      BrandGuideline[]         @relation("BrandGuidelineUpdatedBy")
-  brandGuidelineVersions      BrandGuidelineVersion[]  @relation("BrandGuidelineVersionCreatedBy")
-  brandTemplatesCreated       BrandTemplate[]          @relation("BrandTemplateCreatedBy")
-  brandRequestsRequested      BrandRequest[]           @relation("BrandRequestRequestedBy")
-  brandRequestsAssigned       BrandRequest[]           @relation("BrandRequestAssignedTo")
-  brandRequestAttachments     BrandRequestAttachment[] @relation("BrandRequestAttachmentUploadedBy")
-  brandRequestComments        BrandRequestComment[]    @relation("BrandRequestCommentAuthor")
-  brandRequestActivities      BrandRequestActivity[]   @relation("BrandRequestActivityActor")
+  brandKitsCreated          BrandKit[]               @relation("BrandKitCreatedBy")
+  brandAssetsUploaded       BrandAsset[]             @relation("BrandAssetUploadedBy")
+  brandAssetVersionsCreated BrandAssetVersion[]      @relation("BrandAssetVersionCreatedBy")
+  brandGuidelinesUpdated    BrandGuideline[]         @relation("BrandGuidelineUpdatedBy")
+  brandGuidelineVersions    BrandGuidelineVersion[]  @relation("BrandGuidelineVersionCreatedBy")
+  brandTemplatesCreated     BrandTemplate[]          @relation("BrandTemplateCreatedBy")
+  brandRequestsRequested    BrandRequest[]           @relation("BrandRequestRequestedBy")
+  brandRequestsAssigned     BrandRequest[]           @relation("BrandRequestAssignedTo")
+  brandRequestAttachments   BrandRequestAttachment[] @relation("BrandRequestAttachmentUploadedBy")
+  brandRequestComments      BrandRequestComment[]    @relation("BrandRequestCommentAuthor")
+  brandRequestActivities    BrandRequestActivity[]   @relation("BrandRequestActivityActor")
 
   // Campaigns
   campaignsCreated Campaign[] @relation("CampaignCreatedBy")
   campaignsUpdated Campaign[] @relation("CampaignUpdatedBy")
+
+  campaignMembersAdded             CampaignMember[]           @relation("CampaignMemberAddedBy")
+  campaignMilestonesCreated        CampaignMilestone[]        @relation("CampaignMilestoneCreatedBy")
+  campaignMilestonesUpdated        CampaignMilestone[]        @relation("CampaignMilestoneUpdatedBy")
+  campaignTasksCreated             CampaignTask[]             @relation("CampaignTaskCreatedBy")
+  campaignTasksUpdated             CampaignTask[]             @relation("CampaignTaskUpdatedBy")
+  campaignTaskComments             CampaignTaskComment[]      @relation("CampaignTaskCommentAuthor")
+  campaignActivities               CampaignActivity[]         @relation("CampaignActivityActor")
+  campaignContentCreated           CampaignContent[]          @relation("CampaignContentCreatedBy")
+  campaignContentUpdated           CampaignContent[]          @relation("CampaignContentUpdatedBy")
+  campaignAudiencesCreated         CampaignAudience[]         @relation("CampaignAudienceCreatedBy")
+  campaignAudiencesUpdated         CampaignAudience[]         @relation("CampaignAudienceUpdatedBy")
+  campaignBudgetAllocationsCreated CampaignBudgetAllocation[] @relation("CampaignBudgetAllocationCreatedBy")
+  campaignBudgetAllocationsUpdated CampaignBudgetAllocation[] @relation("CampaignBudgetAllocationUpdatedBy")
+  campaignExpensesRecorded         CampaignExpense[]          @relation("CampaignExpenseRecordedBy")
+  campaignExpensesApproved         CampaignExpense[]          @relation("CampaignExpenseApprovedBy")
+  campaignBudgetHistoryChanged     CampaignBudgetHistory[]    @relation("CampaignBudgetHistoryChangedBy")
+  campaignKpisCreated              CampaignKpi[]              @relation("CampaignKpiCreatedBy")
+  campaignKpisUpdated              CampaignKpi[]              @relation("CampaignKpiUpdatedBy")
+  campaignMetricsRecorded          CampaignMetric[]           @relation("CampaignMetricRecordedBy")
+  campaignMetricImportsImported    CampaignMetricImport[]     @relation("CampaignMetricImportImportedBy")
+  campaignApprovalsRequested       CampaignApproval[]         @relation("CampaignApprovalRequestedBy")
+  campaignApprovalsAssigned        CampaignApproval[]         @relation("CampaignApprovalAssignedApprover")
+  campaignApprovalsDecided         CampaignApproval[]         @relation("CampaignApprovalDecidedBy")
+  campaignApprovalComments         CampaignApprovalComment[]  @relation("CampaignApprovalCommentAuthor")
 
   @@index([departmentId])
 }
@@ -161,6 +186,9 @@ model Department {
 
   // Workload
   workloadAllocations WorkloadAllocation[]
+
+  // Campaigns
+  campaigns Campaign[]
 
   @@index([status])
   @@index([leadId])
@@ -244,6 +272,15 @@ model Employee {
   timesheets          Timesheet[]
   timesheetEntries    TimesheetEntry[]
   timesheetActivities TimesheetActivity[]
+
+  // Campaigns
+  campaignsOwned          Campaign[]          @relation("CampaignOwner")
+  campaignsManaged        Campaign[]          @relation("CampaignManager")
+  campaignMemberships     CampaignMember[]
+  campaignMilestonesOwned CampaignMilestone[] @relation("CampaignMilestoneOwner")
+  campaignTasksAssigned   CampaignTask[]      @relation("CampaignTaskAssignee")
+  campaignContentCreated  CampaignContent[]   @relation("CampaignContentCreator")
+  campaignContentReviewed CampaignContent[]   @relation("CampaignContentReviewer")
 
   @@index([createdAt])
   @@index([departmentId])
@@ -400,6 +437,9 @@ model Client {
 
   // Brand assets
   brandKits BrandKit[]
+
+  // Campaigns
+  campaigns Campaign[]
 
   @@index([status])
   @@index([priority])
@@ -696,6 +736,9 @@ model Project {
   // Workload and timesheets
   workloadAllocations WorkloadAllocation[]
   timesheetEntries    TimesheetEntry[]
+
+  // Campaigns
+  campaigns Campaign[]
 
   @@unique([clientId, slug])
   @@index([clientId])
@@ -1049,6 +1092,10 @@ model MonzoTransaction {
   matchedProject Project?       @relation("MonzoTransactionProject", fields: [matchedProjectId], references: [id])
 
   monzoConnection MonzoConnection @relation(fields: [monzoConnectionId], references: [id], onDelete: Cascade)
+
+  // Campaigns — set when a CampaignExpense is reconciled against this
+  // real bank transaction. The FK lives on CampaignExpense.
+  campaignExpense CampaignExpense? @relation("MonzoTransactionCampaignExpense")
 
   @@index([monzoConnectionId])
   @@index([monzoAccountId])
@@ -1803,6 +1850,10 @@ model CalendarEvent {
   project    Project?    @relation(fields: [projectId], references: [id])
 
   attendees CalendarEventAttendee[]
+
+  // Campaigns — set when this event represents a CampaignMilestone's
+  // deadline. The FK lives on CampaignMilestone (calendarEventId).
+  campaignMilestone CampaignMilestone?
 
   @@index([ownerId])
   @@index([createdById])
@@ -2828,7 +2879,6 @@ enum TimesheetActivityType {
 /**
  * =============================================================================
  * ADMIN OVERVIEW — personalisation & notifications
- *
  * Purely additive to the existing schema: one preferences row and any
  * number of notification rows per AdminUser. Nothing else references
  * these tables, so they carry no migration risk for existing data.
@@ -2868,6 +2918,16 @@ enum NotificationType {
   SOCIAL_POST_PUBLISHED
   SOCIAL_POST_FAILED
   SOCIAL_ACCOUNT_DISCONNECTED
+  CAMPAIGN_TASK_ASSIGNED
+  CAMPAIGN_TASK_OVERDUE
+  CAMPAIGN_MILESTONE_DUE_SOON
+  CAMPAIGN_APPROVAL_PENDING
+  CAMPAIGN_APPROVAL_DECIDED
+  CAMPAIGN_CONTENT_CHANGES_REQUESTED
+  CAMPAIGN_LAUNCHED
+  CAMPAIGN_COMPLETED
+  CAMPAIGN_BUDGET_EXCEEDED
+  CAMPAIGN_EXPENSE_APPROVAL_PENDING
 }
 
 /**
@@ -2875,7 +2935,6 @@ enum NotificationType {
  * lib/notifications/server.ts from existing tables (AuditLog, the domain
  * Activity tables, overdue invoices, urgent tickets, etc.) rather than by
  * other modules writing here directly — see sourceKey below.
- *
  * sourceKey is a stable, human-readable dedupe key (e.g.
  * "leave_request:<id>", "invoice_overdue:<id>") unique per recipient, so
  * re-running the sync step is idempotent and never creates duplicates.
@@ -2904,16 +2963,32 @@ model Notification {
 /**
  * =============================================================================
  * CAMPAIGNS MANAGEMENT
- *
  * Purely additive — no existing table is touched. Campaign is Growth's
  * marketing-campaign record — distinct from SocialCampaign, which only
- * scopes Social Media posts to a campaign label. This covers campaign CRUD,
- * lifecycle (create/edit/archive/restore) and the overview stats the
- * Campaigns tab actually calls today. Content/Planner/Audiences/Budget/
- * Analytics/Approvals remain the frontend's documented placeholders until
- * their own backends — including a real submit/approve/reject workflow —
- * are built as a follow-up; for now EDIT can set any status directly, since
- * there is no approval workflow enforcing transitions yet.
+ * scopes Social Media posts to a campaign label.
+ * Design notes (see docs/campaigns-implementation-checklist.md for the full
+ * rationale):
+ * - "Doer" relations (owner/manager/task assignee/content creator/reviewer)
+ * point at Employee, matching WorkloadAllocation/CalendarEvent precedent.
+ * createdById/updatedById/actorId-style provenance fields point at
+ * AdminUser — the authenticated dashboard actor — matching every other
+ * module in this schema.
+ * - CampaignActivity is both the activity feed AND the audit trail (no
+ * separate CampaignHistory table, and not the generic AuditLog model —
+ * mirrors SocialPostActivity/BrandRequestActivity exactly).
+ * - CampaignApproval uses a single assigned approver + status (with
+ * SUPERSEDED for stale approvals invalidated by a later edit) rather than
+ * a multi-step approval chain — no concrete multi-stage requirement was
+ * specified, and this keeps the workflow auditable without inventing an
+ * approval-chain product nobody asked for.
+ * - CampaignExpense can optionally reconcile against a real MonzoTransaction
+ * (matchedMonzoTransactionId), mirroring ClientInvoice's own bank-matching
+ * pattern, instead of duplicating accounting records.
+ * - CampaignContentAsset joins to the existing BrandAsset table — Cloudinary
+ * files are never duplicated, only referenced.
+ * - Campaign notifications are NOT a new table — NotificationType gains new
+ * values and lib/notifications/server.ts gains new draft collectors,
+ * exactly like Social Media's own notifications.
  * =============================================================================
  */
 
@@ -2930,14 +3005,52 @@ enum CampaignStatus {
   ARCHIVED
 }
 
+enum CampaignObjective {
+  BRAND_AWARENESS
+  LEAD_GENERATION
+  WEBSITE_TRAFFIC
+  ENGAGEMENT
+  CONVERSIONS
+  PRODUCT_LAUNCH
+  CUSTOMER_ACQUISITION
+  CUSTOMER_RETENTION
+  EVENT_PROMOTION
+  RECRUITMENT
+  OTHER
+}
+
+enum CampaignPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
 model Campaign {
   id String @id @default(cuid())
 
+  code        String?            @unique
   name        String
   description String?
-  status      CampaignStatus @default(DRAFT)
-  startDate   DateTime?
-  endDate     DateTime?
+  objective   CampaignObjective?
+  category    String?
+  priority    CampaignPriority   @default(NORMAL)
+  status      CampaignStatus     @default(DRAFT)
+
+  startDate DateTime?
+  endDate   DateTime?
+
+  clientId     String?
+  projectId    String?
+  departmentId String?
+  ownerId      String?
+  managerId    String?
+
+  currency CurrencyCode @default(GBP)
+  budget   Decimal?     @db.Decimal(18, 2)
+
+  goals String?
+  notes String?
 
   createdById String?
   updatedById String?
@@ -2945,18 +3058,771 @@ model Campaign {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  client     Client?     @relation(fields: [clientId], references: [id])
+  project    Project?    @relation(fields: [projectId], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
+  owner      Employee?   @relation("CampaignOwner", fields: [ownerId], references: [id])
+  manager    Employee?   @relation("CampaignManager", fields: [managerId], references: [id])
+
   createdBy AdminUser? @relation("CampaignCreatedBy", fields: [createdById], references: [id])
   updatedBy AdminUser? @relation("CampaignUpdatedBy", fields: [updatedById], references: [id])
+
+  members           CampaignMember[]
+  milestones        CampaignMilestone[]
+  tasks             CampaignTask[]
+  activities        CampaignActivity[]
+  content           CampaignContent[]
+  audiences         CampaignAudienceAssignment[]
+  channels          CampaignChannel[]
+  budgetAllocations CampaignBudgetAllocation[]
+  expenses          CampaignExpense[]
+  budgetHistory     CampaignBudgetHistory[]
+  kpis              CampaignKpi[]
+  metrics           CampaignMetric[]
+  metricImports     CampaignMetricImport[]
+  approvals         CampaignApproval[]
 
   @@index([status])
   @@index([createdById])
   @@index([updatedAt])
+  @@index([clientId])
+  @@index([projectId])
+  @@index([departmentId])
+  @@index([ownerId])
+  @@index([managerId])
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * TEAM
+ * ----------------------------------------------------------------------
+ */
+
+enum CampaignMemberRole {
+  OWNER
+  MANAGER
+  CONTRIBUTOR
+  REVIEWER
+  STAKEHOLDER
+}
+
+model CampaignMember {
+  id         String @id @default(cuid())
+  campaignId String
+  employeeId String
+
+  role CampaignMemberRole @default(CONTRIBUTOR)
+
+  addedById String?
+  createdAt DateTime @default(now())
+
+  campaign Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  employee Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  addedBy  AdminUser? @relation("CampaignMemberAddedBy", fields: [addedById], references: [id])
+
+  @@unique([campaignId, employeeId])
+  @@index([campaignId])
+  @@index([employeeId])
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * PLANNER — MILESTONES & TASKS
+ * ----------------------------------------------------------------------
+ */
+
+enum CampaignMilestoneStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+model CampaignMilestone {
+  id         String @id @default(cuid())
+  campaignId String
+
+  title       String
+  description String?
+  dueAt       DateTime
+  completedAt DateTime?
+  status      CampaignMilestoneStatus @default(PENDING)
+
+  ownerId         String?
+  calendarEventId String? @unique
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign      Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  owner         Employee?      @relation("CampaignMilestoneOwner", fields: [ownerId], references: [id])
+  calendarEvent CalendarEvent? @relation(fields: [calendarEventId], references: [id])
+  createdBy     AdminUser?     @relation("CampaignMilestoneCreatedBy", fields: [createdById], references: [id])
+  updatedBy     AdminUser?     @relation("CampaignMilestoneUpdatedBy", fields: [updatedById], references: [id])
+
+  tasks CampaignTask[]
+
+  @@index([campaignId])
+  @@index([dueAt])
+  @@index([status])
+  @@index([ownerId])
+}
+
+enum CampaignTaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  IN_REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+model CampaignTask {
+  id          String  @id @default(cuid())
+  campaignId  String
+  milestoneId String?
+
+  title       String
+  description String?
+  status      CampaignTaskStatus @default(TODO)
+  priority    CampaignPriority   @default(NORMAL)
+
+  assigneeId  String?
+  dueAt       DateTime?
+  completedAt DateTime?
+
+  // Single-predecessor dependency — enough to model "blocked until X is
+  // done" without a general DAG; cycle prevention is enforced in
+  // lib/campaigns/planner.ts by walking this chain before saving, since a
+  // single-parent chain is trivial to check without a graph library.
+  dependsOnTaskId String?
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign       Campaign           @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  milestone      CampaignMilestone? @relation(fields: [milestoneId], references: [id])
+  assignee       Employee?          @relation("CampaignTaskAssignee", fields: [assigneeId], references: [id])
+  dependsOnTask  CampaignTask?      @relation("CampaignTaskDependency", fields: [dependsOnTaskId], references: [id])
+  dependentTasks CampaignTask[]     @relation("CampaignTaskDependency")
+  createdBy      AdminUser?         @relation("CampaignTaskCreatedBy", fields: [createdById], references: [id])
+  updatedBy      AdminUser?         @relation("CampaignTaskUpdatedBy", fields: [updatedById], references: [id])
+
+  comments CampaignTaskComment[]
+
+  @@index([campaignId])
+  @@index([milestoneId])
+  @@index([assigneeId])
+  @@index([status])
+  @@index([dueAt])
+  @@index([dependsOnTaskId])
+}
+
+model CampaignTaskComment {
+  id     String @id @default(cuid())
+  taskId String
+
+  authorId String
+  body     String
+
+  createdAt DateTime @default(now())
+
+  task   CampaignTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author AdminUser    @relation("CampaignTaskCommentAuthor", fields: [authorId], references: [id])
+
+  @@index([taskId])
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * ACTIVITY / AUDIT TRAIL
+ * ----------------------------------------------------------------------
+ */
+
+enum CampaignActivityType {
+  CREATED
+  EDITED
+  STATUS_CHANGED
+  ARCHIVED
+  RESTORED
+  MEMBER_ADDED
+  MEMBER_REMOVED
+  MILESTONE_CREATED
+  MILESTONE_COMPLETED
+  TASK_CREATED
+  TASK_COMPLETED
+  CONTENT_SUBMITTED
+  CONTENT_APPROVED
+  CONTENT_CHANGES_REQUESTED
+  CONTENT_PUBLISHED
+  BUDGET_CHANGED
+  EXPENSE_RECORDED
+  EXPENSE_APPROVED
+  APPROVAL_REQUESTED
+  APPROVAL_APPROVED
+  APPROVAL_REJECTED
+  APPROVAL_CHANGES_REQUESTED
+  METRIC_IMPORTED
+  AUDIENCE_ASSIGNED
+  AUDIENCE_REMOVED
+}
+
+model CampaignActivity {
+  id         String @id @default(cuid())
+  campaignId String
+
+  actorId     String?
+  type        CampaignActivityType
+  description String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  campaign Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  actor    AdminUser? @relation("CampaignActivityActor", fields: [actorId], references: [id])
+
+  @@index([campaignId])
+  @@index([createdAt])
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * CONTENT
+ * ----------------------------------------------------------------------
+ */
+
+enum CampaignContentType {
+  SOCIAL_POST
+  IMAGE
+  VIDEO
+  REEL
+  STORY
+  CAROUSEL
+  BLOG_ARTICLE
+  EMAIL
+  WEBSITE_BANNER
+  LANDING_PAGE
+  ADVERTISEMENT
+  PROMOTIONAL_GRAPHIC
+  DOCUMENT
+  OTHER
+}
+
+enum CampaignContentStatus {
+  DRAFT
+  IN_PROGRESS
+  READY_FOR_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  CANCELLED
+  ARCHIVED
+}
+
+model CampaignContent {
+  id         String @id @default(cuid())
+  campaignId String
+
+  title        String
+  description  String?
+  type         CampaignContentType
+  body         String?
+  caption      String?
+  hashtags     String[]
+  callToAction String?
+  // Free-text target channel — intentionally not the CampaignChannelType
+  // enum. Content can target things a campaign-level channel list
+  // wouldn't (e.g. "LinkedIn — company page" vs "LinkedIn — founder
+  // profile"); the structured channel distribution for budgeting and
+  // analytics lives on CampaignChannel/CampaignMetric instead.
+  channel      String?
+
+  status CampaignContentStatus @default(DRAFT)
+
+  creatorId  String?
+  reviewerId String?
+
+  dueAt       DateTime?
+  scheduledAt DateTime?
+  publishedAt DateTime?
+
+  reviewNotes String?
+  notes       String?
+
+  // Set once this content becomes (or is linked to) a real Social Media
+  // post — never marked PUBLISHED here until that post's own publishing
+  // pipeline confirms it; see lib/campaigns/content.ts.
+  socialPostId String? @unique
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign   Campaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  creator    Employee?   @relation("CampaignContentCreator", fields: [creatorId], references: [id])
+  reviewer   Employee?   @relation("CampaignContentReviewer", fields: [reviewerId], references: [id])
+  socialPost SocialPost? @relation(fields: [socialPostId], references: [id])
+  createdBy  AdminUser?  @relation("CampaignContentCreatedBy", fields: [createdById], references: [id])
+  updatedBy  AdminUser?  @relation("CampaignContentUpdatedBy", fields: [updatedById], references: [id])
+
+  assets CampaignContentAsset[]
+
+  @@index([campaignId])
+  @@index([status])
+  @@index([type])
+  @@index([dueAt])
+}
+
+model CampaignContentAsset {
+  id        String @id @default(cuid())
+  contentId String
+
+  brandAssetId String
+  position     Int    @default(0)
+
+  createdAt DateTime @default(now())
+
+  content    CampaignContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  brandAsset BrandAsset      @relation(fields: [brandAssetId], references: [id])
+
+  @@unique([contentId, brandAssetId])
+  @@index([contentId])
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * AUDIENCES
+ * ----------------------------------------------------------------------
+ */
+
+enum CampaignAudienceCategory {
+  GENERAL_CONSUMERS
+  EXISTING_CUSTOMERS
+  POTENTIAL_CUSTOMERS
+  BUSINESS_OWNERS
+  CORPORATE_CLIENTS
+  STUDENTS
+  PROFESSIONALS
+  TECHNOLOGY_ENTHUSIASTS
+  PROPERTY_SEEKERS
+  RECRUITMENT_CANDIDATES
+  CUSTOM
+}
+
+enum CampaignRecordStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model CampaignAudience {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  category    CampaignAudienceCategory @default(CUSTOM)
+
+  country String?
+  region  String?
+  city    String?
+
+  ageRangeMin Int?
+  ageRangeMax Int?
+
+  interests       String[]
+  industry        String?
+  jobTitles       String[]
+  customerSegment String?
+
+  // Where this came from (e.g. "Manual estimate", "CRM export"). isEstimate
+  // explicitly flags a manually guessed size so the UI never presents it
+  // as a measured number.
+  source        String?
+  estimatedSize Int?
+  isEstimate    Boolean @default(true)
+
+  status CampaignRecordStatus @default(ACTIVE)
+  notes  String?
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdBy AdminUser? @relation("CampaignAudienceCreatedBy", fields: [createdById], references: [id])
+  updatedBy AdminUser? @relation("CampaignAudienceUpdatedBy", fields: [updatedById], references: [id])
+
+  campaigns CampaignAudienceAssignment[]
+
+  @@index([status])
+  @@index([category])
+}
+
+model CampaignAudienceAssignment {
+  id         String @id @default(cuid())
+  campaignId String
+  audienceId String
+
+  createdAt DateTime @default(now())
+
+  campaign Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  audience CampaignAudience @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, audienceId])
+  @@index([campaignId])
+  @@index([audienceId])
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * CHANNELS
+ * ----------------------------------------------------------------------
+ */
+
+enum CampaignChannelType {
+  INSTAGRAM
+  FACEBOOK
+  LINKEDIN
+  X
+  TIKTOK
+  YOUTUBE
+  EMAIL
+  WEBSITE
+  PRINT
+  EVENTS
+  OTHER
+}
+
+model CampaignChannel {
+  id         String              @id @default(cuid())
+  campaignId String
+  channel    CampaignChannelType
+  notes      String?
+
+  createdAt DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, channel])
+  @@index([campaignId])
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * BUDGET
+ * ----------------------------------------------------------------------
+ */
+
+enum CampaignBudgetCategory {
+  PAID_ADVERTISING
+  CONTENT_PRODUCTION
+  GRAPHIC_DESIGN
+  VIDEO_PRODUCTION
+  INFLUENCER_MARKETING
+  EVENTS
+  SOFTWARE_AND_TOOLS
+  PHOTOGRAPHY
+  PRINTING
+  OTHER
+}
+
+model CampaignBudgetAllocation {
+  id         String @id @default(cuid())
+  campaignId String
+
+  category CampaignBudgetCategory
+  channel  CampaignChannelType?
+  amount   Decimal                @db.Decimal(18, 2)
+  currency CurrencyCode           @default(GBP)
+  notes    String?
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign  Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  createdBy AdminUser? @relation("CampaignBudgetAllocationCreatedBy", fields: [createdById], references: [id])
+  updatedBy AdminUser? @relation("CampaignBudgetAllocationUpdatedBy", fields: [updatedById], references: [id])
+
+  expenses CampaignExpense[]
+
+  @@index([campaignId])
+  @@index([category])
+}
+
+enum CampaignExpensePaymentStatus {
+  UNPAID
+  PAID
+  REIMBURSED
+}
+
+enum CampaignExpenseApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model CampaignExpense {
+  id           String  @id @default(cuid())
+  campaignId   String
+  allocationId String?
+
+  description String
+  category    CampaignBudgetCategory
+  amount      Decimal                @db.Decimal(18, 2)
+  currency    CurrencyCode           @default(GBP)
+  expenseDate DateTime
+
+  vendor    String?
+  reference String?
+
+  paymentStatus  CampaignExpensePaymentStatus  @default(UNPAID)
+  approvalStatus CampaignExpenseApprovalStatus @default(PENDING)
+
+  receiptUrl                String?
+  receiptCloudinaryPublicId String?
+
+  // Optional reconciliation against a real bank transaction — mirrors
+  // ClientInvoice's matchedMonzoTransactions pattern instead of this
+  // module inventing its own accounting records.
+  matchedMonzoTransactionId String? @unique
+
+  recordedById String?
+  approvedById String?
+  approvedAt   DateTime?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign                Campaign                  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  allocation              CampaignBudgetAllocation? @relation(fields: [allocationId], references: [id])
+  recordedBy              AdminUser?                @relation("CampaignExpenseRecordedBy", fields: [recordedById], references: [id])
+  approvedBy              AdminUser?                @relation("CampaignExpenseApprovedBy", fields: [approvedById], references: [id])
+  matchedMonzoTransaction MonzoTransaction?         @relation("MonzoTransactionCampaignExpense", fields: [matchedMonzoTransactionId], references: [id])
+
+  @@index([campaignId])
+  @@index([category])
+  @@index([approvalStatus])
+  @@index([expenseDate])
+}
+
+model CampaignBudgetHistory {
+  id         String @id @default(cuid())
+  campaignId String
+
+  previousAmount Decimal?     @db.Decimal(18, 2)
+  newAmount      Decimal      @db.Decimal(18, 2)
+  currency       CurrencyCode @default(GBP)
+  reason         String?
+
+  changedById String?
+  createdAt   DateTime @default(now())
+
+  campaign  Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  changedBy AdminUser? @relation("CampaignBudgetHistoryChangedBy", fields: [changedById], references: [id])
+
+  @@index([campaignId])
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * KPIs & METRICS
+ * ----------------------------------------------------------------------
+ */
+
+enum CampaignMetricType {
+  IMPRESSIONS
+  REACH
+  ENGAGEMENT
+  ENGAGEMENT_RATE
+  CLICKS
+  CTR
+  LEADS
+  CONVERSIONS
+  CONVERSION_RATE
+  CPC
+  CPL
+  CPA
+  REVENUE_ATTRIBUTED
+  ROAS
+  ROI
+  BUDGET_UTILISATION
+}
+
+enum CampaignMetricSource {
+  SOCIAL_MEDIA_INTEGRATION
+  MANUAL_ENTRY
+  CSV_IMPORT
+  EXTERNAL_API
+}
+
+enum CampaignKpiStatus {
+  ON_TRACK
+  AT_RISK
+  ACHIEVED
+  MISSED
+}
+
+model CampaignKpi {
+  id         String @id @default(cuid())
+  campaignId String
+
+  name        String
+  metric      CampaignMetricType
+  targetValue Decimal            @db.Decimal(18, 2)
+  actualValue Decimal            @default(0) @db.Decimal(18, 2)
+  deadline    DateTime?
+  status      CampaignKpiStatus  @default(ON_TRACK)
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign  Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  createdBy AdminUser? @relation("CampaignKpiCreatedBy", fields: [createdById], references: [id])
+  updatedBy AdminUser? @relation("CampaignKpiUpdatedBy", fields: [updatedById], references: [id])
+
+  @@index([campaignId])
+  @@index([status])
+}
+
+model CampaignMetric {
+  id         String @id @default(cuid())
+  campaignId String
+
+  channel    CampaignChannelType?
+  metricType CampaignMetricType
+  value      Decimal              @db.Decimal(18, 4)
+
+  periodStart DateTime
+  periodEnd   DateTime
+
+  source            CampaignMetricSource
+  sourcePostId      String?
+  externalReference String?
+
+  recordedById String?
+  createdAt    DateTime @default(now())
+
+  campaign   Campaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sourcePost SocialPost? @relation(fields: [sourcePostId], references: [id])
+  recordedBy AdminUser?  @relation("CampaignMetricRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([campaignId])
+  @@index([metricType])
+  @@index([periodStart, periodEnd])
+}
+
+model CampaignMetricImport {
+  id         String @id @default(cuid())
+  campaignId String
+
+  importedById String?
+  filename     String
+  rowCount     Int     @default(0)
+  status       String
+  errorSummary String?
+
+  createdAt DateTime @default(now())
+
+  campaign   Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  importedBy AdminUser? @relation("CampaignMetricImportImportedBy", fields: [importedById], references: [id])
+
+  @@index([campaignId])
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * APPROVALS
+ * ----------------------------------------------------------------------
+ */
+
+enum CampaignApprovalType {
+  LAUNCH
+  BUDGET
+  CONTENT
+  EXPENSE
+  CHANGE
+  COMPLETION
+}
+
+enum CampaignApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+  CANCELLED
+  SUPERSEDED
+}
+
+model CampaignApproval {
+  id         String @id @default(cuid())
+  campaignId String
+
+  type              CampaignApprovalType
+  relatedEntityType String?
+  relatedEntityId   String?
+  // Frozen copy of the thing being approved, so a later edit to the
+  // underlying record can never retroactively change what was approved —
+  // see lib/campaigns/approvals.ts for how an edit after a PENDING/APPROVED
+  // decision marks the approval SUPERSEDED instead of silently reusing it.
+  snapshot          Json?
+
+  status CampaignApprovalStatus @default(PENDING)
+
+  requestedById      String?
+  assignedApproverId String?
+  decidedById        String?
+  decidedAt          DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign         Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  requestedBy      AdminUser? @relation("CampaignApprovalRequestedBy", fields: [requestedById], references: [id])
+  assignedApprover AdminUser? @relation("CampaignApprovalAssignedApprover", fields: [assignedApproverId], references: [id])
+  decidedBy        AdminUser? @relation("CampaignApprovalDecidedBy", fields: [decidedById], references: [id])
+
+  comments CampaignApprovalComment[]
+
+  @@index([campaignId])
+  @@index([status])
+  @@index([type])
+  @@index([assignedApproverId])
+}
+
+model CampaignApprovalComment {
+  id         String @id @default(cuid())
+  approvalId String
+
+  authorId String
+  body     String
+
+  createdAt DateTime @default(now())
+
+  approval CampaignApproval @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+  author   AdminUser        @relation("CampaignApprovalCommentAuthor", fields: [authorId], references: [id])
+
+  @@index([approvalId])
 }
 
 /**
  * =============================================================================
  * SOCIAL MEDIA MANAGEMENT
- *
  * Purely additive — no existing table is touched. SocialPostPlatform is the
  * per-destination publishing record: a post can target several accounts
  * (including several accounts on the SAME platform), and each target tracks
@@ -3142,6 +4008,12 @@ model SocialPost {
   assets     SocialPostAsset[]
   activities SocialPostActivity[]
 
+  // Campaigns — set when a Campaigns-module CampaignContent record or a
+  // CampaignMetric row is linked to this exact post. The FKs live on
+  // CampaignContent.socialPostId and CampaignMetric.sourcePostId.
+  campaignContent CampaignContent?
+  campaignMetrics CampaignMetric[]
+
   @@index([status])
   @@index([campaignId])
   @@index([scheduledAt])
@@ -3161,7 +4033,9 @@ model SocialPostPlatform {
 
   caption String?
 
-  /** Only meaningful for Instagram today; every other platform ignores it. */
+  /**
+   * Only meaningful for Instagram today; every other platform ignores it.
+   */
   placement SocialMediaPlacement @default(FEED)
 
   status SocialPostTargetStatus @default(PENDING)
@@ -3173,14 +4047,14 @@ model SocialPostPlatform {
   remotePostUrl String?
 
   lastError     String?
-  retryCount    Int      @default(0)
+  retryCount    Int       @default(0)
   lastAttemptAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  post    SocialPost     @relation(fields: [postId], references: [id], onDelete: Cascade)
-  account SocialAccount  @relation(fields: [accountId], references: [id])
+  post    SocialPost    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  account SocialAccount @relation(fields: [accountId], references: [id])
 
   metrics SocialPostMetric[]
 
@@ -3216,7 +4090,7 @@ model SocialMediaAsset {
 
   createdAt DateTime @default(now())
 
-  uploadedBy AdminUser? @relation("SocialMediaAssetUploadedBy", fields: [uploadedById], references: [id])
+  uploadedBy AdminUser?  @relation("SocialMediaAssetUploadedBy", fields: [uploadedById], references: [id])
   brandAsset BrandAsset? @relation(fields: [brandAssetId], references: [id])
 
   postAssets SocialPostAsset[]
@@ -3292,17 +4166,18 @@ model SocialPostMetric {
   @@index([postPlatformId, capturedAt])
 }
 
-/* ============================================================================
-   BRAND ASSETS MANAGEMENT
-
-   Mirrors the Social Media module's shape exactly: real Cloudinary-hosted
-   files (never binary in Postgres), the existing fine-grained permission
-   system via a new "brand_assets" module, real activity logging. A
-   BrandKit groups a brand's assets/templates/guideline/requests together —
-   clientId is optional so this covers Syntra Grid's own brand as well as
-   client brands, internal products or campaign sub-brands (clientId null
-   for anything that isn't a specific client's own brand).
-============================================================================ */
+/**
+ * ============================================================================
+ * BRAND ASSETS MANAGEMENT
+ * Mirrors the Social Media module's shape exactly: real Cloudinary-hosted
+ * files (never binary in Postgres), the existing fine-grained permission
+ * system via a new "brand_assets" module, real activity logging. A
+ * BrandKit groups a brand's assets/templates/guideline/requests together —
+ * clientId is optional so this covers Syntra Grid's own brand as well as
+ * client brands, internal products or campaign sub-brands (clientId null
+ * for anything that isn't a specific client's own brand).
+ * ============================================================================
+ */
 
 enum BrandAssetType {
   IMAGE
@@ -3423,10 +4298,10 @@ model BrandKit {
   logoAsset BrandAsset? @relation("BrandKitLogo", fields: [logoAssetId], references: [id])
   createdBy AdminUser?  @relation("BrandKitCreatedBy", fields: [createdById], references: [id])
 
-  assets     BrandAsset[]     @relation("BrandKitAssets")
-  templates  BrandTemplate[]
-  guideline  BrandGuideline?
-  requests   BrandRequest[]
+  assets    BrandAsset[]    @relation("BrandKitAssets")
+  templates BrandTemplate[]
+  guideline BrandGuideline?
+  requests  BrandRequest[]
 
   @@index([status])
   @@index([clientId])
@@ -3439,7 +4314,7 @@ model BrandAsset {
   description String?
   type        BrandAssetType
   category    String?
-  tags        String[] @default([])
+  tags        String[]       @default([])
 
   url                String
   cloudinaryPublicId String
@@ -3467,16 +4342,21 @@ model BrandAsset {
   versions          BrandAssetVersion[]
   socialMediaAssets SocialMediaAsset[]
 
+  // Campaigns — reused directly, never re-uploaded to Cloudinary.
+  campaignContentAssets CampaignContentAsset[]
+
   @@index([type])
   @@index([status])
   @@index([brandKitId])
   @@index([category])
 }
 
-/** A simple append-only version history: each replace/edit that matters
- *  snapshots the prior file before the asset row is updated in place, so
- *  "restore" just copies a past version's Cloudinary reference back onto
- *  the live asset — no separate restore semantics to maintain. */
+/**
+ * A simple append-only version history: each replace/edit that matters
+ * snapshots the prior file before the asset row is updated in place, so
+ * "restore" just copies a past version's Cloudinary reference back onto
+ * the live asset — no separate restore semantics to maintain.
+ */
 model BrandAssetVersion {
   id String @id @default(cuid())
 
@@ -3524,9 +4404,9 @@ model BrandGuideline {
   fontUsageNotes      String?
 
   socialMediaGuidelines    String?
-  photographyGuidelines   String?
-  videoGuidelines         String?
-  marketingStandards      String?
+  photographyGuidelines    String?
+  videoGuidelines          String?
+  marketingStandards       String?
   emailSignatureGuidelines String?
 
   status BrandGuidelineStatus @default(DRAFT)
@@ -3568,7 +4448,7 @@ model BrandTemplate {
   name        String
   description String?
   category    BrandTemplateCategory
-  tags        String[] @default([])
+  tags        String[]              @default([])
 
   url                String
   cloudinaryPublicId String

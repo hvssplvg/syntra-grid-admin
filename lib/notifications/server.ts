@@ -41,6 +41,10 @@ async function collectFullAccessDrafts(): Promise<DraftNotification[]> {
     publishedPosts,
     failedPosts,
     disconnectedAccounts,
+    overdueCampaignTasks,
+    campaignMilestonesDueSoon,
+    pendingCampaignApprovals,
+    pendingCampaignExpenseApprovals,
   ] = await Promise.all([
     prisma.leaveRequest.findMany({
       where: { status: "PENDING" },
@@ -90,6 +94,26 @@ async function collectFullAccessDrafts(): Promise<DraftNotification[]> {
       where: { status: { in: ["EXPIRED", "ERROR"] }, lastErrorAt: { gte: recently } },
       take: 20,
       select: { id: true, platform: true, accountName: true },
+    }),
+    prisma.campaignTask.findMany({
+      where: { status: { notIn: ["COMPLETED", "CANCELLED"] }, dueAt: { lt: now } },
+      take: 20,
+      select: { id: true, title: true, campaign: { select: { name: true } } },
+    }),
+    prisma.campaignMilestone.findMany({
+      where: { status: "PENDING", dueAt: { gte: now, lte: soon } },
+      take: 20,
+      select: { id: true, title: true, campaign: { select: { name: true } } },
+    }),
+    prisma.campaignApproval.findMany({
+      where: { status: "PENDING" },
+      take: 20,
+      select: { id: true, type: true, campaign: { select: { name: true } } },
+    }),
+    prisma.campaignExpense.findMany({
+      where: { approvalStatus: "PENDING" },
+      take: 20,
+      select: { id: true, description: true, amount: true, currency: true, campaign: { select: { name: true } } },
     }),
   ]);
 
@@ -184,6 +208,42 @@ async function collectFullAccessDrafts(): Promise<DraftNotification[]> {
       entityType: "SocialAccount",
       entityId: row.id,
     })),
+    ...overdueCampaignTasks.map((row) => ({
+      sourceKey: `campaign_task_overdue:${row.id}`,
+      type: NotificationType.CAMPAIGN_TASK_OVERDUE,
+      title: `Overdue task — ${row.title}`,
+      body: `Campaign: ${row.campaign.name}`,
+      module: "campaigns",
+      entityType: "CampaignTask",
+      entityId: row.id,
+    })),
+    ...campaignMilestonesDueSoon.map((row) => ({
+      sourceKey: `campaign_milestone_due_soon:${row.id}`,
+      type: NotificationType.CAMPAIGN_MILESTONE_DUE_SOON,
+      title: `Milestone due soon — ${row.title}`,
+      body: `Campaign: ${row.campaign.name}`,
+      module: "campaigns",
+      entityType: "CampaignMilestone",
+      entityId: row.id,
+    })),
+    ...pendingCampaignApprovals.map((row) => ({
+      sourceKey: `campaign_approval_pending:${row.id}`,
+      type: NotificationType.CAMPAIGN_APPROVAL_PENDING,
+      title: `${row.type} approval pending — ${row.campaign.name}`,
+      body: "Awaiting your decision.",
+      module: "campaigns",
+      entityType: "CampaignApproval",
+      entityId: row.id,
+    })),
+    ...pendingCampaignExpenseApprovals.map((row) => ({
+      sourceKey: `campaign_expense_approval_pending:${row.id}`,
+      type: NotificationType.CAMPAIGN_EXPENSE_APPROVAL_PENDING,
+      title: `Expense awaiting approval — ${row.campaign.name}`,
+      body: `${row.description} (${row.currency} ${row.amount})`,
+      module: "campaigns",
+      entityType: "CampaignExpense",
+      entityId: row.id,
+    })),
   ];
 }
 
@@ -196,15 +256,28 @@ function socialPostLabel(post: { title: string | null; caption: string }): strin
  *  each gated by the exact permission that action actually requires, the
  *  same principle as the leave precedent. */
 async function collectRestrictedDrafts(identity: ResolvedIdentity): Promise<DraftNotification[]> {
-  const recently = new Date(Date.now() - LOOKBACK_MS);
+  const now = new Date();
+  const recently = new Date(now.getTime() - LOOKBACK_MS);
 
   const canApproveLeave = identity.permissions.get("leave")?.has(AccessAction.APPROVE);
   const canApproveSocial = identity.permissions.get("social_media")?.has(AccessAction.APPROVE);
   const canManageSocial = identity.permissions.get("social_media")?.has(AccessAction.MANAGE);
   const canSeeSocial = Boolean(identity.permissions.get("social_media"));
+  const canApproveCampaigns = identity.permissions.get("campaigns")?.has(AccessAction.APPROVE);
+  const employeeId = identity.employee?.id;
 
-  const [pendingLeave, pendingSocialPosts, ownChangesRequested, ownPublished, ownFailed, disconnectedAccounts] =
-    await Promise.all([
+  const [
+    pendingLeave,
+    pendingSocialPosts,
+    ownChangesRequested,
+    ownPublished,
+    ownFailed,
+    disconnectedAccounts,
+    ownOverdueCampaignTasks,
+    pendingCampaignApprovals,
+    assignedCampaignApprovals,
+    pendingCampaignExpenseApprovals,
+  ] = await Promise.all([
       canApproveLeave
         ? prisma.leaveRequest.findMany({
             where: { status: "PENDING" },
@@ -241,6 +314,32 @@ async function collectRestrictedDrafts(identity: ResolvedIdentity): Promise<Draf
             where: { status: { in: ["EXPIRED", "ERROR"] }, lastErrorAt: { gte: recently } },
             take: 20,
             select: { id: true, platform: true, accountName: true },
+          })
+        : Promise.resolve([]),
+      employeeId
+        ? prisma.campaignTask.findMany({
+            where: { assigneeId: employeeId, status: { notIn: ["COMPLETED", "CANCELLED"] }, dueAt: { lt: now } },
+            take: 20,
+            select: { id: true, title: true, campaign: { select: { name: true } } },
+          })
+        : Promise.resolve([]),
+      canApproveCampaigns
+        ? prisma.campaignApproval.findMany({
+            where: { status: "PENDING", assignedApproverId: null },
+            take: 20,
+            select: { id: true, type: true, campaign: { select: { name: true } } },
+          })
+        : Promise.resolve([]),
+      prisma.campaignApproval.findMany({
+        where: { status: "PENDING", assignedApproverId: identity.admin.id },
+        take: 20,
+        select: { id: true, type: true, campaign: { select: { name: true } } },
+      }),
+      canApproveCampaigns
+        ? prisma.campaignExpense.findMany({
+            where: { approvalStatus: "PENDING" },
+            take: 20,
+            select: { id: true, description: true, amount: true, currency: true, campaign: { select: { name: true } } },
           })
         : Promise.resolve([]),
     ]);
@@ -298,6 +397,42 @@ async function collectRestrictedDrafts(identity: ResolvedIdentity): Promise<Draf
       body: "Reconnect this account to resume publishing.",
       module: "social_media",
       entityType: "SocialAccount",
+      entityId: row.id,
+    })),
+    ...ownOverdueCampaignTasks.map((row) => ({
+      sourceKey: `campaign_task_overdue:${row.id}`,
+      type: NotificationType.CAMPAIGN_TASK_OVERDUE,
+      title: `Overdue task — ${row.title}`,
+      body: `Campaign: ${row.campaign.name}`,
+      module: "campaigns",
+      entityType: "CampaignTask",
+      entityId: row.id,
+    })),
+    ...pendingCampaignApprovals.map((row) => ({
+      sourceKey: `campaign_approval_pending:${row.id}`,
+      type: NotificationType.CAMPAIGN_APPROVAL_PENDING,
+      title: `${row.type} approval pending — ${row.campaign.name}`,
+      body: "Awaiting a decision.",
+      module: "campaigns",
+      entityType: "CampaignApproval",
+      entityId: row.id,
+    })),
+    ...assignedCampaignApprovals.map((row) => ({
+      sourceKey: `campaign_approval_pending:${row.id}`,
+      type: NotificationType.CAMPAIGN_APPROVAL_PENDING,
+      title: `${row.type} approval pending — ${row.campaign.name}`,
+      body: "Awaiting your decision.",
+      module: "campaigns",
+      entityType: "CampaignApproval",
+      entityId: row.id,
+    })),
+    ...pendingCampaignExpenseApprovals.map((row) => ({
+      sourceKey: `campaign_expense_approval_pending:${row.id}`,
+      type: NotificationType.CAMPAIGN_EXPENSE_APPROVAL_PENDING,
+      title: `Expense awaiting approval — ${row.campaign.name}`,
+      body: `${row.description} (${row.currency} ${row.amount})`,
+      module: "campaigns",
+      entityType: "CampaignExpense",
       entityId: row.id,
     })),
   ];

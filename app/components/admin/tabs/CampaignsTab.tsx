@@ -10,6 +10,15 @@ import {
   type ComponentType,
 } from "react";
 
+import { CampaignPicker } from "@/app/components/admin/campaigns/CampaignPicker";
+import { CampaignPlanner } from "@/app/components/admin/campaigns/CampaignPlanner";
+import { CampaignContentSection } from "@/app/components/admin/campaigns/CampaignContentSection";
+import { CampaignAudiencesSection } from "@/app/components/admin/campaigns/CampaignAudiencesSection";
+import { CampaignBudgetSection } from "@/app/components/admin/campaigns/CampaignBudgetSection";
+import { CampaignAnalyticsSection } from "@/app/components/admin/campaigns/CampaignAnalyticsSection";
+import { CampaignApprovalsSection } from "@/app/components/admin/campaigns/CampaignApprovalsSection";
+import { CampaignDetailPanel } from "@/app/components/admin/campaigns/CampaignDetailPanel";
+
 import {
   Activity,
   AlertCircle,
@@ -126,13 +135,25 @@ function adminName(admin: CampaignAdmin): string | null {
   return name || admin.email;
 }
 
+type BudgetByCurrency = { currency: string; allocated: number; spent: number; remaining: number };
+
 type CampaignOverview = {
   total: number;
   active: number;
+  draft: number;
   scheduled: number;
+  paused: number;
   completed: number;
+  cancelled: number;
+  archived: number;
   pendingApprovals: number;
   upcomingActivities: number;
+  upcomingDeadlines: number;
+  overdueMilestones: number;
+  outstandingDeliverables: number;
+  completedDeliverables: number;
+  budgetByCurrency: BudgetByCurrency[];
+  overBudgetCampaigns: number;
   campaigns: CampaignSummary[];
 };
 
@@ -192,10 +213,20 @@ const NAVIGATION: {
 const EMPTY_OVERVIEW: CampaignOverview = {
   total: 0,
   active: 0,
+  draft: 0,
   scheduled: 0,
+  paused: 0,
   completed: 0,
+  cancelled: 0,
+  archived: 0,
   pendingApprovals: 0,
   upcomingActivities: 0,
+  upcomingDeadlines: 0,
+  overdueMilestones: 0,
+  outstandingDeliverables: 0,
+  completedDeliverables: 0,
+  budgetByCurrency: [],
+  overBudgetCampaigns: 0,
   campaigns: [],
 };
 
@@ -618,6 +649,30 @@ function OverviewWorkspace({
       icon: CheckCircle2,
       description: "Finished campaigns",
     },
+    {
+      label: "Draft",
+      value: ready ? overview.draft : null,
+      icon: FolderKanban,
+      description: "Not yet submitted",
+    },
+    {
+      label: "Paused",
+      value: ready ? overview.paused : null,
+      icon: Clock3,
+      description: "Temporarily on hold",
+    },
+    {
+      label: "Awaiting approval",
+      value: ready ? overview.pendingApprovals : null,
+      icon: ClipboardCheck,
+      description: "Pending a decision",
+    },
+    {
+      label: "Over budget",
+      value: ready ? overview.overBudgetCampaigns : null,
+      icon: CircleDollarSign,
+      description: "Spending exceeds budget",
+    },
   ];
 
   return (
@@ -711,29 +766,65 @@ function OverviewWorkspace({
             </TextAction>
           }
         >
-          <EmptyState
-            icon={CalendarDays}
-            title="No activities to display"
-            description="Campaign milestones, content deadlines and scheduled activities will appear here."
-          />
+          {ready && (overview.upcomingDeadlines > 0 || overview.overdueMilestones > 0 || overview.outstandingDeliverables > 0) ? (
+            <div className="space-y-2.5 px-5 py-4 text-[11.5px]">
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--text-muted)]">Milestones due within 7 days</span>
+                <span className="font-semibold text-[var(--text)]">{overview.upcomingDeadlines}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--text-muted)]">Overdue milestones</span>
+                <span className={cx("font-semibold", overview.overdueMilestones > 0 ? "text-red-600" : "text-[var(--text)]")}>{overview.overdueMilestones}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--text-muted)]">Outstanding content deliverables</span>
+                <span className="font-semibold text-[var(--text)]">{overview.outstandingDeliverables}</span>
+              </div>
+            </div>
+          ) : (
+            <EmptyState
+              icon={CalendarDays}
+              title="No activities to display"
+              description="Campaign milestones, content deadlines and scheduled activities will appear here."
+            />
+          )}
         </Panel>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel
-          title="Performance"
-          subtitle="Campaign results and key metrics"
+          title="Budget"
+          subtitle="Allocated vs. spent, by currency"
           action={
-            <TextAction onClick={() => onNavigate("analytics")}>
-              Analytics
+            <TextAction onClick={() => onNavigate("budget")}>
+              Budget
             </TextAction>
           }
         >
-          <EmptyState
-            icon={BarChart3}
-            title="No performance data"
-            description="Campaign performance will appear here when verified metrics have been recorded."
-          />
+          {ready && overview.budgetByCurrency.length > 0 ? (
+            <div className="space-y-3 px-5 py-4">
+              {overview.budgetByCurrency.map((row) => (
+                <div key={row.currency} className="text-[11.5px]">
+                  <div className="flex items-center justify-between font-medium text-[var(--text)]">
+                    <span>{row.currency}</span>
+                    <span>{row.spent.toLocaleString("en-GB")} / {row.allocated.toLocaleString("en-GB")}</span>
+                  </div>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--surface-muted)]">
+                    <div
+                      className={cx("h-full rounded-full", row.spent > row.allocated ? "bg-red-500" : "bg-[var(--accent)]")}
+                      style={{ width: `${row.allocated > 0 ? Math.min(100, (row.spent / row.allocated) * 100) : 0}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              icon={CircleDollarSign}
+              title="No budget data"
+              description="Campaign budgets and recorded expenses will appear here."
+            />
+          )}
         </Panel>
 
         <Panel
@@ -745,11 +836,20 @@ function OverviewWorkspace({
             </TextAction>
           }
         >
-          <EmptyState
-            icon={ClipboardCheck}
-            title="No approvals to display"
-            description="Campaign approval requests and review decisions will be managed here."
-          />
+          {ready && overview.pendingApprovals > 0 ? (
+            <div className="px-5 py-4 text-[11.5px]">
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--text-muted)]">Campaigns awaiting approval</span>
+                <span className="font-semibold text-[var(--text)]">{overview.pendingApprovals}</span>
+              </div>
+            </div>
+          ) : (
+            <EmptyState
+              icon={ClipboardCheck}
+              title="No approvals to display"
+              description="Campaign approval requests and review decisions will be managed here."
+            />
+          )}
         </Panel>
       </div>
 
@@ -1085,6 +1185,7 @@ function CampaignsWorkspace({
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<ApiCampaign | null | "new">(null);
   const [dialog, setDialog] = useState<DialogRequest | null>(null);
+  const [managingId, setManagingId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoadState("loading");
@@ -1208,6 +1309,10 @@ function CampaignsWorkspace({
                 <div className="flex shrink-0 items-center gap-2">
                   <StatusBadge status={campaign.status} />
 
+                  <button type="button" onClick={() => setManagingId(campaign.id)} className={cx(BTN_SECONDARY, "h-8 px-2.5 text-[10.5px]", FOCUS)}>
+                    Manage
+                  </button>
+
                   {campaign.status !== "ARCHIVED" && (
                     <IconButton label="Edit campaign" onClick={() => setEditing(campaign)} bordered>
                       <Pencil size={13} />
@@ -1267,6 +1372,49 @@ function CampaignsWorkspace({
       )}
 
       {dialog && <ConfirmDialog request={dialog} onClose={() => setDialog(null)} />}
+
+      {managingId && <CampaignDetailPanel campaignId={managingId} onClose={() => setManagingId(null)} />}
+    </div>
+  );
+}
+
+const SCOPED_SECTIONS: Record<"planner" | "content" | "audiences" | "budget" | "analytics" | "approvals", React.ComponentType<{ campaignId: string }>> = {
+  planner: CampaignPlanner,
+  content: CampaignContentSection,
+  audiences: CampaignAudiencesSection,
+  budget: CampaignBudgetSection,
+  analytics: CampaignAnalyticsSection,
+  approvals: CampaignApprovalsSection,
+};
+
+/** Planner/Content/Audiences/Budget/Analytics/Approvals are all built as
+ *  per-campaign workspaces — every API route is nested under
+ *  /api/admin/campaigns/[id]/... There is no cross-campaign aggregation
+ *  endpoint yet, so each of these tabs asks the caller to pick a campaign
+ *  first, rather than silently showing nothing or fabricating aggregated
+ *  data. See app/components/admin/campaigns/CampaignPicker.tsx. */
+function CampaignScopedWorkspace({ view }: { view: "planner" | "content" | "audiences" | "budget" | "analytics" | "approvals" }) {
+  const meta = WORKSPACE_META[view];
+  const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
+  const Section = SCOPED_SECTIONS[view];
+
+  return (
+    <div className="space-y-6">
+      <SectionHeading eyebrow={meta.eyebrow} title={meta.title} description={meta.description} />
+
+      <CampaignPicker
+        selectedId={selected?.id ?? null}
+        onSelect={(id, name) => setSelected({ id, name })}
+        title={`Choose a campaign`}
+        description={`Select which campaign's ${meta.title.toLowerCase()} to view.`}
+      />
+
+      {selected && (
+        <div>
+          <p className="mb-3 text-[11px] font-medium text-[var(--text-muted)]">Showing {meta.title.toLowerCase()} for “{selected.name}”.</p>
+          <Section campaignId={selected.id} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1600,6 +1748,8 @@ export default function CampaignsTab() {
           />
         ) : view === "campaigns" ? (
           <CampaignsWorkspace notify={notify} notifyError={notifyError} onChanged={() => void refreshOverview()} />
+        ) : view === "planner" || view === "content" || view === "audiences" || view === "budget" || view === "analytics" || view === "approvals" ? (
+          <CampaignScopedWorkspace view={view} />
         ) : (
           <SecondaryWorkspace view={view} />
         )}

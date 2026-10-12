@@ -1,0 +1,26 @@
+import { NextRequest, NextResponse } from "next/server";
+
+import { AuthenticationError, AuthorisationError } from "@/lib/auth/current-admin";
+import { AccessAction, assertCampaignRowAccess, requireCampaignsPermission } from "@/lib/campaigns/permissions";
+import { getCampaignOrThrow } from "@/lib/campaigns/server";
+import { decideCampaignExpense } from "@/lib/campaigns/budget";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string; expenseId: string }> }) {
+  try {
+    const identity = await requireCampaignsPermission(AccessAction.APPROVE);
+    const { id, expenseId } = await params;
+    const campaign = await getCampaignOrThrow(id);
+    assertCampaignRowAccess(identity, AccessAction.APPROVE, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+
+    const expense = await decideCampaignExpense(identity, id, expenseId, "REJECTED");
+    return NextResponse.json({ ok: true, expense });
+  } catch (error) {
+    console.error("[admin/campaigns/:id/expenses/:expenseId/reject]", error);
+    if (error instanceof AuthenticationError) return NextResponse.json({ ok: false, error: error.message }, { status: 401 });
+    if (error instanceof AuthorisationError) return NextResponse.json({ ok: false, error: error.message }, { status: 403 });
+    return NextResponse.json({ ok: false, error: "Something went wrong." }, { status: 500 });
+  }
+}

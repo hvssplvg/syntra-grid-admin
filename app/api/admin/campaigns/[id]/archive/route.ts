@@ -12,7 +12,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     const identity = await requireCampaignsPermission(AccessAction.EDIT);
     const { id } = await params;
     const existing = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: existing.createdById });
+    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: existing.createdById, departmentId: existing.departmentId });
     const campaign = await archiveCampaign(identity, id);
     return NextResponse.json({ ok: true, campaign });
   } catch (error) {
