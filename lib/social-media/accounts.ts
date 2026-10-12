@@ -38,6 +38,13 @@ export type PlatformOAuthConfig = {
   clientIdParam: "client_id" | "client_key";
   scopes: string[];
   flow: OAuthFlow;
+  /** Meta's OAuth dialogs (Facebook Login, and Instagram's own login
+   *  dialog) document their `scope` param as comma-separated, not the
+   *  space-separated list the OAuth2/OIDC spec uses elsewhere in this
+   *  file — defaults to space when omitted. Getting this wrong doesn't
+   *  always surface as an obvious error, so it's made explicit per
+   *  platform rather than assumed. */
+  scopeDelimiter?: "," | " ";
 };
 
 export const PLATFORM_CONFIG: Record<SocialPlatform, PlatformOAuthConfig> = {
@@ -49,22 +56,38 @@ export const PLATFORM_CONFIG: Record<SocialPlatform, PlatformOAuthConfig> = {
     clientSecretEnv: "META_APP_SECRET",
     redirectUriEnv: "META_REDIRECT_URI",
     clientIdParam: "client_id",
+    // pages_show_list / pages_read_engagement / pages_manage_posts are
+    // real, current Meta permissions — but Meta's OAuth dialog rejects a
+    // scope with "Invalid Scopes" if the app doesn't have the Pages API
+    // use case configured in the App Dashboard (App Review > Permissions
+    // and Features / Use Cases), independent of whether the delimiter or
+    // scope name is correct. See the task report for what to check there.
     scopes: ["pages_show_list", "pages_read_engagement", "pages_manage_posts"],
     flow: "standard",
+    scopeDelimiter: ",",
   },
   INSTAGRAM: {
     label: "Instagram",
-    // Instagram publishing goes through the Meta Graph API via a linked
-    // Facebook Page/Business account — same app, same OAuth dialog,
-    // additional scopes.
-    authUrl: "https://www.facebook.com/v21.0/dialog/oauth",
-    tokenUrl: "https://graph.facebook.com/v21.0/oauth/access_token",
-    clientIdEnv: "META_APP_ID",
-    clientSecretEnv: "META_APP_SECRET",
-    redirectUriEnv: "META_REDIRECT_URI",
+    // Instagram API WITH INSTAGRAM LOGIN — a separate product from
+    // Facebook Login, with its own app (separate App ID/Secret from any
+    // Meta/Facebook app), its own OAuth + token endpoints, and
+    // Instagram-native permissions. This never goes through Facebook's
+    // OAuth dialog and never requests a Facebook Page permission, so it
+    // can't trip the Pages-API "Invalid Scopes" error Facebook can.
+    authUrl: "https://www.instagram.com/oauth/authorize",
+    tokenUrl: "https://api.instagram.com/oauth/access_token",
+    clientIdEnv: "INSTAGRAM_APP_ID",
+    clientSecretEnv: "INSTAGRAM_APP_SECRET",
+    redirectUriEnv: "INSTAGRAM_REDIRECT_URI",
     clientIdParam: "client_id",
-    scopes: ["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement"],
+    // Start minimal: only what connecting an account and the (future)
+    // publish adapter actually need. instagram_business_manage_comments /
+    // _messages / _insights are deliberately not requested — nothing
+    // built yet uses them, and each one needs its own Meta App Review
+    // justification. Add one only when a real feature needs it.
+    scopes: ["instagram_business_basic", "instagram_business_content_publish"],
     flow: "standard",
+    scopeDelimiter: ",",
   },
   LINKEDIN: {
     label: "LinkedIn",
@@ -165,7 +188,7 @@ export function createAuthorisationUrl(platform: SocialPlatform, state: string, 
   url.searchParams.set(config.clientIdParam, clientId);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", config.scopes.join(" "));
+  url.searchParams.set("scope", config.scopes.join(config.scopeDelimiter ?? " "));
   url.searchParams.set("state", state);
 
   if (config.flow === "pkce") {
@@ -216,7 +239,39 @@ export async function exchangeAuthorisationCode(
     throw new Error(`${config.label} token exchange failed (${response.status}): ${text.slice(0, 300)}`);
   }
 
-  return response.json() as Promise<PlatformTokenResponse>;
+  const token = (await response.json()) as PlatformTokenResponse;
+
+  // Instagram API with Instagram Login's authorization_code grant only
+  // ever returns a short-lived token (~1 hour) — it must be exchanged
+  // once more for a long-lived one (~60 days) before it's any use for
+  // background publishing. No other platform here needs this extra hop.
+  if (platform === SocialPlatform.INSTAGRAM) {
+    return exchangeInstagramLongLivedToken(token.access_token, clientSecret);
+  }
+
+  return token;
+}
+
+/** Instagram's long-lived-token exchange: a GET keyed by client_secret
+ *  alone (no client_id), distinct from the generic authorization_code
+ *  POST grant above. Returns an access_token with no refresh_token —
+ *  Instagram has no separate refresh token; the same access token is
+ *  refreshed in place later (see refreshInstagramAccessToken). */
+async function exchangeInstagramLongLivedToken(shortLivedToken: string, clientSecret: string): Promise<PlatformTokenResponse> {
+  const url = new URL("https://graph.instagram.com/access_token");
+  url.searchParams.set("grant_type", "ig_exchange_token");
+  url.searchParams.set("client_secret", clientSecret);
+  url.searchParams.set("access_token", shortLivedToken);
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Instagram long-lived token exchange failed (${response.status}): ${text.slice(0, 300)}`);
+  }
+
+  const data = (await response.json()) as { access_token: string; token_type?: string; expires_in: number };
+  return { access_token: data.access_token, expires_in: data.expires_in };
 }
 
 export type FetchedProfile = {
@@ -230,22 +285,41 @@ export type FetchedProfile = {
  * Fetches basic account identity right after a successful token exchange,
  * so a connected account has a real name/handle instead of a blank row.
  * One REST call per platform's own "who am I" endpoint — correct per each
- * platform's OAuth docs for a BASIC profile; this does NOT resolve an
- * Instagram Business Account's own id (that requires walking
- * /me/accounts -> Page -> linked instagram_business_account, a separate
- * follow-up), so Instagram connections record the underlying Facebook
- * identity until that resolution step is added.
+ * platform's OAuth docs for a BASIC profile.
  */
 export async function fetchAccountProfile(platform: SocialPlatform, accessToken: string): Promise<FetchedProfile> {
   switch (platform) {
-    case SocialPlatform.FACEBOOK:
-    case SocialPlatform.INSTAGRAM: {
+    case SocialPlatform.FACEBOOK: {
       const response = await fetch(
         `https://graph.facebook.com/v21.0/me?fields=id,name,picture&access_token=${encodeURIComponent(accessToken)}`,
       );
-      if (!response.ok) throw new Error(`Failed to fetch Meta profile (${response.status}).`);
+      if (!response.ok) throw new Error(`Failed to fetch Facebook profile (${response.status}).`);
       const data = (await response.json()) as { id: string; name: string; picture?: { data?: { url?: string } } };
       return { platformAccountId: data.id, accountName: data.name, username: null, profileImageUrl: data.picture?.data?.url ?? null };
+    }
+
+    case SocialPlatform.INSTAGRAM: {
+      // graph.instagram.com's own "me" node (Instagram API with
+      // Instagram Login) — resolves the authorising Instagram
+      // professional (business/creator) account directly, by its own
+      // Instagram-scoped id. Not the linked-Facebook-identity lookup the
+      // old Facebook-Login-based flow needed.
+      const response = await fetch(
+        `https://graph.instagram.com/v21.0/me?fields=id,username,account_type,profile_picture_url&access_token=${encodeURIComponent(accessToken)}`,
+      );
+      if (!response.ok) throw new Error(`Failed to fetch Instagram profile (${response.status}).`);
+      const data = (await response.json()) as {
+        id: string;
+        username: string;
+        account_type?: string;
+        profile_picture_url?: string;
+      };
+      return {
+        platformAccountId: data.id,
+        accountName: data.username,
+        username: data.username,
+        profileImageUrl: data.profile_picture_url ?? null,
+      };
     }
 
     case SocialPlatform.LINKEDIN: {
@@ -306,7 +380,9 @@ export async function fetchAccountProfile(platform: SocialPlatform, accessToken:
 /** Refresh-before-expiry, mirroring lib/monzo/connection.ts's
  *  getValidAccessToken(). Facebook's long-lived-token exchange uses a
  *  different grant (fb_exchange_token) than the generic refresh_token
- *  grant used here — flagged as a known gap for that one platform. */
+ *  grant used here — flagged as a known gap for that one platform.
+ *  Instagram is handled separately below (refreshInstagramAccessToken)
+ *  since it has no refresh_token concept at all. */
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 export class SocialAccountNotConnectedError extends Error {
@@ -334,6 +410,10 @@ export async function getValidSocialAccessToken(accountId: string): Promise<stri
 
   if (!expiresSoon) {
     return decryptSecret(account.encryptedAccessToken);
+  }
+
+  if (account.platform === SocialPlatform.INSTAGRAM) {
+    return refreshInstagramAccessToken(accountId, decryptSecret(account.encryptedAccessToken));
   }
 
   if (!account.encryptedRefreshToken) {
@@ -379,6 +459,43 @@ export async function getValidSocialAccessToken(accountId: string): Promise<stri
   } catch (error) {
     await markAccountError(accountId, error instanceof Error ? error.message : "Token refresh failed.");
     throw new SocialAccountReauthorisationRequiredError(account.platform);
+  }
+}
+
+/** Instagram's long-lived access token refreshes itself in place — there
+ *  is no separate refresh_token to store or send. Meta requires the
+ *  token be at least 24 hours old before this call will succeed; a
+ *  token refreshed too soon (or already expired past the point Meta
+ *  will renew it) fails here and is treated the same as any other
+ *  refresh failure — reconnect required, never silently retried. */
+async function refreshInstagramAccessToken(accountId: string, currentAccessToken: string): Promise<string> {
+  try {
+    const url = new URL("https://graph.instagram.com/refresh_access_token");
+    url.searchParams.set("grant_type", "ig_refresh_token");
+    url.searchParams.set("access_token", currentAccessToken);
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(`Instagram token refresh failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as { access_token: string; token_type?: string; expires_in: number };
+
+    await prisma.socialAccount.update({
+      where: { id: accountId },
+      data: {
+        encryptedAccessToken: encryptSecret(data.access_token),
+        tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
+        lastError: null,
+        lastErrorAt: null,
+      },
+    });
+
+    return data.access_token;
+  } catch (error) {
+    await markAccountError(accountId, error instanceof Error ? error.message : "Instagram token refresh failed.");
+    throw new SocialAccountReauthorisationRequiredError(SocialPlatform.INSTAGRAM);
   }
 }
 
