@@ -47,6 +47,7 @@ import {
   Send,
   Share2,
   ShieldCheck,
+  Sparkles,
   ThumbsUp,
   Trash2,
   Undo2,
@@ -908,6 +909,47 @@ async function uploadMediaAsset(blob: Blob, filename: string): Promise<ApiAsset>
 async function fetchMediaAssets(): Promise<ApiAsset[]> {
   const payload = await apiRequest<{ assets: ApiAsset[] }>("/media?pageSize=60");
   return payload.assets;
+}
+
+type ApiBrandAssetOption = {
+  id: string;
+  name: string;
+  type: "IMAGE" | "VIDEO" | "SVG" | "DOCUMENT" | "PRESENTATION" | "DESIGN_FILE" | "FONT" | "OTHER";
+  url: string;
+  usageRights: "INTERNAL_ONLY" | "CLIENT_APPROVED" | "PUBLIC" | "UNRESTRICTED";
+  brandKit: { id: string; name: string } | null;
+};
+
+/** A separate base — Brand Assets is its own module/API, not Social
+ *  Media's. This only ever reads (VIEW), so a plain fetch is enough;
+ *  the heavier apiRequest helper above is scoped to API_BASE. */
+async function fetchApprovedBrandAssetsApi(): Promise<ApiBrandAssetOption[]> {
+  const response = await fetch("/api/admin/brand-assets/assets?status=ACTIVE&pageSize=60", {
+    credentials: "include",
+    cache: "no-store",
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload?.ok) return [];
+  const assets: ApiBrandAssetOption[] = payload.assets ?? [];
+  // Only image/video brand assets are postable — Instagram/LinkedIn's
+  // real publish APIs don't accept SVGs, documents or fonts as media.
+  // Internal-only assets are excluded too — the server enforces this at
+  // reuse time regardless, but hiding them here avoids a confusing pick-
+  // then-reject round trip. See reuseBrandAssetAsSocialMediaAsset.
+  return assets.filter(
+    (asset) => (asset.type === "IMAGE" || asset.type === "VIDEO") && asset.usageRights !== "INTERNAL_ONLY",
+  );
+}
+
+/** Reuses an approved Brand Asset's existing Cloudinary file as a real
+ *  SocialMediaAsset — never re-uploads it. See
+ *  lib/social-media/media.ts#reuseBrandAssetAsSocialMediaAsset. */
+async function reuseBrandAssetApi(brandAssetId: string): Promise<ApiAsset> {
+  const payload = await apiRequest<{ asset: ApiAsset }>("/media/from-brand-asset", {
+    method: "POST",
+    body: JSON.stringify({ brandAssetId }),
+  });
+  return payload.asset;
 }
 
 type ApiCampaign = { id: string; name: string; status: string; _count?: { posts: number } };
@@ -3550,6 +3592,11 @@ function PostComposer({
   const [libraryAssets, setLibraryAssets] = useState<ApiAsset[] | null>(null);
   const [libraryLoading, setLibraryLoading] = useState(false);
 
+  const [brandAssetsOpen, setBrandAssetsOpen] = useState(false);
+  const [brandAssetOptions, setBrandAssetOptions] = useState<ApiBrandAssetOption[] | null>(null);
+  const [brandAssetsLoading, setBrandAssetsLoading] = useState(false);
+  const [pickingBrandAssetId, setPickingBrandAssetId] = useState<string | null>(null);
+
   const handleFile = async (file: File | null | undefined) => {
     if (!file) return;
     setImageBusy(true);
@@ -3601,6 +3648,33 @@ function PostComposer({
       };
     });
     setError(null);
+  };
+
+  const toggleBrandAssets = () => {
+    setBrandAssetsOpen((open) => !open);
+    if (!brandAssetOptions && !brandAssetsLoading) {
+      setBrandAssetsLoading(true);
+      fetchApprovedBrandAssetsApi()
+        .then(setBrandAssetOptions)
+        .catch(() => setBrandAssetOptions([]))
+        .finally(() => setBrandAssetsLoading(false));
+    }
+  };
+
+  // Reuses the brand asset's existing hosted file (never re-uploads it),
+  // then treats the result exactly like any other library pick.
+  const pickBrandAsset = async (option: ApiBrandAssetOption) => {
+    if (pickingBrandAssetId) return;
+    setPickingBrandAssetId(option.id);
+    try {
+      const asset = await reuseBrandAssetApi(option.id);
+      setLibraryAssets((current) => (current ? [asset, ...current.filter((item) => item.id !== asset.id)] : [asset]));
+      pickFromLibrary(asset);
+    } catch (problem) {
+      showError({ field: "media", message: errorMessage(problem, "That brand asset couldn't be attached.") });
+    } finally {
+      setPickingBrandAssetId(null);
+    }
   };
 
   const dropProps: DropProps = {
@@ -4409,6 +4483,15 @@ function PostComposer({
                       <LayoutGrid size={12} />
                       Library
                     </button>
+                    <button
+                      type="button"
+                      onClick={toggleBrandAssets}
+                      aria-expanded={brandAssetsOpen}
+                      className={cx(BTN_SECONDARY, FOCUS, BTN_COMPACT, brandAssetsOpen && "bg-[var(--surface-muted)]")}
+                    >
+                      <Sparkles size={12} />
+                      Brand Assets
+                    </button>
                     {form.image && (
                       <IconButton label="Remove media" onClick={removeMedia} size="sm">
                         <Trash2 size={13} />
@@ -4471,6 +4554,50 @@ function PostComposer({
                       ) : (
                         <p className="text-[11px] text-[var(--text-muted)]">
                           Nothing uploaded yet. Upload a file and it&apos;ll show up here next time.
+                        </p>
+                      )}
+                    </div>
+                  </Collapse>
+
+                  <Collapse open={brandAssetsOpen}>
+                    <div className="mt-2 rounded-xl border border-[var(--line)] p-2.5">
+                      {brandAssetsLoading ? (
+                        <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-8">
+                          {Array.from({ length: 8 }).map((_, index) => (
+                            <Skeleton key={index} className="aspect-square w-full rounded-lg" />
+                          ))}
+                        </div>
+                      ) : brandAssetOptions && brandAssetOptions.length > 0 ? (
+                        <>
+                          <p className="mb-2 text-[10.5px] text-[var(--text-subtle)]">
+                            Approved, active brand assets — picking one reuses its existing file, never re-uploads it.
+                          </p>
+                          <div className="sg-scroll grid max-h-[148px] grid-cols-6 gap-1.5 overflow-y-auto overscroll-contain sm:grid-cols-8">
+                            {brandAssetOptions.map((option) => (
+                              <button
+                                key={option.id}
+                                type="button"
+                                onClick={() => void pickBrandAsset(option)}
+                                disabled={pickingBrandAssetId === option.id}
+                                title={option.brandKit ? `${option.name} · ${option.brandKit.name}` : option.name}
+                                className={cx(
+                                  "relative aspect-square overflow-hidden rounded-lg border-2 border-transparent transition-[border-color,transform] duration-150 hover:border-[var(--line)] active:scale-[0.96]",
+                                  FOCUS_INSET,
+                                )}
+                              >
+                                <MediaThumb src={option.url} type={option.type === "VIDEO" ? "VIDEO" : "IMAGE"} className="h-full w-full" />
+                                {pickingBrandAssetId === option.id && (
+                                  <span className="absolute inset-0 flex items-center justify-center bg-black/40">
+                                    <Loader2 size={14} className="animate-spin text-white" />
+                                  </span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-[11px] text-[var(--text-muted)]">
+                          No approved brand assets yet — add some from the Brand Assets module.
                         </p>
                       )}
                     </div>

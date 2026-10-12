@@ -98,6 +98,19 @@ model AdminUser {
   socialMediaAssetsUploaded SocialMediaAsset[]    @relation("SocialMediaAssetUploadedBy")
   socialPostActivities     SocialPostActivity[]   @relation("SocialPostActivityActor")
 
+  // Brand assets
+  brandKitsCreated            BrandKit[]               @relation("BrandKitCreatedBy")
+  brandAssetsUploaded         BrandAsset[]             @relation("BrandAssetUploadedBy")
+  brandAssetVersionsCreated   BrandAssetVersion[]      @relation("BrandAssetVersionCreatedBy")
+  brandGuidelinesUpdated      BrandGuideline[]         @relation("BrandGuidelineUpdatedBy")
+  brandGuidelineVersions      BrandGuidelineVersion[]  @relation("BrandGuidelineVersionCreatedBy")
+  brandTemplatesCreated       BrandTemplate[]          @relation("BrandTemplateCreatedBy")
+  brandRequestsRequested      BrandRequest[]           @relation("BrandRequestRequestedBy")
+  brandRequestsAssigned       BrandRequest[]           @relation("BrandRequestAssignedTo")
+  brandRequestAttachments     BrandRequestAttachment[] @relation("BrandRequestAttachmentUploadedBy")
+  brandRequestComments        BrandRequestComment[]    @relation("BrandRequestCommentAuthor")
+  brandRequestActivities      BrandRequestActivity[]   @relation("BrandRequestActivityActor")
+
   @@index([departmentId])
 }
 
@@ -380,6 +393,9 @@ model Client {
   // Workload and timesheets
   workloadAllocations WorkloadAllocation[]
   timesheetEntries    TimesheetEntry[]
+
+  // Brand assets
+  brandKits BrandKit[]
 
   @@index([status])
   @@index([priority])
@@ -3136,13 +3152,21 @@ model SocialMediaAsset {
 
   uploadedById String?
 
+  // Set when this row was created by picking an approved Brand Asset in
+  // the composer's media picker, rather than a fresh upload — the same
+  // Cloudinary file is reused (never re-uploaded), this just traces
+  // which brand asset it came from. Null for an ordinary direct upload.
+  brandAssetId String?
+
   createdAt DateTime @default(now())
 
   uploadedBy AdminUser? @relation("SocialMediaAssetUploadedBy", fields: [uploadedById], references: [id])
+  brandAsset BrandAsset? @relation(fields: [brandAssetId], references: [id])
 
   postAssets SocialPostAsset[]
 
   @@index([type])
+  @@index([brandAssetId])
 }
 
 model SocialPostAsset {
@@ -3210,4 +3234,395 @@ model SocialPostMetric {
   postPlatform SocialPostPlatform @relation(fields: [postPlatformId], references: [id], onDelete: Cascade)
 
   @@index([postPlatformId, capturedAt])
+}
+
+/* ============================================================================
+   BRAND ASSETS MANAGEMENT
+
+   Mirrors the Social Media module's shape exactly: real Cloudinary-hosted
+   files (never binary in Postgres), the existing fine-grained permission
+   system via a new "brand_assets" module, real activity logging. A
+   BrandKit groups a brand's assets/templates/guideline/requests together —
+   clientId is optional so this covers Syntra Grid's own brand as well as
+   client brands, internal products or campaign sub-brands (clientId null
+   for anything that isn't a specific client's own brand).
+============================================================================ */
+
+enum BrandAssetType {
+  IMAGE
+  SVG
+  VIDEO
+  DOCUMENT
+  PRESENTATION
+  DESIGN_FILE
+  FONT
+  OTHER
+}
+
+enum BrandAssetStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum BrandAssetUsageRights {
+  INTERNAL_ONLY
+  CLIENT_APPROVED
+  PUBLIC
+  UNRESTRICTED
+}
+
+enum BrandKitStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum BrandGuidelineStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum BrandTemplateCategory {
+  INSTAGRAM_POST
+  INSTAGRAM_STORY
+  LINKEDIN_GRAPHIC
+  SOCIAL_COVER
+  MARKETING_BANNER
+  PRESENTATION
+  BUSINESS_CARD
+  LETTERHEAD
+  PROPOSAL
+  EMAIL_SIGNATURE
+  OTHER
+}
+
+enum BrandTemplateStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum BrandRequestType {
+  LOGO
+  SOCIAL_GRAPHIC
+  MARKETING_MATERIAL
+  PRESENTATION
+  GUIDELINE_CHANGE
+  OTHER
+}
+
+enum BrandRequestPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum BrandRequestStatus {
+  SUBMITTED
+  IN_PROGRESS
+  READY_FOR_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum BrandRequestActivityType {
+  CREATED
+  ASSIGNED
+  STATUS_CHANGED
+  COMMENTED
+  ATTACHMENT_ADDED
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+  COMPLETED
+  CANCELLED
+}
+
+model BrandKit {
+  id String @id @default(cuid())
+
+  name        String
+  slug        String  @unique
+  description String?
+
+  status BrandKitStatus @default(ACTIVE)
+
+  clientId String?
+
+  logoAssetId String? @unique
+
+  primaryColors   Json? // string[] of hex values
+  secondaryColors Json? // string[] of hex values
+  typography      Json? // free-form { heading, body, accent, notes }
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client    Client?     @relation(fields: [clientId], references: [id])
+  logoAsset BrandAsset? @relation("BrandKitLogo", fields: [logoAssetId], references: [id])
+  createdBy AdminUser?  @relation("BrandKitCreatedBy", fields: [createdById], references: [id])
+
+  assets     BrandAsset[]     @relation("BrandKitAssets")
+  templates  BrandTemplate[]
+  guideline  BrandGuideline?
+  requests   BrandRequest[]
+
+  @@index([status])
+  @@index([clientId])
+}
+
+model BrandAsset {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  type        BrandAssetType
+  category    String?
+  tags        String[] @default([])
+
+  url                String
+  cloudinaryPublicId String
+  mimeType           String
+  fileSizeBytes      Int
+
+  width           Int?
+  height          Int?
+  durationSeconds Float?
+
+  usageRights BrandAssetUsageRights @default(INTERNAL_ONLY)
+  status      BrandAssetStatus      @default(ACTIVE)
+
+  brandKitId String?
+
+  uploadedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  brandKit   BrandKit?  @relation("BrandKitAssets", fields: [brandKitId], references: [id])
+  uploadedBy AdminUser? @relation("BrandAssetUploadedBy", fields: [uploadedById], references: [id])
+
+  logoForKit        BrandKit?           @relation("BrandKitLogo")
+  versions          BrandAssetVersion[]
+  socialMediaAssets SocialMediaAsset[]
+
+  @@index([type])
+  @@index([status])
+  @@index([brandKitId])
+  @@index([category])
+}
+
+/** A simple append-only version history: each replace/edit that matters
+ *  snapshots the prior file before the asset row is updated in place, so
+ *  "restore" just copies a past version's Cloudinary reference back onto
+ *  the live asset — no separate restore semantics to maintain. */
+model BrandAssetVersion {
+  id String @id @default(cuid())
+
+  assetId       String
+  versionNumber Int
+
+  url                String
+  cloudinaryPublicId String
+  fileSizeBytes      Int
+  note               String?
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+
+  asset     BrandAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdBy AdminUser? @relation("BrandAssetVersionCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([assetId, versionNumber])
+  @@index([assetId])
+}
+
+/**
+ * One guideline document per brand kit. The "quick facts" (colours,
+ * typography) live on BrandKit itself since templates/assets reference
+ * them directly; this holds the longer-form narrative content plus
+ * publish/draft lifecycle and version history.
+ */
+model BrandGuideline {
+  id String @id @default(cuid())
+
+  brandKitId String @unique
+
+  tagline     String?
+  mission     String?
+  vision      String?
+  values      String[] @default([])
+  personality String?
+  toneOfVoice String?
+
+  logoSpacingNotes    String?
+  minLogoSizeNotes    String?
+  approvedUsageNotes  String?
+  incorrectUsageNotes String?
+  fontUsageNotes      String?
+
+  socialMediaGuidelines    String?
+  photographyGuidelines   String?
+  videoGuidelines         String?
+  marketingStandards      String?
+  emailSignatureGuidelines String?
+
+  status BrandGuidelineStatus @default(DRAFT)
+
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  brandKit  BrandKit   @relation(fields: [brandKitId], references: [id], onDelete: Cascade)
+  updatedBy AdminUser? @relation("BrandGuidelineUpdatedBy", fields: [updatedById], references: [id])
+
+  versions BrandGuidelineVersion[]
+}
+
+model BrandGuidelineVersion {
+  id String @id @default(cuid())
+
+  guidelineId   String
+  versionNumber Int
+
+  snapshot Json
+  note     String?
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+
+  guideline BrandGuideline @relation(fields: [guidelineId], references: [id], onDelete: Cascade)
+  createdBy AdminUser?     @relation("BrandGuidelineVersionCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([guidelineId, versionNumber])
+  @@index([guidelineId])
+}
+
+model BrandTemplate {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  category    BrandTemplateCategory
+  tags        String[] @default([])
+
+  url                String
+  cloudinaryPublicId String
+  mimeType           String
+  fileSizeBytes      Int
+  width              Int?
+  height             Int?
+
+  status BrandTemplateStatus @default(ACTIVE)
+
+  brandKitId String?
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  brandKit  BrandKit?  @relation(fields: [brandKitId], references: [id])
+  createdBy AdminUser? @relation("BrandTemplateCreatedBy", fields: [createdById], references: [id])
+
+  @@index([category])
+  @@index([status])
+  @@index([brandKitId])
+}
+
+model BrandRequest {
+  id String @id @default(cuid())
+
+  title       String
+  description String
+  type        BrandRequestType
+  priority    BrandRequestPriority @default(MEDIUM)
+  status      BrandRequestStatus   @default(SUBMITTED)
+
+  brandKitId String?
+  dueDate    DateTime?
+
+  requestedById String?
+  assignedToId  String?
+
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  brandKit    BrandKit?  @relation(fields: [brandKitId], references: [id])
+  requestedBy AdminUser? @relation("BrandRequestRequestedBy", fields: [requestedById], references: [id])
+  assignedTo  AdminUser? @relation("BrandRequestAssignedTo", fields: [assignedToId], references: [id])
+
+  attachments BrandRequestAttachment[]
+  comments    BrandRequestComment[]
+  activities  BrandRequestActivity[]
+
+  @@index([status])
+  @@index([assignedToId])
+  @@index([requestedById])
+  @@index([brandKitId])
+}
+
+model BrandRequestAttachment {
+  id String @id @default(cuid())
+
+  requestId String
+
+  name               String
+  url                String
+  cloudinaryPublicId String
+  mimeType           String
+  fileSizeBytes      Int
+
+  uploadedById String?
+
+  createdAt DateTime @default(now())
+
+  request    BrandRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  uploadedBy AdminUser?   @relation("BrandRequestAttachmentUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([requestId])
+}
+
+model BrandRequestComment {
+  id String @id @default(cuid())
+
+  requestId String
+  authorId  String?
+  body      String
+
+  createdAt DateTime @default(now())
+
+  request BrandRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  author  AdminUser?   @relation("BrandRequestCommentAuthor", fields: [authorId], references: [id])
+
+  @@index([requestId])
+}
+
+model BrandRequestActivity {
+  id String @id @default(cuid())
+
+  requestId String
+  actorId   String?
+
+  type        BrandRequestActivityType
+  description String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  request BrandRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actor   AdminUser?   @relation("BrandRequestActivityActor", fields: [actorId], references: [id])
+
+  @@index([requestId])
+  @@index([createdAt])
 }

@@ -41,7 +41,7 @@ export type ServerUploadResult = {
 
 export function uploadBufferToCloudinary(
   buffer: Buffer,
-  options: { folder: string; publicId?: string; resourceType?: 'image' | 'video' },
+  options: { folder: string; publicId?: string; resourceType?: 'image' | 'video' | 'raw' },
 ): Promise<ServerUploadResult> {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
@@ -64,7 +64,7 @@ export function uploadBufferToCloudinary(
   });
 }
 
-export async function destroyCloudinaryAsset(publicId: string, resourceType: 'image' | 'video' = 'image') {
+export async function destroyCloudinaryAsset(publicId: string, resourceType: 'image' | 'video' | 'raw' = 'image') {
   await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
 }
 
@@ -76,6 +76,13 @@ export const LOGO_FOLDER = 'syntragrid/clients/logos';
 // wallpaper is uploaded with publicId === their adminUserId, so a new
 // upload overwrites the previous one instead of accumulating orphans.
 export const OVERVIEW_WALLPAPER_FOLDER = 'syntragrid/overview/wallpapers';
+
+// Folders for the Brand Assets module — kept separate from the Social
+// Media library's own folder even though both go through this same
+// upload helper, so the two collections never collide in Cloudinary.
+export const BRAND_ASSETS_FOLDER = 'syntragrid/brand-assets';
+export const BRAND_TEMPLATES_FOLDER = 'syntragrid/brand-templates';
+export const BRAND_REQUEST_ATTACHMENTS_FOLDER = 'syntragrid/brand-request-attachments';
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

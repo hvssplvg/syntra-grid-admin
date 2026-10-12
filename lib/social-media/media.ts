@@ -95,6 +95,52 @@ export async function uploadSocialMediaAsset(params: {
   return { id: asset.id, url: asset.url, type: asset.type };
 }
 
+/**
+ * Social Media Composer → Brand Assets integration: reuses an existing,
+ * already-hosted Brand Asset's Cloudinary file by reference — never
+ * re-uploads it — so a SocialMediaAsset row exists for it and the
+ * existing publish pipeline (SocialPostAsset -> SocialMediaAsset ->
+ * adapters) needs no changes at all. Only IMAGE/VIDEO brand assets can
+ * be reused this way; Instagram/LinkedIn's real publish APIs don't take
+ * SVGs, documents, fonts etc. as post media.
+ */
+export async function reuseBrandAssetAsSocialMediaAsset(brandAssetId: string, uploadedById: string) {
+  const brandAsset = await prisma.brandAsset.findUnique({ where: { id: brandAssetId } });
+
+  if (!brandAsset || brandAsset.status !== "ACTIVE") {
+    throw new AuthorisationError("This brand asset is not available to attach.");
+  }
+
+  if (brandAsset.type !== "IMAGE" && brandAsset.type !== "VIDEO") {
+    throw new AuthorisationError("Only image or video brand assets can be attached to a social post.");
+  }
+
+  if (brandAsset.usageRights === "INTERNAL_ONLY") {
+    throw new AuthorisationError("This asset is marked internal-only and cannot be published to social media.");
+  }
+
+  const existing = await prisma.socialMediaAsset.findFirst({ where: { brandAssetId } });
+  if (existing) {
+    return existing;
+  }
+
+  const asset = await prisma.socialMediaAsset.create({
+    data: {
+      url: brandAsset.url,
+      cloudinaryPublicId: brandAsset.cloudinaryPublicId,
+      type: brandAsset.type === "VIDEO" ? SocialAssetType.VIDEO : SocialAssetType.IMAGE,
+      fileSizeBytes: brandAsset.fileSizeBytes,
+      width: brandAsset.width,
+      height: brandAsset.height,
+      durationSeconds: brandAsset.durationSeconds,
+      uploadedById,
+      brandAssetId,
+    },
+  });
+
+  return asset;
+}
+
 export async function listSocialMediaAssets(page: number, pageSize: number, type?: SocialAssetType | null) {
   const where = type ? { type } : undefined;
 
