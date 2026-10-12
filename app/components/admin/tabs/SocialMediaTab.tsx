@@ -45,11 +45,13 @@ import {
   X,
 } from "lucide-react";
 
+import { SocialPlatformIcon, type SocialPlatformId } from "../common/SocialPlatformIcon";
+
 /* =============================================================================
    TYPES
 ============================================================================= */
 
-type SocialPlatform = "INSTAGRAM" | "FACEBOOK" | "LINKEDIN" | "X" | "TIKTOK" | "YOUTUBE";
+type SocialPlatform = SocialPlatformId;
 
 /** The real backend status (SocialPostStatus in prisma/schema.prisma). */
 type RealPostStatus =
@@ -150,7 +152,6 @@ type PlatformDefinition = {
   id: SocialPlatform;
   name: string;
   description: string;
-  mark: string;
   color: string;
   limit: number;
 };
@@ -167,7 +168,6 @@ const PLATFORMS: PlatformDefinition[] = [
     id: "INSTAGRAM",
     name: "Instagram",
     description: "Feed posts, reels and stories",
-    mark: "IG",
     color: "#D6246E",
     limit: 2200,
   },
@@ -175,7 +175,6 @@ const PLATFORMS: PlatformDefinition[] = [
     id: "FACEBOOK",
     name: "Facebook",
     description: "Page posts and updates",
-    mark: "FB",
     color: "#1877F2",
     limit: 63206,
   },
@@ -183,7 +182,6 @@ const PLATFORMS: PlatformDefinition[] = [
     id: "LINKEDIN",
     name: "LinkedIn",
     description: "Company page updates",
-    mark: "in",
     color: "#0A66C2",
     limit: 3000,
   },
@@ -191,7 +189,6 @@ const PLATFORMS: PlatformDefinition[] = [
     id: "X",
     name: "X",
     description: "Short updates and replies",
-    mark: "𝕏",
     color: "var(--text)",
     limit: 280,
   },
@@ -199,15 +196,17 @@ const PLATFORMS: PlatformDefinition[] = [
     id: "TIKTOK",
     name: "TikTok",
     description: "Short-form video",
-    mark: "TT",
-    color: "#000000",
+    // TikTok's mark is conventionally monochrome and theme-adaptive
+    // (black on light backgrounds, white on dark) rather than a fixed
+    // hex — var(--text) keeps it legible in both themes, matching how
+    // X's glyph already works below.
+    color: "var(--text)",
     limit: 2200,
   },
   {
     id: "YOUTUBE",
     name: "YouTube",
     description: "Video uploads and shorts",
-    mark: "YT",
     color: "#FF0000",
     limit: 5000,
   },
@@ -3568,7 +3567,7 @@ function CharMeter({ platform, count }: { platform: PlatformDefinition; count: n
 
   return (
     <span className="inline-flex items-center gap-2 text-[10.5px] tabular-nums text-[var(--text-muted)]">
-      <PlatformMark platform={platform.id} size="xs" />
+      <PlatformMark platform={platform.id} size="xs" label={platform.name} />
       <span className="h-1 w-14 overflow-hidden rounded-full bg-[var(--surface-muted)]">
         <span
           className="block h-full rounded-full transition-[width] duration-300"
@@ -3823,36 +3822,47 @@ function PreviewAvatar({ square, ring }: { square?: boolean; ring?: boolean }) {
 ============================================================================= */
 
 const MARK_SIZES = {
-  xs: "h-4 w-4 rounded-[5px] text-[8px]",
-  sm: "h-5 w-5 rounded-md text-[9px]",
-  md: "h-7 w-7 rounded-[9px] text-[11px]",
-  lg: "h-11 w-11 rounded-[14px] text-[16px]",
+  xs: "h-4 w-4 rounded-[5px]",
+  sm: "h-5 w-5 rounded-md",
+  md: "h-7 w-7 rounded-[9px]",
+  lg: "h-11 w-11 rounded-[14px]",
+} as const;
+
+const MARK_ICON_PIXELS = {
+  xs: 9,
+  sm: 11,
+  md: 15,
+  lg: 22,
 } as const;
 
 function PlatformMark({
   platform,
   size = "sm",
   ring,
+  label,
 }: {
   platform: SocialPlatform;
   size?: keyof typeof MARK_SIZES;
   ring?: boolean;
+  /** Pass the platform's name when this mark is the only thing on screen
+   *  identifying the platform (no adjacent visible or sr-only text) —
+   *  otherwise leave unset so it stays decorative/aria-hidden. */
+  label?: string;
 }) {
   const definition = platformDefinition(platform);
   return (
     <span
       className={cx(
-        "inline-flex shrink-0 items-center justify-center font-bold leading-none",
+        "inline-flex shrink-0 items-center justify-center leading-none",
         MARK_SIZES[size],
         ring && "ring-2 ring-[var(--surface)]",
       )}
       style={{
         background: mix(definition.color, 13, "var(--surface)"),
-        color: definition.color,
       }}
-      aria-hidden
+      aria-hidden={label ? undefined : true}
     >
-      {definition.mark}
+      <SocialPlatformIcon platform={platform} size={MARK_ICON_PIXELS[size]} color={definition.color} label={label} />
     </span>
   );
 }
