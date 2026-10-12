@@ -12,10 +12,14 @@ import {
 
 import {
   Activity,
+  AlertCircle,
+  Archive,
+  ArchiveRestore,
   ArrowRight,
   BarChart3,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   CircleDollarSign,
   ClipboardCheck,
@@ -25,10 +29,13 @@ import {
   Layers3,
   Loader2,
   Megaphone,
+  Pencil,
   Plus,
   RefreshCw,
+  Search,
   Target,
   Users,
+  X,
 } from "lucide-react";
 
 /* ============================================================================
@@ -72,6 +79,52 @@ type CampaignSummary = {
   endDate: string | null;
   updatedAt: string;
 };
+
+type CampaignAdmin = { id: string; firstName: string | null; lastName: string | null; email: string } | null;
+
+type ApiCampaign = {
+  id: string;
+  name: string;
+  description: string | null;
+  status: CampaignStatus;
+  startDate: string | null;
+  endDate: string | null;
+  updatedAt: string;
+  createdAt: string;
+  createdBy: CampaignAdmin;
+  updatedBy: CampaignAdmin;
+};
+
+type Pagination = { page: number; pageSize: number; total: number; pages: number; hasPrevious: boolean; hasNext: boolean };
+
+type Notice = { id: number; message: string; tone: "success" | "error" };
+
+type DialogRequest = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  tone?: "danger";
+  onConfirm: () => Promise<void>;
+};
+
+const CAMPAIGN_STATUSES: CampaignStatus[] = [
+  "DRAFT",
+  "PLANNING",
+  "PENDING_APPROVAL",
+  "APPROVED",
+  "SCHEDULED",
+  "ACTIVE",
+  "PAUSED",
+  "COMPLETED",
+  "CANCELLED",
+  "ARCHIVED",
+];
+
+function adminName(admin: CampaignAdmin): string | null {
+  if (!admin) return null;
+  const name = [admin.firstName, admin.lastName].filter(Boolean).join(" ").trim();
+  return name || admin.email;
+}
 
 type CampaignOverview = {
   total: number;
@@ -156,6 +209,113 @@ function cx(
   return values.filter(Boolean).join(" ");
 }
 
+const FOCUS =
+  "outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]";
+const BTN_PRIMARY =
+  "inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[11.5px] font-semibold text-white transition-[filter,transform,opacity] duration-150 hover:brightness-110 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
+const BTN_SECONDARY =
+  "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] px-4 text-[11.5px] font-semibold text-[var(--text)] transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--surface-muted)] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
+const BTN_DANGER =
+  "inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 text-[11.5px] font-semibold text-white transition-[background-color,transform,opacity] duration-150 hover:bg-red-700 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
+const INPUT =
+  "w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] text-[12px] text-[var(--text)] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[var(--text-subtle)] focus:border-[var(--accent)] focus:ring-4 focus:ring-[color-mix(in_srgb,var(--accent)_14%,transparent)]";
+const LABEL = "mb-1.5 block text-[11px] font-semibold text-[var(--text)]";
+
+function IconButton({
+  label,
+  onClick,
+  bordered,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  bordered?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={cx(
+        "inline-flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-muted)] transition hover:text-[var(--text)]",
+        bordered ? "border border-[var(--line)] bg-[var(--surface)] hover:bg-[var(--surface-muted)]" : "hover:bg-[var(--surface-muted)]",
+        FOCUS,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Toast({ notice, onDismiss }: { notice: Notice; onDismiss: () => void }) {
+  useEffect(() => {
+    const timeout = window.setTimeout(onDismiss, 4000);
+    return () => window.clearTimeout(timeout);
+  }, [onDismiss]);
+
+  return (
+    <div
+      role="status"
+      className={cx(
+        "fixed bottom-5 left-1/2 z-[200] flex -translate-x-1/2 items-center gap-2.5 rounded-xl border px-4 py-2.5 text-[12px] font-medium shadow-lg",
+        notice.tone === "success"
+          ? "border-emerald-500/25 bg-[var(--surface)] text-[var(--text)]"
+          : "border-red-500/25 bg-[var(--surface)] text-[var(--text)]",
+      )}
+    >
+      {notice.tone === "success" ? <CheckCircle2 size={15} className="text-emerald-600" /> : <AlertCircle size={15} className="text-red-600" />}
+      {notice.message}
+      <button type="button" onClick={onDismiss} className="ml-1 text-[var(--text-subtle)] hover:text-[var(--text)]">
+        <X size={13} />
+      </button>
+    </div>
+  );
+}
+
+function ConfirmDialog({ request, onClose }: { request: DialogRequest; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      await request.onConfirm();
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      role="presentation"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      className="sg-fade fixed inset-0 z-[150] flex items-center justify-center bg-black/45 p-4"
+    >
+      <div role="dialog" aria-modal="true" className="w-full max-w-[420px] rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-2xl">
+        <h2 className="text-[14px] font-semibold text-[var(--text)]">{request.title}</h2>
+        <p className="mt-1.5 text-[12px] leading-5 text-[var(--text-muted)]">{request.description}</p>
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button type="button" onClick={onClose} className={cx(BTN_SECONDARY, FOCUS)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void confirm()}
+            disabled={busy}
+            className={cx(request.tone === "danger" ? BTN_DANGER : BTN_PRIMARY, FOCUS)}
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : null}
+            {request.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function formatDate(value: string | null) {
   if (!value) return "Not scheduled";
 
@@ -177,6 +337,76 @@ function statusLabel(status: CampaignStatus) {
     .toLowerCase()
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/* ============================================================================
+   API
+
+   A separate base from Social Media/Brand Assets — Campaigns is its own
+   module with its own permission scope (lib/campaigns/permissions.ts).
+============================================================================ */
+
+const CAMPAIGNS_API_BASE = "/api/admin/campaigns";
+
+class ApiError extends Error {}
+
+async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${CAMPAIGNS_API_BASE}${path}`, {
+    credentials: "include",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok || !payload?.ok) {
+    throw new ApiError(payload?.error ?? "Something went wrong.");
+  }
+
+  return payload as T;
+}
+
+async function fetchCampaignsApi(filters: {
+  status: CampaignStatus | "" | null;
+  search: string;
+  page: number;
+}): Promise<{ campaigns: ApiCampaign[]; pagination: Pagination }> {
+  const params = new URLSearchParams();
+  if (filters.status) params.set("status", filters.status);
+  if (filters.search.trim()) params.set("search", filters.search.trim());
+  params.set("page", String(filters.page));
+  params.set("pageSize", "20");
+
+  return apiRequest<{ campaigns: ApiCampaign[]; pagination: Pagination }>(`?${params.toString()}`);
+}
+
+type CampaignFormInput = {
+  name: string;
+  description: string | null;
+  status?: CampaignStatus;
+  startDate: string | null;
+  endDate: string | null;
+};
+
+async function createCampaignApi(input: CampaignFormInput): Promise<ApiCampaign> {
+  const payload = await apiRequest<{ campaign: ApiCampaign }>("", { method: "POST", body: JSON.stringify(input) });
+  return payload.campaign;
+}
+
+async function updateCampaignApi(id: string, input: Partial<CampaignFormInput>): Promise<ApiCampaign> {
+  const payload = await apiRequest<{ campaign: ApiCampaign }>(`/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+  return payload.campaign;
+}
+
+async function archiveCampaignApi(id: string): Promise<ApiCampaign> {
+  const payload = await apiRequest<{ campaign: ApiCampaign }>(`/${id}/archive`, { method: "POST" });
+  return payload.campaign;
+}
+
+async function restoreCampaignApi(id: string): Promise<ApiCampaign> {
+  const payload = await apiRequest<{ campaign: ApiCampaign }>(`/${id}/restore`, { method: "POST" });
+  return payload.campaign;
 }
 
 /* ============================================================================
@@ -690,6 +920,357 @@ const WORKSPACE_META: Record<
   },
 };
 
+/* ============================================================================
+   CREATE / EDIT DIALOG
+============================================================================ */
+
+const EDITABLE_STATUSES = CAMPAIGN_STATUSES.filter((status) => status !== "ARCHIVED");
+
+function toDateInputValue(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function CampaignFormDialog({
+  campaign,
+  onClose,
+  onSaved,
+  notifyError,
+}: {
+  campaign: ApiCampaign | null;
+  onClose: () => void;
+  onSaved: (campaign: ApiCampaign) => void;
+  notifyError: (error: unknown, fallback: string) => void;
+}) {
+  const [name, setName] = useState(campaign?.name ?? "");
+  const [description, setDescription] = useState(campaign?.description ?? "");
+  const [status, setStatus] = useState<CampaignStatus>(campaign?.status ?? "DRAFT");
+  const [startDate, setStartDate] = useState(toDateInputValue(campaign?.startDate ?? null));
+  const [endDate, setEndDate] = useState(toDateInputValue(campaign?.endDate ?? null));
+  const [saving, setSaving] = useState(false);
+
+  const isEditing = Boolean(campaign);
+
+  const save = async () => {
+    if (!name.trim()) {
+      notifyError(new Error("A campaign name is required."), "A campaign name is required.");
+      return;
+    }
+    if (startDate && endDate && endDate < startDate) {
+      notifyError(new Error("The end date can't be before the start date."), "The end date can't be before the start date.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const input: CampaignFormInput = {
+        name: name.trim(),
+        description: description.trim() || null,
+        status,
+        startDate: startDate || null,
+        endDate: endDate || null,
+      };
+
+      const saved = isEditing ? await updateCampaignApi(campaign!.id, input) : await createCampaignApi(input);
+      onSaved(saved);
+    } catch (error) {
+      notifyError(error, isEditing ? "Unable to save this campaign." : "Unable to create this campaign.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      role="presentation"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      className="sg-fade fixed inset-0 z-[150] flex items-end justify-center bg-black/45 sm:items-center sm:p-6"
+    >
+      <div role="dialog" aria-modal="true" className="flex max-h-[88dvh] w-full max-w-[520px] flex-col overflow-hidden rounded-t-[24px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl sm:rounded-[24px]">
+        <div className="flex items-center justify-between border-b border-[var(--line)] px-5 py-4">
+          <h2 className="text-[15px] font-semibold text-[var(--text)]">{isEditing ? "Edit campaign" : "New campaign"}</h2>
+          <IconButton label="Close" onClick={onClose} bordered>
+            <X size={15} />
+          </IconButton>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          <div>
+            <label className={LABEL}>Campaign name</label>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="e.g. Q1 product launch"
+              className={cx(INPUT, "h-10 px-3")}
+            />
+          </div>
+
+          <div className="mt-3">
+            <label className={LABEL}>Description</label>
+            <textarea
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              rows={4}
+              className={cx(INPUT, "resize-y px-3 py-2")}
+            />
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className={LABEL}>Status</label>
+              <select value={status} onChange={(event) => setStatus(event.target.value as CampaignStatus)} className={cx(INPUT, "h-10 px-3")}>
+                {EDITABLE_STATUSES.map((value) => (
+                  <option key={value} value={value}>
+                    {statusLabel(value)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className={LABEL}>Start date</label>
+              <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className={cx(INPUT, "h-10 px-3")} />
+            </div>
+            <div>
+              <label className={LABEL}>End date</label>
+              <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className={cx(INPUT, "h-10 px-3")} />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--line)] px-5 py-3.5">
+          <button type="button" onClick={onClose} className={cx(BTN_SECONDARY, FOCUS)}>
+            Cancel
+          </button>
+          <button type="button" onClick={() => void save()} disabled={saving} className={cx(BTN_PRIMARY, FOCUS)}>
+            {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+            {isEditing ? "Save changes" : "Create campaign"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+   CAMPAIGNS LIST
+============================================================================ */
+
+function StatusBadge({ status }: { status: CampaignStatus }) {
+  return (
+    <span className="shrink-0 rounded-full border border-[var(--line)] bg-[var(--surface-muted)] px-2.5 py-1 text-[9px] font-medium text-[var(--text-muted)]">
+      {statusLabel(status)}
+    </span>
+  );
+}
+
+function CampaignsWorkspace({
+  notify,
+  notifyError,
+  onChanged,
+}: {
+  notify: (message: string) => void;
+  notifyError: (error: unknown, fallback: string) => void;
+  onChanged: () => void;
+}) {
+  const [campaigns, setCampaigns] = useState<ApiCampaign[]>([]);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<CampaignStatus | "">("");
+  const [page, setPage] = useState(1);
+  const [editing, setEditing] = useState<ApiCampaign | null | "new">(null);
+  const [dialog, setDialog] = useState<DialogRequest | null>(null);
+
+  const load = useCallback(() => {
+    setLoadState("loading");
+    fetchCampaignsApi({ status: statusFilter, search, page })
+      .then((result) => {
+        setCampaigns(result.campaigns);
+        setPagination(result.pagination);
+        setLoadState("ready");
+      })
+      .catch((error) => {
+        setLoadState("unavailable");
+        notifyError(error, "Unable to load campaigns.");
+      });
+  }, [statusFilter, search, page, notifyError]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleSaved = () => {
+    notify(editing === "new" ? "Campaign created." : "Campaign saved.");
+    setEditing(null);
+    load();
+    onChanged();
+  };
+
+  const archiveOrRestore = (campaign: ApiCampaign) => {
+    const archiving = campaign.status !== "ARCHIVED";
+    setDialog({
+      title: archiving ? "Archive this campaign?" : "Restore this campaign?",
+      description: archiving
+        ? `"${campaign.name}" will be moved out of active work. You can restore it at any time.`
+        : `"${campaign.name}" will be restored to Draft status.`,
+      confirmLabel: archiving ? "Archive" : "Restore",
+      tone: archiving ? "danger" : undefined,
+      onConfirm: async () => {
+        try {
+          await (archiving ? archiveCampaignApi(campaign.id) : restoreCampaignApi(campaign.id));
+          notify(archiving ? "Campaign archived." : "Campaign restored.");
+          load();
+          onChanged();
+        } catch (error) {
+          notifyError(error, "That action could not be completed.");
+        }
+      },
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <SectionHeading
+        eyebrow="Campaign management"
+        title="All campaigns"
+        description="Create, organise and manage marketing campaigns across your brands and clients."
+        action={
+          <button type="button" onClick={() => setEditing("new")} className={cx(BTN_PRIMARY, FOCUS)}>
+            <Plus size={14} />
+            New campaign
+          </button>
+        }
+      />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]" />
+          <input
+            value={search}
+            onChange={(event) => {
+              setPage(1);
+              setSearch(event.target.value);
+            }}
+            placeholder="Search campaigns"
+            className={cx(INPUT, "h-10 pl-9 pr-3")}
+          />
+        </div>
+
+        <select
+          value={statusFilter}
+          onChange={(event) => {
+            setPage(1);
+            setStatusFilter(event.target.value as CampaignStatus | "");
+          }}
+          className={cx(INPUT, "h-10 w-auto px-3")}
+        >
+          <option value="">All statuses</option>
+          {CAMPAIGN_STATUSES.map((value) => (
+            <option key={value} value={value}>
+              {statusLabel(value)}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="overflow-hidden rounded-[20px] border border-[var(--line)] bg-[var(--surface)]">
+        {loadState === "loading" ? (
+          <div className="flex min-h-[240px] items-center justify-center">
+            <Loader2 size={20} className="animate-spin text-[var(--accent)]" />
+          </div>
+        ) : campaigns.length === 0 ? (
+          <EmptyState
+            icon={FolderKanban}
+            title="No campaigns to display"
+            description={
+              search || statusFilter
+                ? "No campaigns match your current filters."
+                : "Create your first campaign to get started."
+            }
+          />
+        ) : (
+          <div className="divide-y divide-[var(--line)]">
+            {campaigns.map((campaign) => (
+              <div key={campaign.id} className="flex items-center justify-between gap-4 px-5 py-4">
+                <div className="min-w-0">
+                  <p className="truncate text-[12px] font-semibold text-[var(--text)]">{campaign.name}</p>
+                  <p className="mt-1 text-[10px] text-[var(--text-subtle)]">
+                    {formatDate(campaign.startDate)} – {formatDate(campaign.endDate)}
+                    {adminName(campaign.createdBy) ? ` · Created by ${adminName(campaign.createdBy)}` : ""}
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  <StatusBadge status={campaign.status} />
+
+                  {campaign.status !== "ARCHIVED" && (
+                    <IconButton label="Edit campaign" onClick={() => setEditing(campaign)} bordered>
+                      <Pencil size={13} />
+                    </IconButton>
+                  )}
+
+                  <IconButton
+                    label={campaign.status === "ARCHIVED" ? "Restore campaign" : "Archive campaign"}
+                    onClick={() => archiveOrRestore(campaign)}
+                    bordered
+                  >
+                    {campaign.status === "ARCHIVED" ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+                  </IconButton>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {pagination && pagination.pages > 1 && (
+        <div className="flex items-center justify-between gap-3 text-[11px] text-[var(--text-muted)]">
+          <span>
+            Page {pagination.page} of {pagination.pages} · {pagination.total} campaigns
+          </span>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={!pagination.hasPrevious}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              className={cx(BTN_SECONDARY, "h-8 px-3", FOCUS)}
+            >
+              <ChevronLeft size={13} />
+              Previous
+            </button>
+            <button
+              type="button"
+              disabled={!pagination.hasNext}
+              onClick={() => setPage((value) => value + 1)}
+              className={cx(BTN_SECONDARY, "h-8 px-3", FOCUS)}
+            >
+              Next
+              <ChevronRight size={13} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {editing && (
+        <CampaignFormDialog
+          campaign={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={handleSaved}
+          notifyError={notifyError}
+        />
+      )}
+
+      {dialog && <ConfirmDialog request={dialog} onClose={() => setDialog(null)} />}
+    </div>
+  );
+}
+
 function SecondaryWorkspace({
   view,
 }: {
@@ -731,6 +1312,12 @@ export default function CampaignsTab() {
 
   const [refreshing, setRefreshing] = useState(false);
 
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const notify = useCallback((message: string) => setNotice({ id: Date.now(), message, tone: "success" }), []);
+  const notifyError = useCallback((error: unknown, fallback: string) => {
+    setNotice({ id: Date.now(), message: error instanceof Error ? error.message : fallback, tone: "error" });
+  }, []);
+
   const tabContainerRef = useRef<HTMLDivElement>(null);
 
   const tabRefs = useRef<
@@ -745,10 +1332,9 @@ export default function CampaignsTab() {
   /* ==========================================================================
      DATA LOADING
 
-     The endpoint will be implemented during the backend phase.
-
-     Until then, the UI explicitly shows unavailable data rather
-     than fabricated values.
+     Overview stats are real — see lib/campaigns/server.ts#getCampaignOverview.
+     pendingApprovals reflects campaigns in PENDING_APPROVAL status;
+     upcomingActivities stays honestly 0 until the Planner sub-system exists.
   ========================================================================== */
 
   const refreshOverview = useCallback(async () => {
@@ -910,15 +1496,10 @@ export default function CampaignsTab() {
             />
           </button>
 
-          {/*
-            The create action will be enabled when the
-            campaign creation API and form are implemented.
-          */}
           <button
             type="button"
-            disabled
-            title="Available after campaign creation is implemented"
-            className="inline-flex h-9 cursor-not-allowed items-center gap-2 rounded-[11px] bg-[var(--accent)] px-3.5 text-[11px] font-semibold text-white opacity-50"
+            onClick={() => setView("campaigns")}
+            className="inline-flex h-9 items-center gap-2 rounded-[11px] bg-[var(--accent)] px-3.5 text-[11px] font-semibold text-white transition-[filter] duration-150 hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
           >
             <Plus size={14} />
             New campaign
@@ -1017,6 +1598,8 @@ export default function CampaignsTab() {
             loadState={loadState}
             onNavigate={setView}
           />
+        ) : view === "campaigns" ? (
+          <CampaignsWorkspace notify={notify} notifyError={notifyError} onChanged={() => void refreshOverview()} />
         ) : (
           <SecondaryWorkspace view={view} />
         )}
@@ -1036,6 +1619,8 @@ export default function CampaignsTab() {
           Campaign Management
         </span>
       </footer>
+
+      {notice && <Toast notice={notice} onDismiss={() => setNotice(null)} />}
     </div>
   );
 }

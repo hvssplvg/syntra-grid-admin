@@ -111,6 +111,10 @@ model AdminUser {
   brandRequestComments        BrandRequestComment[]    @relation("BrandRequestCommentAuthor")
   brandRequestActivities      BrandRequestActivity[]   @relation("BrandRequestActivityActor")
 
+  // Campaigns
+  campaignsCreated Campaign[] @relation("CampaignCreatedBy")
+  campaignsUpdated Campaign[] @relation("CampaignUpdatedBy")
+
   @@index([departmentId])
 }
 
@@ -2895,6 +2899,58 @@ model Notification {
   @@unique([recipientAdminUserId, sourceKey])
   @@index([recipientAdminUserId, read])
   @@index([recipientAdminUserId, createdAt])
+}
+
+/**
+ * =============================================================================
+ * CAMPAIGNS MANAGEMENT
+ *
+ * Purely additive — no existing table is touched. Campaign is Growth's
+ * marketing-campaign record — distinct from SocialCampaign, which only
+ * scopes Social Media posts to a campaign label. This covers campaign CRUD,
+ * lifecycle (create/edit/archive/restore) and the overview stats the
+ * Campaigns tab actually calls today. Content/Planner/Audiences/Budget/
+ * Analytics/Approvals remain the frontend's documented placeholders until
+ * their own backends — including a real submit/approve/reject workflow —
+ * are built as a follow-up; for now EDIT can set any status directly, since
+ * there is no approval workflow enforcing transitions yet.
+ * =============================================================================
+ */
+
+enum CampaignStatus {
+  DRAFT
+  PLANNING
+  PENDING_APPROVAL
+  APPROVED
+  SCHEDULED
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+  ARCHIVED
+}
+
+model Campaign {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  status      CampaignStatus @default(DRAFT)
+  startDate   DateTime?
+  endDate     DateTime?
+
+  createdById String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdBy AdminUser? @relation("CampaignCreatedBy", fields: [createdById], references: [id])
+  updatedBy AdminUser? @relation("CampaignUpdatedBy", fields: [updatedById], references: [id])
+
+  @@index([status])
+  @@index([createdById])
+  @@index([updatedAt])
 }
 
 /**
