@@ -385,10 +385,22 @@ Status: DONE. Systematic pass against every category the spec listed:
   itself; only the error message is unpolished.
 ## Phase 17 — Tests
 
-Status: DONE, scoped honestly. Added `vitest` as a devDependency (none existed in this repo
-before — had to also add `vite` explicitly since the peer-dep graph didn't pull it in
-automatically; both installed with `--legacy-peer-deps` due to an `@types/node` peer-version
-quirk unrelated to this module). 44 real tests across 4 files, all passing, all pure logic —
+Status: DONE. Added `vitest` as a devDependency (none existed in this repo before).
+
+**Correction, found the hard way**: `vitest@5.0.4` (+ a manually-added `vite@8`) was the first
+choice, installed locally with `--legacy-peer-deps` to bypass an `@types/node` peer conflict.
+That flag papered over a real problem — it isn't set in Vercel's own `npm install`, so the
+exact same conflict broke the production deployment (`ERESOLVE` on `@types/node`). Bumping
+`@types/node` to satisfy vitest@5 didn't fully fix it either: a plain `npm install` then hit an
+unrelated npm/arborist crash (`Cannot read properties of null (reading 'edgesOut')`) while
+resolving a nested vitest bundled inside `@neondatabase/auth-ui`'s own dependency tree.
+Downgraded to `vitest@2.1.9`, which (a) bundles a compatible `vite@^5` itself (no separate
+`vite` devDependency needed) and (b) accepts the project's existing `@types/node@^20` as-is —
+no version bump, no peer conflict, no arborist crash. Verified with a full `rm -rf node_modules
+package-lock.json && npm install` (no flags) locally, matching exactly what Vercel's build
+does, before re-testing and re-pushing.
+
+44 real tests across 4 files, all passing, all pure logic —
 no live database, consistent with the Phase 0 finding that this repo has exactly one
 `DATABASE_URL` (production) and no isolated test database:
 - `permissions.test.ts` (12 tests) — `campaignOwnScopeFilter`/`assertCampaignRowAccess` for
