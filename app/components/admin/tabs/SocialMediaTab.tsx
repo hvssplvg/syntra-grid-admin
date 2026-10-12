@@ -80,10 +80,13 @@ type PlatformFilter = "ALL" | SocialPlatform;
 
 type LibraryLayout = "list" | "grid";
 
+type InstagramPlacement = "FEED" | "STORY";
+
 type PostTarget = {
   accountId: string;
   platform: SocialPlatform;
   caption: string | null;
+  placement: InstagramPlacement;
 };
 
 type SocialPost = {
@@ -99,6 +102,7 @@ type SocialPost = {
   reviewNotes: string | null;
   scheduledAt: string | null;
   image: string | null;
+  imageType: "IMAGE" | "VIDEO" | null;
   assetIds: string[];
   createdAt: string;
   updatedAt: string;
@@ -114,7 +118,12 @@ type PostForm = {
   status: ContentStatus;
   scheduledAt: string;
   image: string | null;
+  imageType: "IMAGE" | "VIDEO" | null;
   assetIds: string[];
+  /** Where this should land on Instagram — ignored by every other
+   *  platform. A Reel is the automatic result of FEED + a single video
+   *  attached, not a separate choice here. */
+  instagramPlacement: InstagramPlacement;
 };
 
 type ComposerState = {
@@ -141,6 +150,7 @@ type DropProps = {
 
 type PreviewMedia = {
   image: string | null;
+  type: "IMAGE" | "VIDEO" | null;
   busy: boolean;
   dragging: boolean;
   onAdd: () => void;
@@ -557,7 +567,13 @@ type ApiPost = {
   scheduledAt: string | null;
   createdAt: string;
   updatedAt: string;
-  targets: Array<{ accountId: string; platform: SocialPlatform; caption: string | null; account: ApiAccountRef }>;
+  targets: Array<{
+    accountId: string;
+    platform: SocialPlatform;
+    caption: string | null;
+    placement: InstagramPlacement;
+    account: ApiAccountRef;
+  }>;
   assets: Array<{ assetId: string; position: number; asset: ApiAsset }>;
 };
 
@@ -566,6 +582,7 @@ function fromApiPost(api: ApiPost): SocialPost {
     accountId: target.accountId,
     platform: target.platform,
     caption: target.caption,
+    placement: target.placement,
   }));
 
   const sortedAssets = [...api.assets].sort((a, b) => a.position - b.position);
@@ -583,6 +600,7 @@ function fromApiPost(api: ApiPost): SocialPost {
     reviewNotes: api.reviewNotes,
     scheduledAt: api.scheduledAt,
     image: sortedAssets[0]?.asset.url ?? null,
+    imageType: sortedAssets[0]?.asset.type ?? null,
     assetIds: sortedAssets.map((item) => item.assetId),
     createdAt: api.createdAt,
     updatedAt: api.updatedAt,
@@ -594,7 +612,7 @@ type CreatePostPayload = {
   caption: string;
   category: string | null;
   campaignId: string | null;
-  targets: { accountId: string; caption: string | null }[];
+  targets: { accountId: string; caption: string | null; placement?: InstagramPlacement }[];
   assetIds: string[];
 };
 
@@ -985,10 +1003,13 @@ export default function SocialMediaTab() {
     async (form: PostForm, editingId: string | null) => {
       const targets = form.platforms.map((platform) => {
         const account = connectedAccountsByPlatform.get(platform)?.[0];
-        return account
-          ? { accountId: account.id, caption: form.platformCaptions[platform]?.trim() || null }
-          : null;
-      }).filter((target): target is { accountId: string; caption: string | null } => target !== null);
+        if (!account) return null;
+        return {
+          accountId: account.id,
+          caption: form.platformCaptions[platform]?.trim() || null,
+          placement: platform === "INSTAGRAM" ? form.instagramPlacement : undefined,
+        };
+      }).filter((target): target is { accountId: string; caption: string | null; placement: InstagramPlacement | undefined } => target !== null);
 
       const payload: CreatePostPayload = {
         title: form.title.trim() || null,
@@ -2676,7 +2697,9 @@ function PostComposer({
         ? localDateTimeValue(new Date(post.scheduledAt))
         : presetDate ?? "",
       image: post?.image ?? null,
+      imageType: post?.imageType ?? null,
       assetIds: post?.assetIds ?? [],
+      instagramPlacement: post?.targets.find((target) => target.platform === "INSTAGRAM")?.placement ?? "FEED",
     }),
     [post, presetDate],
   );
@@ -2748,14 +2771,23 @@ function PostComposer({
     setImageBusy(true);
     setError(null);
     try {
-      // Resize client-side first (bandwidth), then upload for real — the
-      // resulting URL is a hosted Cloudinary asset, never a data: URI.
-      const dataUrl = await prepareImage(file);
-      const blob = await (await fetch(dataUrl)).blob();
-      const asset = await uploadMediaAsset(blob, file.name || "image.jpg");
-      update({ image: asset.url, assetIds: [asset.id] });
+      let asset: ApiAsset;
+      if (file.type.startsWith("video/")) {
+        // Videos upload as-is — the client-side resize step only applies
+        // to images. Needed for an Instagram Reel or a video Story; the
+        // existing upload pipeline (lib/social-media/media.ts) already
+        // validates and hosts video the same way it does images.
+        asset = await uploadMediaAsset(file, file.name || "video.mp4");
+      } else {
+        // Resize client-side first (bandwidth), then upload for real —
+        // the resulting URL is a hosted Cloudinary asset, never a data: URI.
+        const dataUrl = await prepareImage(file);
+        const blob = await (await fetch(dataUrl)).blob();
+        asset = await uploadMediaAsset(blob, file.name || "image.jpg");
+      }
+      update({ image: asset.url, imageType: asset.type, assetIds: [asset.id] });
     } catch (problem) {
-      setError(problem instanceof Error ? problem.message : "That image couldn't be added.");
+      setError(problem instanceof Error ? problem.message : "That file couldn't be added.");
     } finally {
       setImageBusy(false);
     }
@@ -2778,9 +2810,20 @@ function PostComposer({
     }
   };
 
+  // Toggling rather than pick-and-close lets several images be built up
+  // into a carousel. The first selected asset drives the single-image
+  // preview mockups further down — those still only ever show one image,
+  // since redesigning each platform's preview card into a real carousel
+  // is out of scope here; the composer just needs to let a real carousel
+  // be assembled and published correctly, not visually simulate one.
   const pickFromLibrary = (asset: ApiAsset) => {
-    update({ image: asset.url, assetIds: [asset.id] });
-    setLibraryOpen(false);
+    setForm((current) => {
+      const selected = current.assetIds.includes(asset.id);
+      const assetIds = selected ? current.assetIds.filter((id) => id !== asset.id) : [...current.assetIds, asset.id];
+      const firstId = assetIds[0];
+      const firstAsset = firstId === asset.id ? asset : libraryAssets?.find((item) => item.id === firstId);
+      return { ...current, assetIds, image: firstAsset?.url ?? null, imageType: firstAsset?.type ?? null };
+    });
   };
 
   const dropProps: DropProps = {
@@ -2818,8 +2861,13 @@ function PostComposer({
       }
     }
 
-    if (form.status !== "DRAFT" && form.platforms.includes("INSTAGRAM") && !form.image) {
-      return "Instagram posts need an image. Add one, or save this as a draft.";
+    if (form.status !== "DRAFT" && form.platforms.includes("INSTAGRAM")) {
+      if (!form.image) {
+        return "Instagram posts need an image or video. Add one, or save this as a draft.";
+      }
+      if (form.instagramPlacement === "STORY" && form.assetIds.length > 1) {
+        return "An Instagram Story takes a single image or video, not a carousel — remove the extra ones, or switch placement to Feed.";
+      }
     }
 
     if (form.status !== "DRAFT" && overLimit.length > 0) {
@@ -2891,10 +2939,11 @@ function PostComposer({
 
   const media: PreviewMedia = {
     image: form.image,
+    type: form.imageType,
     busy: imageBusy,
     dragging,
     onAdd: openPicker,
-    onRemove: () => update({ image: null, assetIds: [] }),
+    onRemove: () => update({ image: null, imageType: null, assetIds: [] }),
     dropProps,
   };
 
@@ -2937,7 +2986,7 @@ function PostComposer({
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif"
+            accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
             tabIndex={-1}
             aria-hidden
             className="sr-only"
@@ -3033,7 +3082,23 @@ function PostComposer({
                         Loading previously uploaded media…
                       </p>
                     ) : libraryAssets && libraryAssets.length > 0 ? (
-                      <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+                      <>
+                        <p className="mb-2 flex items-center justify-between text-[10.5px] text-[var(--text-subtle)]">
+                          <span>
+                            Pick one image, or several for an Instagram carousel.
+                            {form.assetIds.length > 1 && ` ${form.assetIds.length} selected.`}
+                          </span>
+                          {form.assetIds.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => update({ assetIds: [], image: null })}
+                              className="font-semibold text-[var(--text-muted)] hover:text-[var(--text)]"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </p>
+                        <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
                         {libraryAssets.map((asset) => (
                           <button
                             key={asset.id}
@@ -3051,7 +3116,8 @@ function PostComposer({
                             )}
                           </button>
                         ))}
-                      </div>
+                        </div>
+                      </>
                     ) : (
                       <p className="text-[11.5px] text-[var(--text-muted)]">
                         Nothing uploaded yet. Add an image below and it&apos;ll show up here next time.
@@ -3099,6 +3165,35 @@ function PostComposer({
                   </select>
                 </div>
               </div>
+
+              {form.platforms.includes("INSTAGRAM") && (
+                <div>
+                  <label className="mb-1.5 block text-[11.5px] font-semibold text-[var(--text)]">
+                    Instagram placement
+                  </label>
+                  <Segmented label="Instagram placement">
+                    <SegmentButton
+                      active={form.instagramPlacement === "FEED"}
+                      onClick={() => update({ instagramPlacement: "FEED" })}
+                    >
+                      Feed
+                    </SegmentButton>
+                    <SegmentButton
+                      active={form.instagramPlacement === "STORY"}
+                      onClick={() => update({ instagramPlacement: "STORY" })}
+                    >
+                      Story
+                    </SegmentButton>
+                  </Segmented>
+                  <p className="mt-1.5 text-[10.5px] text-[var(--text-subtle)]">
+                    {form.instagramPlacement === "STORY"
+                      ? "Posts as a 24-hour Story. Uses the first attached image or video."
+                      : form.assetIds.length > 1
+                        ? "Multiple images post as a Feed carousel."
+                        : "A single attached video posts as a Reel; a single image posts to the Feed."}
+                  </p>
+                </div>
+              )}
 
               <div>
                 <div className="mb-2.5 flex items-center justify-between">
@@ -3216,7 +3311,7 @@ function PostComposer({
                       )}
                       Replace
                     </button>
-                    <IconButton label="Remove image" onClick={() => update({ image: null, assetIds: [] })}>
+                    <IconButton label="Remove image" onClick={() => update({ image: null, imageType: null, assetIds: [] })}>
                       <Trash2 size={14} />
                     </IconButton>
                   </div>
@@ -3718,19 +3813,31 @@ function PreviewMediaSlot({
   imageClassName?: string;
   emptyClassName?: string;
 }) {
-  const { image, busy, dragging, onAdd, onRemove, dropProps } = media;
+  const { image, type, busy, dragging, onAdd, onRemove, dropProps } = media;
 
   if (image) {
     return (
       <div {...dropProps} className={cx("group relative overflow-hidden", imageClassName)}>
-        <img
-          src={image}
-          alt="Attached image"
-          className={cx(
-            "block w-full object-cover",
-            variant === "square" ? "aspect-square" : "max-h-[360px]",
-          )}
-        />
+        {type === "VIDEO" ? (
+          <video
+            src={image}
+            muted
+            playsInline
+            className={cx(
+              "block w-full object-cover",
+              variant === "square" ? "aspect-square" : "max-h-[360px]",
+            )}
+          />
+        ) : (
+          <img
+            src={image}
+            alt="Attached image"
+            className={cx(
+              "block w-full object-cover",
+              variant === "square" ? "aspect-square" : "max-h-[360px]",
+            )}
+          />
+        )}
 
         {(dragging || busy) && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11.5px] font-semibold text-white">

@@ -7,6 +7,7 @@
 import { prisma } from "@/lib/prisma";
 import { AuthorisationError } from "@/lib/auth/current-admin";
 import {
+  SocialMediaPlacement,
   SocialPlatform,
   SocialPostActivityType,
   SocialPostStatus,
@@ -166,7 +167,7 @@ export async function getPostOrThrow(postId: string): Promise<PostWithRelations>
    CREATE / UPDATE / DELETE
 ============================================================================ */
 
-export type PostTargetInput = { accountId: string; caption?: string | null };
+export type PostTargetInput = { accountId: string; caption?: string | null; placement?: SocialMediaPlacement };
 
 export type CreatePostInput = {
   title?: string | null;
@@ -219,6 +220,7 @@ export async function createPost(identity: ResolvedIdentity, input: CreatePostIn
           accountId: target.accountId,
           platform: platformByAccount.get(target.accountId) as SocialPlatform,
           caption: target.caption ?? null,
+          placement: target.placement ?? SocialMediaPlacement.FEED,
         })),
       },
       assets: {
@@ -269,6 +271,7 @@ export async function updatePost(identity: ResolvedIdentity, postId: string, inp
           accountId: target.accountId,
           platform: platformByAccount.get(target.accountId) as SocialPlatform,
           caption: target.caption ?? null,
+          placement: target.placement ?? SocialMediaPlacement.FEED,
         })),
       });
     }

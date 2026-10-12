@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { AuthenticationError, AuthorisationError } from "@/lib/auth/current-admin";
 import { AccessAction, requireSocialMediaPermission } from "@/lib/social-media/permissions";
 import { createPost, listPosts, type PostTargetInput } from "@/lib/social-media/server";
-import { SocialPostStatus, SocialPlatform } from "@/app/generated/prisma/enums";
+import { SocialMediaPlacement, SocialPostStatus, SocialPlatform } from "@/app/generated/prisma/enums";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,12 +67,13 @@ export async function POST(request: NextRequest) {
 
     const targets: PostTargetInput[] = Array.isArray(body.targets)
       ? body.targets
-          .filter((target: unknown): target is { accountId: string; caption?: string } => {
+          .filter((target: unknown): target is { accountId: string; caption?: string; placement?: string } => {
             return Boolean(target && typeof (target as Record<string, unknown>).accountId === "string");
           })
-          .map((target: { accountId: string; caption?: string }) => ({
+          .map((target: { accountId: string; caption?: string; placement?: string }) => ({
             accountId: target.accountId,
             caption: typeof target.caption === "string" ? target.caption : null,
+            placement: parseEnum(target.placement ?? null, Object.values(SocialMediaPlacement)) ?? undefined,
           }))
       : [];
 

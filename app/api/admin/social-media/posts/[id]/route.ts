@@ -7,6 +7,7 @@ import {
   requireSocialMediaPermission,
 } from "@/lib/social-media/permissions";
 import { deletePost, getPostOrThrow, updatePost, type PostTargetInput } from "@/lib/social-media/server";
+import { SocialMediaPlacement } from "@/app/generated/prisma/enums";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,14 +50,20 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       return NextResponse.json({ ok: false, error: "Invalid request body." }, { status: 400 });
     }
 
+    const placementValues = Object.values(SocialMediaPlacement) as string[];
+
     const targets: PostTargetInput[] | undefined = Array.isArray(body.targets)
       ? body.targets
-          .filter((target: unknown): target is { accountId: string; caption?: string } =>
+          .filter((target: unknown): target is { accountId: string; caption?: string; placement?: string } =>
             Boolean(target && typeof (target as Record<string, unknown>).accountId === "string"),
           )
-          .map((target: { accountId: string; caption?: string }) => ({
+          .map((target: { accountId: string; caption?: string; placement?: string }) => ({
             accountId: target.accountId,
             caption: typeof target.caption === "string" ? target.caption : null,
+            placement:
+              typeof target.placement === "string" && placementValues.includes(target.placement)
+                ? (target.placement as SocialMediaPlacement)
+                : undefined,
           }))
       : undefined;
 

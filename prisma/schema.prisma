@@ -2946,6 +2946,22 @@ enum SocialAssetType {
   VIDEO
 }
 
+/**
+ * Where a post should land on a platform that distinguishes feed content
+ * from ephemeral/short-form content — currently only meaningful for
+ * Instagram. FEED covers both a single image and a multi-asset carousel
+ * (decided by how many assets are attached, not by this field); REELS is
+ * the normal destination for a single attached video (Instagram folded
+ * standalone feed video into Reels); STORY is the one placement that
+ * can't be inferred from the attached media alone, so it's the only
+ * explicit choice exposed in the composer.
+ */
+enum SocialMediaPlacement {
+  FEED
+  REELS
+  STORY
+}
+
 enum SocialPostActivityType {
   CREATED
   EDITED
@@ -3072,6 +3088,9 @@ model SocialPostPlatform {
   platform  SocialPlatform
 
   caption String?
+
+  /** Only meaningful for Instagram today; every other platform ignores it. */
+  placement SocialMediaPlacement @default(FEED)
 
   status SocialPostTargetStatus @default(PENDING)
 

@@ -4,20 +4,26 @@
 // and the PublishAdapter interface real provider integrations plug into.
 //
 // No adapter here fabricates success. LinkedIn personal-profile posting
-// is a real adapter (see LinkedInAdapter below) that calls LinkedIn's
-// actual Posts API and only reports success when LinkedIn confirms a
-// post id. The other 5 platforms are still stub adapters that resolve to
-// a real failure with an honest, specific reason — either "platform not
-// configured" (no OAuth app registered) or "account not connected" (no
-// valid token) — because that is genuinely the current state in every
-// environment without real provider credentials for them. Each of those
-// is real, substantial, platform-specific work (Instagram's container-
-// then-publish flow, X's media-upload-then-tweet flow, YouTube's
+// (LinkedInAdapter) and Instagram publishing (InstagramAdapter) are real
+// adapters that call the provider's actual API and only report success
+// once the provider confirms a real post/media id. The other 4 platforms
+// are still stub adapters that resolve to a real failure with an honest,
+// specific reason — either "platform not configured" (no OAuth app
+// registered) or "account not connected" (no valid token) — because that
+// is genuinely the current state in every environment without real
+// provider credentials for them. Each of those is real, substantial,
+// platform-specific work (X's media-upload-then-tweet flow, YouTube's
 // resumable upload, etc.) that plugs in the same way without touching
 // the job-runner orchestration below.
 
 import { prisma } from "@/lib/prisma";
-import { SocialPlatform, SocialPostActivityType, SocialPostStatus, SocialPostTargetStatus } from "@/app/generated/prisma/enums";
+import {
+  SocialMediaPlacement,
+  SocialPlatform,
+  SocialPostActivityType,
+  SocialPostStatus,
+  SocialPostTargetStatus,
+} from "@/app/generated/prisma/enums";
 import type { SocialMediaAsset } from "@/app/generated/prisma/client";
 import { getValidSocialAccessToken, isPlatformConfigured, markAccountError, PLATFORM_CONFIG } from "@/lib/social-media/accounts";
 import { logPostActivity } from "@/lib/social-media/server";
@@ -27,6 +33,8 @@ export type PublishParams = {
   platform: SocialPlatform;
   caption: string;
   assets: SocialMediaAsset[];
+  /** Only Instagram currently reads this — every other adapter ignores it. */
+  placement: SocialMediaPlacement;
 };
 
 export type PublishResult = { ok: true; remotePostId: string; remotePostUrl?: string } | { ok: false; error: string };
@@ -280,6 +288,259 @@ class LinkedInAdapter implements PublishAdapter {
 registerPublishAdapter(SocialPlatform.LINKEDIN, new LinkedInAdapter());
 
 /* ============================================================================
+   INSTAGRAM — real publishing via Instagram API with Instagram Login
+   (graph.instagram.com), using the Instagram professional account id
+   stored on SocialAccount.platformAccountId — never a Facebook Page id,
+   since this account was never connected through Facebook Login (see
+   lib/social-media/accounts.ts PLATFORM_CONFIG.INSTAGRAM).
+
+   Scope required: instagram_business_content_publish (already requested
+   at connect time).
+
+   Supports, driven by params.placement and how many assets are attached:
+   - placement STORY            -> one image or video, media_type STORIES
+   - 1 video asset, not STORY   -> REELS (Instagram folded standalone feed
+                                    video into Reels; there is no other way
+                                    to publish a single video to the feed)
+   - 1 image asset, not STORY   -> a plain feed image post
+   - 2+ assets, not STORY       -> CAROUSEL (each asset becomes a child
+                                    container first, up to Instagram's
+                                    10-item limit; video children use
+                                    media_type VIDEO, not REELS)
+
+   All media URLs are the existing Cloudinary-hosted asset URLs, which are
+   public by default (lib/cloudinary-server.ts never sets a private/
+   authenticated delivery type) — exactly what image_url/video_url need,
+   since Meta's servers fetch them directly.
+
+   Video processing (Reels, video Stories, video carousel children) is
+   asynchronous: the container is polled for up to ~45 seconds. That
+   comfortably covers normal short-form video, but is well inside the
+   cron route's 60-second maxDuration — a video that genuinely needs
+   longer than that fails honestly for this attempt rather than risking
+   the whole cron invocation timing out mid-poll. Creating a fresh
+   container costs nothing against Instagram's publishing limits (only
+   the actual media_publish call counts toward the 25-posts/24h cap), so
+   the next scheduled run retries cleanly from scratch.
+============================================================================ */
+
+const INSTAGRAM_GRAPH_BASE = "https://graph.instagram.com";
+const INSTAGRAM_API_VERSION = "v21.0";
+
+class InstagramApiError extends Error {
+  constructor(public status: number, body: string, public code?: number) {
+    super(`Instagram API error ${status}${code ? ` (code ${code})` : ""}: ${body.slice(0, 300)}`);
+  }
+}
+
+async function instagramFetch(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
+  const response = await fetch(url, init);
+  const text = await response.text();
+
+  let json: Record<string, unknown> | null = null;
+  try {
+    json = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+  } catch {
+    // Non-JSON body — the !response.ok / !json branches below handle it.
+  }
+
+  const apiError = json?.error as { message?: string; code?: number } | undefined;
+
+  if (!response.ok || apiError) {
+    throw new InstagramApiError(response.status, apiError?.message ?? text, apiError?.code);
+  }
+
+  return json ?? {};
+}
+
+type InstagramContainerParams = {
+  imageUrl?: string;
+  videoUrl?: string;
+  caption?: string;
+  mediaType?: "REELS" | "STORIES" | "CAROUSEL" | "VIDEO";
+  isCarouselItem?: boolean;
+  children?: string[];
+};
+
+async function createInstagramContainer(igUserId: string, token: string, params: InstagramContainerParams): Promise<string> {
+  const body = new URLSearchParams({ access_token: token });
+  if (params.imageUrl) body.set("image_url", params.imageUrl);
+  if (params.videoUrl) body.set("video_url", params.videoUrl);
+  if (params.caption) body.set("caption", params.caption);
+  if (params.mediaType) body.set("media_type", params.mediaType);
+  if (params.isCarouselItem) body.set("is_carousel_item", "true");
+  if (params.children) body.set("children", params.children.join(","));
+
+  const json = await instagramFetch(`${INSTAGRAM_GRAPH_BASE}/${INSTAGRAM_API_VERSION}/${igUserId}/media`, {
+    method: "POST",
+    body,
+  });
+
+  if (typeof json.id !== "string") {
+    throw new Error("Instagram did not return a media container id.");
+  }
+
+  return json.id;
+}
+
+/** Polls a container's processing status. Only needed for containers with
+ *  a video component — image containers are ready immediately. */
+async function waitForInstagramContainer(containerId: string, token: string, budgetMs = 45_000): Promise<void> {
+  const start = Date.now();
+
+  while (Date.now() - start < budgetMs) {
+    const json = await instagramFetch(
+      `${INSTAGRAM_GRAPH_BASE}/${INSTAGRAM_API_VERSION}/${containerId}?fields=status_code&access_token=${encodeURIComponent(token)}`,
+    );
+    const status = json.status_code;
+
+    if (status === "FINISHED") return;
+    if (status === "ERROR" || status === "EXPIRED") {
+      throw new Error(`Instagram reported this media as "${status}" during processing.`);
+    }
+
+    await sleep(3000);
+  }
+
+  throw new Error("Instagram is still processing this video — it will be retried on the next scheduled run.");
+}
+
+async function publishInstagramContainer(igUserId: string, containerId: string, token: string): Promise<string> {
+  const body = new URLSearchParams({ creation_id: containerId, access_token: token });
+  const json = await instagramFetch(`${INSTAGRAM_GRAPH_BASE}/${INSTAGRAM_API_VERSION}/${igUserId}/media_publish`, {
+    method: "POST",
+    body,
+  });
+
+  if (typeof json.id !== "string") {
+    throw new Error("Instagram did not confirm a published media id.");
+  }
+
+  return json.id;
+}
+
+async function fetchInstagramPermalink(mediaId: string, token: string): Promise<string | undefined> {
+  try {
+    const json = await instagramFetch(
+      `${INSTAGRAM_GRAPH_BASE}/${INSTAGRAM_API_VERSION}/${mediaId}?fields=permalink&access_token=${encodeURIComponent(token)}`,
+    );
+    return typeof json.permalink === "string" ? json.permalink : undefined;
+  } catch {
+    // A missing permalink is cosmetic — the post is already confirmed
+    // published by this point, so this never turns a success into a
+    // failure.
+    return undefined;
+  }
+}
+
+class InstagramAdapter implements PublishAdapter {
+  async publish(params: PublishParams): Promise<PublishResult> {
+    if (!isPlatformConfigured(SocialPlatform.INSTAGRAM)) {
+      return { ok: false, error: `${PLATFORM_CONFIG.INSTAGRAM.label} is not configured.` };
+    }
+
+    const account = await prisma.socialAccount.findUnique({ where: { id: params.accountId } });
+    if (!account || account.platform !== SocialPlatform.INSTAGRAM) {
+      return { ok: false, error: "This Instagram account is no longer connected." };
+    }
+
+    if (params.assets.length === 0) {
+      return { ok: false, error: "Instagram requires at least one image or video attached to the post." };
+    }
+
+    // The stored Instagram professional account id, resolved once at
+    // connect time via graph.instagram.com/me — never a Facebook Page id.
+    const igUserId = account.platformAccountId;
+
+    let token: string;
+    try {
+      token = await getValidSocialAccessToken(params.accountId);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Account is not connected." };
+    }
+
+    try {
+      const mediaId = await this.createAndPublish(igUserId, token, params);
+      const remotePostUrl = await fetchInstagramPermalink(mediaId, token);
+      return { ok: true, remotePostId: mediaId, remotePostUrl };
+    } catch (error) {
+      if (error instanceof InstagramApiError) {
+        // 190 = OAuthException (invalid/expired token) — Meta's Graph API
+        // signals this in the JSON body's error.code, not always via a
+        // 401 status.
+        if (error.status === 401 || error.code === 190) {
+          await markAccountError(params.accountId, error.message);
+          return {
+            ok: false,
+            error: "Instagram rejected the request — the connection has expired or lost permission and needs to be reconnected.",
+          };
+        }
+        // Meta's rate-limit errors come back as ordinary 400s with one of
+        // these codes, not HTTP 429.
+        if (error.code === 4 || error.code === 17 || error.code === 32 || error.code === 613) {
+          return { ok: false, error: "Instagram rate limit reached — this will be retried on the next scheduled run." };
+        }
+        return { ok: false, error: error.message };
+      }
+      return { ok: false, error: error instanceof Error ? error.message : "Instagram publishing failed." };
+    }
+  }
+
+  private async createAndPublish(igUserId: string, token: string, params: PublishParams): Promise<string> {
+    const { assets, caption, placement } = params;
+
+    if (placement === SocialMediaPlacement.STORY) {
+      const [asset] = assets;
+      const containerId = await createInstagramContainer(igUserId, token, {
+        imageUrl: asset.type === "IMAGE" ? asset.url : undefined,
+        videoUrl: asset.type === "VIDEO" ? asset.url : undefined,
+        mediaType: "STORIES",
+      });
+      if (asset.type === "VIDEO") await waitForInstagramContainer(containerId, token);
+      return publishInstagramContainer(igUserId, containerId, token);
+    }
+
+    if (assets.length > 1) {
+      const childIds: string[] = [];
+      for (const asset of assets.slice(0, 10)) {
+        const childId = await createInstagramContainer(igUserId, token, {
+          imageUrl: asset.type === "IMAGE" ? asset.url : undefined,
+          videoUrl: asset.type === "VIDEO" ? asset.url : undefined,
+          mediaType: asset.type === "VIDEO" ? "VIDEO" : undefined,
+          isCarouselItem: true,
+        });
+        if (asset.type === "VIDEO") await waitForInstagramContainer(childId, token);
+        childIds.push(childId);
+      }
+
+      const parentId = await createInstagramContainer(igUserId, token, {
+        mediaType: "CAROUSEL",
+        children: childIds,
+        caption,
+      });
+      return publishInstagramContainer(igUserId, parentId, token);
+    }
+
+    const [asset] = assets;
+
+    if (asset.type === "VIDEO") {
+      const containerId = await createInstagramContainer(igUserId, token, {
+        videoUrl: asset.url,
+        caption,
+        mediaType: "REELS",
+      });
+      await waitForInstagramContainer(containerId, token);
+      return publishInstagramContainer(igUserId, containerId, token);
+    }
+
+    const containerId = await createInstagramContainer(igUserId, token, { imageUrl: asset.url, caption });
+    return publishInstagramContainer(igUserId, containerId, token);
+  }
+}
+
+registerPublishAdapter(SocialPlatform.INSTAGRAM, new InstagramAdapter());
+
+/* ============================================================================
    JOB RUNNER — called by the cron route, mirrors app/api/cron/monzo/route.ts's
    per-row try/catch loop shape exactly.
 ============================================================================ */
@@ -368,7 +629,13 @@ export async function runDuePublishJobs(limit = 50): Promise<{ ran: number; resu
       const caption = target.caption ?? target.post.caption;
       const assets = target.post.assets.map((item) => item.asset);
 
-      const result = await adapter.publish({ accountId: target.accountId, platform: target.platform, caption, assets });
+      const result = await adapter.publish({
+        accountId: target.accountId,
+        platform: target.platform,
+        caption,
+        assets,
+        placement: target.placement,
+      });
 
       if (result.ok) {
         await prisma.socialPostPlatform.update({
