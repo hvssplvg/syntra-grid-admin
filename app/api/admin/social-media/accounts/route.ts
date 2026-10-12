@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { AuthenticationError, AuthorisationError } from "@/lib/auth/current-admin";
-import { AccessAction, requireSocialMediaPermission } from "@/lib/social-media/permissions";
+import { AccessAction, hasSocialMediaPermission, requireSocialMediaPermission } from "@/lib/social-media/permissions";
 import { isPlatformConfigured, PLATFORM_CONFIG, requiredEnvVarsFor } from "@/lib/social-media/accounts";
 import { SocialPlatform } from "@/app/generated/prisma/enums";
 
@@ -33,7 +33,7 @@ const ACCOUNT_SELECT = {
 
 export async function GET() {
   try {
-    await requireSocialMediaPermission(AccessAction.VIEW);
+    const identity = await requireSocialMediaPermission(AccessAction.VIEW);
 
     const accounts = await prisma.socialAccount.findMany({
       select: ACCOUNT_SELECT,
@@ -48,7 +48,18 @@ export async function GET() {
       accounts: accounts.filter((account) => account.platform === platform),
     }));
 
-    return NextResponse.json({ ok: true, platforms });
+    // Lets the UI decide which workflow actions to even show (e.g.
+    // "Publish Now") without guessing — the server call each of those
+    // actions makes re-checks the same permission regardless, so this is
+    // purely about not showing a button that would just 403.
+    const permissions = {
+      canCreate: hasSocialMediaPermission(identity, AccessAction.CREATE),
+      canEdit: hasSocialMediaPermission(identity, AccessAction.EDIT),
+      canApprove: hasSocialMediaPermission(identity, AccessAction.APPROVE),
+      canManage: hasSocialMediaPermission(identity, AccessAction.MANAGE),
+    };
+
+    return NextResponse.json({ ok: true, platforms, permissions });
   } catch (error) {
     console.error("[admin/social-media/accounts]", error);
     if (error instanceof AuthenticationError) return NextResponse.json({ ok: false, error: error.message }, { status: 401 });

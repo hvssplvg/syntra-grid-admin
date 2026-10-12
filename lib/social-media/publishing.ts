@@ -24,6 +24,7 @@ import {
   SocialPostStatus,
   SocialPostTargetStatus,
 } from "@/app/generated/prisma/enums";
+import { Prisma } from "@/app/generated/prisma/client";
 import type { SocialMediaAsset } from "@/app/generated/prisma/client";
 import { getValidSocialAccessToken, isPlatformConfigured, markAccountError, PLATFORM_CONFIG } from "@/lib/social-media/accounts";
 import { logPostActivity } from "@/lib/social-media/server";
@@ -588,91 +589,164 @@ async function reconcilePostStatus(postId: string) {
 
 export type JobRunResult = { id: string; ok: boolean; skipped?: boolean; error?: string };
 
+const TARGET_INCLUDE = {
+  account: true,
+  post: { include: { assets: { include: { asset: true } } } },
+} satisfies Prisma.SocialPostPlatformInclude;
+
+type TargetWithRelations = Prisma.SocialPostPlatformGetPayload<{ include: typeof TARGET_INCLUDE }>;
+
+/**
+ * Executes a single already-SCHEDULED target: atomic claim, adapter
+ * call, result recorded, parent post reconciled. Shared by the cron
+ * job runner (bulk, due-by-time) and publishTargetsNow (a specific
+ * post's targets, triggered immediately by "Publish Now") — the actual
+ * publish mechanics live in exactly one place either way.
+ */
+async function executeTarget(target: TargetWithRelations): Promise<JobRunResult> {
+  const now = new Date();
+
+  try {
+    // Atomic claim: the WHERE clause's status check and the UPDATE run as
+    // one statement, so two overlapping callers (an overlapping cron run,
+    // or a double-clicked "Publish Now") can never both move the same
+    // target into PUBLISHING — the second one's count is 0 and it skips.
+    const claimed = await prisma.socialPostPlatform.updateMany({
+      where: { id: target.id, status: SocialPostTargetStatus.SCHEDULED },
+      data: { status: SocialPostTargetStatus.PUBLISHING, lastAttemptAt: now },
+    });
+
+    if (claimed.count === 0) {
+      return { id: target.id, ok: true, skipped: true };
+    }
+
+    await prisma.socialPost.updateMany({
+      where: { id: target.postId, status: { in: [SocialPostStatus.SCHEDULED, SocialPostStatus.PARTIALLY_PUBLISHED, SocialPostStatus.FAILED] } },
+      data: { status: SocialPostStatus.PUBLISHING },
+    });
+
+    await logPostActivity(target.postId, null, SocialPostActivityType.PUBLISHING_STARTED, `Publishing to ${target.platform}`);
+
+    const adapter = getPublishAdapter(target.platform);
+    const caption = target.caption ?? target.post.caption;
+    const assets = target.post.assets.map((item) => item.asset);
+
+    const result = await adapter.publish({
+      accountId: target.accountId,
+      platform: target.platform,
+      caption,
+      assets,
+      placement: target.placement,
+    });
+
+    if (result.ok) {
+      await prisma.socialPostPlatform.update({
+        where: { id: target.id },
+        data: {
+          status: SocialPostTargetStatus.PUBLISHED,
+          publishedAt: new Date(),
+          remotePostId: result.remotePostId,
+          remotePostUrl: result.remotePostUrl ?? null,
+          lastError: null,
+        },
+      });
+    } else {
+      await prisma.socialPostPlatform.update({
+        where: { id: target.id },
+        data: { status: SocialPostTargetStatus.FAILED, lastError: result.error, retryCount: { increment: 1 } },
+      });
+    }
+
+    await reconcilePostStatus(target.postId);
+
+    return { id: target.id, ok: result.ok, error: result.ok ? undefined : result.error };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown publishing error.";
+
+    await prisma.socialPostPlatform
+      .update({
+        where: { id: target.id },
+        data: { status: SocialPostTargetStatus.FAILED, lastError: message, retryCount: { increment: 1 } },
+      })
+      .catch(() => undefined);
+
+    await reconcilePostStatus(target.postId).catch(() => undefined);
+
+    return { id: target.id, ok: false, error: message };
+  }
+}
+
+/**
+ * Targets left in PUBLISHING past this grace period never got a final
+ * answer from their adapter call — most plausibly because the serverless
+ * function that was running them was killed (Vercel's maxDuration) mid
+ * network call, which leaves no code running to record a result. Without
+ * this sweep such a target would sit in PUBLISHING forever, since the
+ * cron query only ever picks up SCHEDULED rows. Flipped to FAILED rather
+ * than retried automatically — Instagram/LinkedIn's own container may or
+ * may not have actually finished on their end, and retrying blind risks
+ * a duplicate post; a human can confirm and press "Publish Now" again.
+ */
+const STALE_PUBLISHING_GRACE_MS = 10 * 60 * 1000;
+
+async function reconcileStalePublishingTargets(): Promise<void> {
+  const cutoff = new Date(Date.now() - STALE_PUBLISHING_GRACE_MS);
+
+  const stale = await prisma.socialPostPlatform.findMany({
+    where: { status: SocialPostTargetStatus.PUBLISHING, lastAttemptAt: { lte: cutoff } },
+    select: { id: true, postId: true },
+  });
+
+  for (const target of stale) {
+    await prisma.socialPostPlatform.update({
+      where: { id: target.id },
+      data: {
+        status: SocialPostTargetStatus.FAILED,
+        lastError: "Publishing did not complete in time and was not confirmed by the platform. Check before retrying.",
+        retryCount: { increment: 1 },
+      },
+    });
+    await reconcilePostStatus(target.postId).catch(() => undefined);
+  }
+}
+
 export async function runDuePublishJobs(limit = 50): Promise<{ ran: number; results: JobRunResult[] }> {
+  await reconcileStalePublishingTargets();
+
   const now = new Date();
 
   const dueTargets = await prisma.socialPostPlatform.findMany({
     where: { status: SocialPostTargetStatus.SCHEDULED, scheduledAt: { lte: now } },
     take: limit,
-    include: {
-      account: true,
-      post: { include: { assets: { include: { asset: true } } } },
-    },
+    include: TARGET_INCLUDE,
   });
 
   const results: JobRunResult[] = [];
 
   for (const target of dueTargets) {
-    try {
-      // Atomic claim: the WHERE clause's status check and the UPDATE run
-      // as one statement, so two overlapping cron runs can never both
-      // move the same target into PUBLISHING — the second one's count
-      // is 0 and it skips.
-      const claimed = await prisma.socialPostPlatform.updateMany({
-        where: { id: target.id, status: SocialPostTargetStatus.SCHEDULED },
-        data: { status: SocialPostTargetStatus.PUBLISHING, lastAttemptAt: now },
-      });
-
-      if (claimed.count === 0) {
-        results.push({ id: target.id, ok: true, skipped: true });
-        continue;
-      }
-
-      await prisma.socialPost.updateMany({
-        where: { id: target.postId, status: { in: [SocialPostStatus.SCHEDULED, SocialPostStatus.PARTIALLY_PUBLISHED, SocialPostStatus.FAILED] } },
-        data: { status: SocialPostStatus.PUBLISHING },
-      });
-
-      await logPostActivity(target.postId, null, SocialPostActivityType.PUBLISHING_STARTED, `Publishing to ${target.platform}`);
-
-      const adapter = getPublishAdapter(target.platform);
-      const caption = target.caption ?? target.post.caption;
-      const assets = target.post.assets.map((item) => item.asset);
-
-      const result = await adapter.publish({
-        accountId: target.accountId,
-        platform: target.platform,
-        caption,
-        assets,
-        placement: target.placement,
-      });
-
-      if (result.ok) {
-        await prisma.socialPostPlatform.update({
-          where: { id: target.id },
-          data: {
-            status: SocialPostTargetStatus.PUBLISHED,
-            publishedAt: new Date(),
-            remotePostId: result.remotePostId,
-            remotePostUrl: result.remotePostUrl ?? null,
-            lastError: null,
-          },
-        });
-      } else {
-        await prisma.socialPostPlatform.update({
-          where: { id: target.id },
-          data: { status: SocialPostTargetStatus.FAILED, lastError: result.error, retryCount: { increment: 1 } },
-        });
-      }
-
-      await reconcilePostStatus(target.postId);
-
-      results.push({ id: target.id, ok: result.ok, error: result.ok ? undefined : result.error });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown publishing error.";
-
-      await prisma.socialPostPlatform
-        .update({
-          where: { id: target.id },
-          data: { status: SocialPostTargetStatus.FAILED, lastError: message, retryCount: { increment: 1 } },
-        })
-        .catch(() => undefined);
-
-      await reconcilePostStatus(target.postId).catch(() => undefined);
-
-      results.push({ id: target.id, ok: false, error: message });
-    }
+    results.push(await executeTarget(target));
   }
 
   return { ran: dueTargets.length, results };
+}
+
+/**
+ * Runs a specific set of already-SCHEDULED targets immediately, within
+ * the calling request — this is what "Publish Now" uses instead of
+ * waiting for the next cron sweep. Targets run concurrently (a post
+ * typically has a handful, not dozens) so the wall-clock cost is close
+ * to the slowest single target rather than their sum, which matters
+ * since this runs inside one HTTP request on a time-boxed function.
+ */
+export async function publishTargetsNow(targetIds: string[]): Promise<{ ran: number; results: JobRunResult[] }> {
+  if (targetIds.length === 0) return { ran: 0, results: [] };
+
+  const targets = await prisma.socialPostPlatform.findMany({
+    where: { id: { in: targetIds }, status: SocialPostTargetStatus.SCHEDULED },
+    include: TARGET_INCLUDE,
+  });
+
+  const results = await Promise.all(targets.map(executeTarget));
+
+  return { ran: targets.length, results };
 }

@@ -430,6 +430,81 @@ export async function cancelPost(identity: ResolvedIdentity, postId: string) {
 }
 
 /* ============================================================================
+   PUBLISH NOW
+
+   A deliberate fast lane for "Publish Now": the caller already holds
+   APPROVE (the same permission schedulePost/approvePost already require
+   — no new permission is introduced), so any intermediate review steps
+   this bypasses are recorded in the activity log rather than silently
+   skipped, keeping the audit trail honest about what actually happened.
+
+   This function only decides WHICH targets to execute and moves them
+   into SCHEDULED (scheduledAt = now) — it never calls a provider API
+   itself. The actual publish mechanics live in exactly one place:
+   lib/social-media/publishing.ts's executeTarget, invoked by the route
+   handler right after this returns (publishTargetsNow) — kept separate
+   so this file never needs to import the publishing module.
+============================================================================ */
+
+const DIRECT_PUBLISHABLE_STATUSES: SocialPostStatus[] = [
+  SocialPostStatus.DRAFT,
+  SocialPostStatus.CHANGES_REQUESTED,
+  SocialPostStatus.PENDING_REVIEW,
+  SocialPostStatus.APPROVED,
+  SocialPostStatus.SCHEDULED,
+  SocialPostStatus.PARTIALLY_PUBLISHED,
+  SocialPostStatus.FAILED,
+];
+
+export async function prepareDirectPublish(identity: ResolvedIdentity, postId: string): Promise<{ targetIds: string[] }> {
+  const existing = await getPostOrThrow(postId);
+
+  if (!DIRECT_PUBLISHABLE_STATUSES.includes(existing.status)) {
+    throw new AuthorisationError(
+      `A post in ${existing.status.replace(/_/g, " ").toLowerCase()} status cannot be published now.`,
+    );
+  }
+
+  if (existing.targets.length === 0) {
+    throw new AuthorisationError("Select at least one connected account before publishing.");
+  }
+
+  // Already-PUBLISHED targets are left untouched — calling this again on
+  // a PARTIALLY_PUBLISHED or FAILED post retries only what didn't
+  // succeed, never reposts something that already went out.
+  const eligibleTargets = existing.targets.filter((target) => target.status !== SocialPostTargetStatus.PUBLISHED);
+
+  if (eligibleTargets.length === 0) {
+    throw new AuthorisationError("Every connected destination for this post has already published.");
+  }
+
+  const now = new Date();
+  const skippedReview = existing.status === SocialPostStatus.DRAFT || existing.status === SocialPostStatus.CHANGES_REQUESTED;
+  const skippedApproval = skippedReview || existing.status === SocialPostStatus.PENDING_REVIEW;
+
+  await prisma.$transaction([
+    prisma.socialPost.update({
+      where: { id: postId },
+      data: { status: SocialPostStatus.SCHEDULED, scheduledAt: now, reviewedById: identity.admin.id, reviewNotes: null },
+    }),
+    prisma.socialPostPlatform.updateMany({
+      where: { id: { in: eligibleTargets.map((target) => target.id) } },
+      data: { status: SocialPostTargetStatus.SCHEDULED, scheduledAt: now },
+    }),
+  ]);
+
+  if (skippedReview) {
+    await logPostActivity(postId, identity.admin.id, SocialPostActivityType.SUBMITTED, "Submitted for review (via Publish Now)");
+  }
+  if (skippedApproval) {
+    await logPostActivity(postId, identity.admin.id, SocialPostActivityType.APPROVED, "Approved (via Publish Now)");
+  }
+  await logPostActivity(postId, identity.admin.id, SocialPostActivityType.SCHEDULED, "Publishing now");
+
+  return { targetIds: eligibleTargets.map((target) => target.id) };
+}
+
+/* ============================================================================
    CAMPAIGNS
 ============================================================================ */
 
