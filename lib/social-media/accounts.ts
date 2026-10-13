@@ -218,6 +218,28 @@ export type PlatformTokenResponse = {
   token_type?: string;
 };
 
+/**
+ * Shared by both the authorization_code exchange and the refresh_token
+ * grant below — a confidential client authenticates the same way on
+ * every call to the token endpoint, regardless of grant_type. Returns
+ * the extra request headers, and whether client_secret should still be
+ * included as a body field (never both places at once).
+ */
+function tokenEndpointAuth(
+  config: PlatformOAuthConfig,
+  clientId: string,
+  clientSecret: string,
+): { headers: Record<string, string>; includeSecretInBody: boolean } {
+  if (config.tokenAuthMethod === "basic") {
+    return {
+      headers: { Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}` },
+      includeSecretInBody: false,
+    };
+  }
+
+  return { headers: {}, includeSecretInBody: true };
+}
+
 export async function exchangeAuthorisationCode(
   platform: SocialPlatform,
   code: string,
@@ -225,17 +247,14 @@ export async function exchangeAuthorisationCode(
 ): Promise<PlatformTokenResponse> {
   const { config, clientId, clientSecret, redirectUri } = requireConfig(platform);
 
-  const useBasicAuth = config.tokenAuthMethod === "basic";
+  const { headers: authHeaders, includeSecretInBody } = tokenEndpointAuth(config, clientId, clientSecret);
 
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
     redirect_uri: redirectUri,
     [config.clientIdParam]: clientId,
-    // Basic-auth platforms (X) authenticate the confidential client via
-    // the Authorization header below instead — sending client_secret in
-    // both places is unnecessary and some token endpoints reject it.
-    ...(useBasicAuth ? {} : { client_secret: clientSecret }),
+    ...(includeSecretInBody ? { client_secret: clientSecret } : {}),
   });
 
   if (config.flow === "pkce") {
@@ -243,14 +262,9 @@ export async function exchangeAuthorisationCode(
     body.set("code_verifier", pkceVerifier);
   }
 
-  const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
-  if (useBasicAuth) {
-    headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-  }
-
   const response = await fetch(config.tokenUrl, {
     method: "POST",
-    headers,
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", ...authHeaders },
     body,
   });
 
@@ -444,22 +458,24 @@ export async function getValidSocialAccessToken(accountId: string): Promise<stri
   try {
     const config = PLATFORM_CONFIG[account.platform];
     const { clientId, clientSecret } = requireConfig(account.platform);
+    const { headers: authHeaders, includeSecretInBody } = tokenEndpointAuth(config, clientId, clientSecret);
 
     const body = new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: decryptSecret(account.encryptedRefreshToken),
       [config.clientIdParam]: clientId,
-      client_secret: clientSecret,
+      ...(includeSecretInBody ? { client_secret: clientSecret } : {}),
     });
 
     const response = await fetch(config.tokenUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", ...authHeaders },
       body,
     });
 
     if (!response.ok) {
-      throw new Error(`Refresh failed with status ${response.status}`);
+      const text = await response.text().catch(() => "");
+      throw new Error(`Refresh failed with status ${response.status}: ${text.slice(0, 200)}`);
     }
 
     const token = (await response.json()) as PlatformTokenResponse;

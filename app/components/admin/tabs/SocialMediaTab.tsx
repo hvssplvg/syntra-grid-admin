@@ -4280,7 +4280,7 @@ function PostComposer({
                           rel="noreferrer"
                           className="text-[var(--accent)] hover:underline"
                         >
-                          View
+                          View on {platformDefinition(target.platform).name}
                         </a>
                       )}
                     </span>

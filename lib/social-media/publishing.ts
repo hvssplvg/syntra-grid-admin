@@ -4,17 +4,20 @@
 // and the PublishAdapter interface real provider integrations plug into.
 //
 // No adapter here fabricates success. LinkedIn personal-profile posting
-// (LinkedInAdapter) and Instagram publishing (InstagramAdapter) are real
-// adapters that call the provider's actual API and only report success
-// once the provider confirms a real post/media id. The other 4 platforms
-// are still stub adapters that resolve to a real failure with an honest,
-// specific reason — either "platform not configured" (no OAuth app
+// (LinkedInAdapter), Instagram publishing (InstagramAdapter) and X/Twitter
+// publishing (XAdapter, text + up to 4 images) are real adapters that call
+// the provider's actual API and only report success once the provider
+// confirms a real post/media id. The other 3 platforms (Facebook, TikTok,
+// YouTube) are still stub adapters that resolve to a real failure with an
+// honest, specific reason — either "platform not configured" (no OAuth app
 // registered) or "account not connected" (no valid token) — because that
 // is genuinely the current state in every environment without real
 // provider credentials for them. Each of those is real, substantial,
-// platform-specific work (X's media-upload-then-tweet flow, YouTube's
-// resumable upload, etc.) that plugs in the same way without touching
-// the job-runner orchestration below.
+// platform-specific work (YouTube's resumable upload, etc.) that plugs in
+// the same way without touching the job-runner orchestration below.
+// X video publishing specifically is also not implemented (needs X's
+// chunked INIT/APPEND/FINALIZE media upload) — XAdapter rejects a video
+// attachment with an honest error rather than silently dropping it.
 
 import { prisma } from "@/lib/prisma";
 import {
@@ -540,6 +543,209 @@ class InstagramAdapter implements PublishAdapter {
 }
 
 registerPublishAdapter(SocialPlatform.INSTAGRAM, new InstagramAdapter());
+
+/* ============================================================================
+   X (TWITTER) — real publishing via API v2's POST /2/tweets, authenticated
+   with the connected account's own OAuth 2.0 user access token (never an
+   app-only bearer token — that can't post on a user's behalf at all).
+
+   Scope required: tweet.write (already requested at connect time — see
+   lib/social-media/accounts.ts PLATFORM_CONFIG.X), plus tweet.read /
+   users.read / offline.access for profile lookup and token refresh.
+
+   Media: images only, via the v1.1 media upload endpoint
+   (upload.twitter.com) — this is still the current, documented way an
+   OAuth 2.0 user-context app uploads media for a v2 Tweet; v2 has no
+   separate media-upload endpoint of its own. Only the SIMPLE (single
+   request, <=5MB) upload path is implemented — X's chunked
+   INIT/APPEND/FINALIZE flow (required for video and large GIFs) is NOT
+   implemented, so video assets are rejected with an honest error rather
+   than silently dropped or falsely reported as published. Up to 4 images
+   per Tweet, X's own documented limit.
+============================================================================ */
+
+const X_API_BASE = "https://api.x.com";
+const X_MEDIA_UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json";
+const X_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const X_MAX_IMAGES_PER_POST = 4;
+const X_SUPPORTED_IMAGE_TYPES: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+class XApiError extends Error {
+  constructor(public status: number, public title: string | undefined, public detail: string | undefined, rawBody: string) {
+    super(detail || title || `X API error ${status}: ${rawBody.slice(0, 300)}`);
+  }
+}
+
+/** X v2 errors arrive as either RFC7807 problem details ({title, detail})
+ *  or a legacy {errors: [{message}]} array — never guess a reason beyond
+ *  what the response actually says. */
+async function xFetch(url: string, init: RequestInit): Promise<Record<string, unknown>> {
+  const response = await fetch(url, init);
+  const text = await response.text();
+
+  let json: Record<string, unknown> | null = null;
+  try {
+    json = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+  } catch {
+    // Non-JSON body — handled by the !response.ok branch below.
+  }
+
+  if (!response.ok) {
+    const title = typeof json?.title === "string" ? json.title : undefined;
+    const detail = typeof json?.detail === "string" ? json.detail : undefined;
+    const legacyMessage = Array.isArray(json?.errors)
+      ? (json!.errors as Array<{ message?: string }>).map((entry) => entry.message).filter(Boolean).join("; ")
+      : undefined;
+    throw new XApiError(response.status, title, detail ?? legacyMessage, text);
+  }
+
+  return json ?? {};
+}
+
+/** Simple (non-chunked) image upload — X's documented path for a single
+ *  request under 5MB, which covers ordinary social-post images. Fetches
+ *  the asset's existing Cloudinary URL (never a local path) and forwards
+ *  its real bytes; the Content-Type returned by that fetch is what gets
+ *  validated against X's supported formats, not the asset's own `type`
+ *  column (which only distinguishes IMAGE/VIDEO, not file format). */
+async function uploadXImage(token: string, asset: SocialMediaAsset): Promise<string> {
+  if (asset.fileSizeBytes && asset.fileSizeBytes > X_MAX_IMAGE_BYTES) {
+    throw new Error(`Image exceeds X's 5MB limit (${(asset.fileSizeBytes / (1024 * 1024)).toFixed(1)}MB).`);
+  }
+
+  const assetResponse = await fetch(asset.url);
+  if (!assetResponse.ok) {
+    throw new Error(`Could not fetch the attached image for upload (${assetResponse.status}).`);
+  }
+
+  const contentType = assetResponse.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+  const extension = X_SUPPORTED_IMAGE_TYPES[contentType];
+  if (!extension) {
+    throw new Error(`X does not support this image format (${contentType || "unknown"}). Use JPEG, PNG or WebP.`);
+  }
+
+  const bytes = Buffer.from(await assetResponse.arrayBuffer());
+  if (bytes.byteLength > X_MAX_IMAGE_BYTES) {
+    throw new Error(`Image exceeds X's 5MB limit (${(bytes.byteLength / (1024 * 1024)).toFixed(1)}MB).`);
+  }
+
+  const form = new FormData();
+  form.append("media", new Blob([bytes], { type: contentType }), `image.${extension}`);
+
+  const json = await xFetch(X_MEDIA_UPLOAD_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+
+  if (typeof json.media_id_string !== "string") {
+    throw new Error("X did not confirm a media id for this upload.");
+  }
+
+  return json.media_id_string;
+}
+
+async function createXPost(token: string, text: string, mediaIds: string[]): Promise<string> {
+  const body: Record<string, unknown> = { text };
+  if (mediaIds.length > 0) {
+    body.media = { media_ids: mediaIds };
+  }
+
+  const json = await xFetch(`${X_API_BASE}/2/tweets`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const data = json.data as { id?: string } | undefined;
+  if (!data?.id) {
+    throw new Error("X did not confirm a post id for this request.");
+  }
+
+  return data.id;
+}
+
+class XAdapter implements PublishAdapter {
+  async publish(params: PublishParams): Promise<PublishResult> {
+    if (!isPlatformConfigured(SocialPlatform.X)) {
+      return { ok: false, error: `${PLATFORM_CONFIG.X.label} is not configured.` };
+    }
+
+    const account = await prisma.socialAccount.findUnique({ where: { id: params.accountId } });
+    if (!account || account.platform !== SocialPlatform.X) {
+      return { ok: false, error: "This X account is no longer connected." };
+    }
+
+    const videoAssets = params.assets.filter((asset) => asset.type === "VIDEO");
+    if (videoAssets.length > 0) {
+      return {
+        ok: false,
+        error: "Video publishing to X is not implemented yet — remove the video or post with images only.",
+      };
+    }
+
+    const imageAssets = params.assets.filter((asset) => asset.type === "IMAGE").slice(0, X_MAX_IMAGES_PER_POST);
+    if (params.assets.length > imageAssets.length) {
+      return { ok: false, error: `X allows at most ${X_MAX_IMAGES_PER_POST} images per post.` };
+    }
+
+    let token: string;
+    try {
+      token = await getValidSocialAccessToken(params.accountId);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Account is not connected." };
+    }
+
+    try {
+      const mediaIds: string[] = [];
+      for (const asset of imageAssets) {
+        // Uploaded one at a time, not Promise.all — if an upload fails
+        // partway through, no Tweet is ever created (see the catch below),
+        // so there's nothing to clean up on X's side either way.
+        mediaIds.push(await uploadXImage(token, asset));
+      }
+
+      const id = await createXPost(token, params.caption, mediaIds);
+      const handle = account.username;
+      const remotePostUrl = handle ? `https://x.com/${encodeURIComponent(handle)}/status/${id}` : undefined;
+
+      return { ok: true, remotePostId: id, remotePostUrl };
+    } catch (error) {
+      if (error instanceof XApiError) {
+        if (error.status === 401) {
+          await markAccountError(params.accountId, error.message);
+          return { ok: false, error: "Your X connection has expired and needs to be reconnected." };
+        }
+
+        if (error.title === "UsageCapExceeded" || /cap|credit/i.test(error.detail ?? "")) {
+          return { ok: false, error: "X API credits are insufficient — the usage cap for this billing period has been reached." };
+        }
+
+        if (error.status === 429) {
+          return { ok: false, error: "X API rate limit reached — this will be retried on the next scheduled run." };
+        }
+
+        if (error.status === 403) {
+          return { ok: false, error: `X rejected this post: ${error.detail ?? error.title ?? "insufficient permission for this action."}` };
+        }
+
+        return { ok: false, error: `X rejected this post: ${error.message}` };
+      }
+
+      if (error instanceof Error && /fetch the attached image|does not support this image format|exceeds X's 5MB/.test(error.message)) {
+        return { ok: false, error: `Image upload failed: ${error.message}` };
+      }
+
+      return { ok: false, error: error instanceof Error ? error.message : "X publishing failed." };
+    }
+  }
+}
+
+registerPublishAdapter(SocialPlatform.X, new XAdapter());
 
 /* ============================================================================
    JOB RUNNER — called by the cron route, mirrors app/api/cron/monzo/route.ts's
