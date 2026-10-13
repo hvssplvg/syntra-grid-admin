@@ -29,6 +29,7 @@ import {
   Lock,
   Maximize2,
   Megaphone,
+  MessageSquareText,
   Minimize2,
   Minus,
   Moon,
@@ -127,6 +128,10 @@ type OverviewTabProps = {
   };
   identity?: OverviewIdentity;
   onNavigate?: (destination: Destination) => void;
+  /** Opens the internal messaging workspace (?workspace=messages) — not
+   *  a Destination/AdminTab, since "messages" is already the existing
+   *  client-support tab's key. Handled separately from onNavigate. */
+  onOpenMessages?: () => void;
 };
 
 type DashboardRole = "admin" | "finance" | "employee";
@@ -1650,6 +1655,131 @@ function useNotificationsFeed(enabled: boolean) {
   return { items, unreadCount, status, markRead, markAllRead };
 }
 
+/* =============================================================================
+   MESSAGES ENTRY CARD
+
+   Internal employee messaging lives in its own full-width workspace
+   (?workspace=messages), opened via onOpenMessages — see AdminHome.tsx.
+   This card is Command Overview's entry point into it: real unread
+   count and a real last-message preview, both derived from the actual
+   conversations the signed-in AdminUser belongs to. Deliberately not a
+   WIDGET_META entry — it's a fixed, always-visible card rather than
+   another draggable/collapsible widget.
+============================================================================= */
+
+type MessagesSummaryConversation = {
+  id: string;
+  type: "DIRECT" | "GROUP";
+  name: string | null;
+  lastMessageAt: string | null;
+  members: { adminUser: { id: string; firstName: string | null; lastName: string | null; email: string } }[];
+  messages: { body: string | null; senderId: string; deletedAt: string | null }[];
+};
+
+function useMessagesSummary() {
+  const [unreadConversations, setUnreadConversations] = useState(0);
+  const [latest, setLatest] = useState<MessagesSummaryConversation | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+
+  const load = useCallback(() => {
+    Promise.all([
+      fetch("/api/admin/chat/unread-count", { credentials: "include", cache: "no-store" }).then((response) => response.json()),
+      fetch("/api/admin/chat/conversations?limit=1", { credentials: "include", cache: "no-store" }).then((response) => response.json()),
+    ])
+      .then(([unread, conversations]: [{ ok?: boolean; unreadConversations?: number }, { ok?: boolean; conversations?: MessagesSummaryConversation[] }]) => {
+        if (!unread?.ok) {
+          setStatus("error");
+          return;
+        }
+        setUnreadConversations(unread.unreadConversations ?? 0);
+        setLatest(conversations?.ok ? conversations.conversations?.[0] ?? null : null);
+        setStatus("ready");
+      })
+      .catch(() => setStatus("error"));
+  }, []);
+
+  useEffect(() => {
+    load();
+    const interval = window.setInterval(() => void load(), 30_000);
+    const onFocus = () => void load();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [load]);
+
+  return { unreadConversations, latest, status };
+}
+
+function conversationDisplayName(conversation: MessagesSummaryConversation, selfId: string | null | undefined): string {
+  if (conversation.type === "GROUP") return conversation.name ?? "Group";
+  const other = conversation.members.find((member) => member.adminUser.id !== selfId)?.adminUser;
+  if (!other) return "Conversation";
+  return [other.firstName, other.lastName].filter(Boolean).join(" ") || other.email;
+}
+
+function MessagesEntryCard({ admin, onOpen }: { admin?: OverviewTabProps["admin"]; onOpen?: () => void }) {
+  const { unreadConversations, latest, status } = useMessagesSummary();
+
+  const lastMessage = latest?.messages?.[0] ?? null;
+  const preview = !latest
+    ? null
+    : lastMessage
+      ? lastMessage.deletedAt
+        ? "This message was deleted."
+        : lastMessage.body?.trim() || "Sent an attachment"
+      : "No messages yet";
+
+  return (
+    <section className="sgo-card" style={{ marginBottom: 14 }}>
+      <header className="sgo-card-head">
+        <h2 className="sgo-card-title" style={{ margin: 0 }}>
+          <span className="sgo-card-icon">
+            <MessageSquareText size={15} />
+          </span>
+          <span className="sgo-truncate">Messages</span>
+        </h2>
+        <button type="button" className="sgo-link" onClick={onOpen}>
+          Open Messages
+          <ChevronRight size={13} />
+        </button>
+      </header>
+
+      <p className="sgo-soft" style={{ margin: 0, fontSize: 12 }}>
+        Stay connected with your team.
+      </p>
+
+      {status === "loading" ? (
+        <p className="sgo-muted" style={{ margin: "10px 0 0", fontSize: 12 }}>
+          Loading…
+        </p>
+      ) : !latest ? (
+        <p className="sgo-muted" style={{ margin: "10px 0 0", fontSize: 12 }}>
+          No conversations yet — start one with a teammate.
+        </p>
+      ) : (
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ minWidth: 0 }}>
+            <p style={{ margin: 0, fontSize: 12, fontWeight: 650 }} className="sgo-truncate">
+              {conversationDisplayName(latest, admin?.id)}
+            </p>
+            <p className="sgo-muted sgo-truncate" style={{ margin: "2px 0 0", fontSize: 11.5 }}>
+              {preview}
+            </p>
+          </div>
+
+          {unreadConversations > 0 ? (
+            <span className="sgo-badge" style={{ background: "var(--accent-tint)", color: "var(--accent-strong)" }}>
+              {unreadConversations} unread
+            </span>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
 type SocialMediaSummary = {
   postsByStatus: Record<string, number>;
   connectedAccounts: number;
@@ -2778,7 +2908,7 @@ const SlotContext = createContext<SlotState>({
    MAIN COMPONENT
 ============================================================================= */
 
-export default function OverviewTab({ admin, identity, onNavigate }: OverviewTabProps) {
+export default function OverviewTab({ admin, identity, onNavigate, onOpenMessages }: OverviewTabProps) {
   const now = useNow(15_000);
   const reducedMotion = useReducedMotionPreference();
 
@@ -3898,6 +4028,8 @@ export default function OverviewTab({ admin, identity, onNavigate }: OverviewTab
             </button>
           </div>
         ) : null}
+
+        {onOpenMessages ? <MessagesEntryCard admin={admin} onOpen={onOpenMessages} /> : null}
 
         {/* Widgets */}
         <div ref={editorGridRef} className="sgo-grid">

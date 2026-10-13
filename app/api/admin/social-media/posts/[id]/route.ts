@@ -6,7 +6,7 @@ import {
   assertSocialMediaRowAccess,
   requireSocialMediaPermission,
 } from "@/lib/social-media/permissions";
-import { deletePost, getPostOrThrow, updatePost, type PostTargetInput } from "@/lib/social-media/server";
+import { deletePost, getPostOrThrow, updatePost, PostDeletionConflictError, type PostTargetInput } from "@/lib/social-media/server";
 import { SocialMediaPlacement } from "@/app/generated/prisma/enums";
 
 export const runtime = "nodejs";
@@ -17,6 +17,9 @@ function errorResponse(error: unknown) {
 
   if (error instanceof AuthenticationError) return NextResponse.json({ ok: false, error: error.message }, { status: 401 });
   if (error instanceof AuthorisationError) return NextResponse.json({ ok: false, error: error.message }, { status: 403 });
+  if (error instanceof PostDeletionConflictError) {
+    return NextResponse.json({ ok: false, error: error.message, code: error.code }, { status: 409 });
+  }
 
   return NextResponse.json({ ok: false, error: "Something went wrong." }, { status: 500 });
 }
@@ -86,7 +89,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   }
 }
 
-export async function DELETE(_request: NextRequest, { params }: Params) {
+export async function DELETE(request: NextRequest, { params }: Params) {
   try {
     const identity = await requireSocialMediaPermission(AccessAction.MANAGE);
     const { id } = await params;
@@ -94,7 +97,10 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
     const existing = await getPostOrThrow(id);
     assertSocialMediaRowAccess(identity, AccessAction.MANAGE, { createdById: existing.createdById });
 
-    await deletePost(id);
+    const body = await request.json().catch(() => null);
+    const confirmPublishedRemoval = Boolean(body && typeof body === "object" && (body as Record<string, unknown>).confirmPublishedRemoval === true);
+
+    await deletePost(identity, id, { confirmPublishedRemoval });
 
     return NextResponse.json({ ok: true });
   } catch (error) {

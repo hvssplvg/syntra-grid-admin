@@ -1,9 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { AuthenticationError, AuthorisationError, getCurrentIdentity } from "@/lib/auth/current-admin";
 import { syncAndListNotifications } from "@/lib/notifications/server";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 /* ============================================================================
    GET /api/admin/overview/notifications
@@ -13,14 +14,24 @@ export const runtime = "nodejs";
    restricted callers are scoped (currently: pending leave approvals she
    is actually a manager for; expands safely as more modules are added
    there, never by editing this route).
+
+   ?limit=&cursor=&filter=unread — used by both the header dropdown
+   (small limit, no filter) and the dedicated "View all notifications"
+   workspace (paginated, optional unread-only filter).
 ============================================================================ */
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const identity = await getCurrentIdentity();
-    const { items, unreadCount } = await syncAndListNotifications(identity, 20);
 
-    return NextResponse.json({ ok: true, items, unreadCount });
+    const params = request.nextUrl.searchParams;
+    const limit = params.get("limit") ? Number(params.get("limit")) : undefined;
+    const cursor = params.get("cursor");
+    const filter = params.get("filter") === "unread" ? "unread" : "all";
+
+    const { items, unreadCount, nextCursor } = await syncAndListNotifications(identity, { limit, cursor, filter });
+
+    return NextResponse.json({ ok: true, items, unreadCount, nextCursor });
   } catch (error) {
     console.error("[admin/overview/notifications]", error);
 

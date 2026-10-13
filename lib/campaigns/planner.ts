@@ -13,6 +13,7 @@ import { CampaignActivityType, CampaignMilestoneStatus, CampaignTaskStatus } fro
 import type { ResolvedIdentity } from "@/lib/campaigns/permissions";
 import { logCampaignActivity } from "@/lib/campaigns/activity";
 import { getCampaignOrThrow } from "@/lib/campaigns/server";
+import { createNotification, NotificationType } from "@/lib/notifications/create";
 
 const EMPLOYEE_SELECT = { id: true, firstName: true, lastName: true, jobTitle: true, avatarUrl: true } as const;
 const ADMIN_SELECT = { id: true, firstName: true, lastName: true, email: true } as const;
@@ -274,7 +275,41 @@ export async function createCampaignTask(identity: ResolvedIdentity, campaignId:
 
   await logCampaignActivity(campaignId, identity.admin.id, CampaignActivityType.TASK_CREATED, `Task "${task.title}" created.`);
 
+  if (task.assigneeId) {
+    await notifyCampaignTaskAssigned(identity.admin.id, task.id, task.title, task.campaignId, task.assigneeId);
+  }
+
   return task;
+}
+
+/** Notification failure must never fail task creation/assignment — this
+ *  is called after the real write has already committed. Skipped
+ *  silently if the assignee has no linked dashboard account. */
+async function notifyCampaignTaskAssigned(
+  actorId: string,
+  taskId: string,
+  taskTitle: string,
+  campaignId: string,
+  assigneeEmployeeId: string,
+) {
+  const [employee, campaign] = await Promise.all([
+    prisma.employee.findUnique({ where: { id: assigneeEmployeeId }, select: { adminUserId: true } }),
+    prisma.campaign.findUnique({ where: { id: campaignId }, select: { name: true } }),
+  ]);
+
+  if (!employee?.adminUserId) return;
+
+  await createNotification({
+    recipientAdminUserId: employee.adminUserId,
+    actorId,
+    type: NotificationType.CAMPAIGN_TASK_ASSIGNED,
+    title: `You were assigned a task — ${taskTitle}`,
+    body: campaign ? `Campaign: ${campaign.name}` : null,
+    module: "campaigns",
+    entityType: "CampaignTask",
+    entityId: taskId,
+    sourceKey: `campaign_task_assigned:${taskId}:${employee.adminUserId}`,
+  });
 }
 
 async function getTaskOrThrow(campaignId: string, taskId: string) {
@@ -318,6 +353,10 @@ export async function updateCampaignTask(
 
   if (input.status === "COMPLETED" && existing.status !== "COMPLETED") {
     await logCampaignActivity(campaignId, identity.admin.id, CampaignActivityType.TASK_COMPLETED, `Task "${task.title}" completed.`);
+  }
+
+  if (input.assigneeId && input.assigneeId !== existing.assigneeId) {
+    await notifyCampaignTaskAssigned(identity.admin.id, task.id, task.title, task.campaignId, input.assigneeId);
   }
 
   return task;

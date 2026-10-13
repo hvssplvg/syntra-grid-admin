@@ -1,13 +1,11 @@
 'use client';
 
-import {
-  Clock3,
-} from 'lucide-react';
-
 import type {
   AdminSection,
   AdminTabDefinition,
 } from './adminNav';
+
+import { ModuleStatusBadge } from './ui/ModuleStatusBadge';
 
 /* ============================================================================
    TYPES
@@ -132,7 +130,7 @@ export default function AdminPageIdentity({
                 {tab.title}
               </h1>
 
-              <ModuleStatus
+              <ModuleStatusBadge
                 status={tab.status}
               />
             </div>
@@ -202,88 +200,3 @@ export default function AdminPageIdentity({
   );
 }
 
-/* ============================================================================
-   MODULE STATUS
-============================================================================ */
-
-function ModuleStatus({
-  status = 'planned',
-}: {
-  status?: 'live' | 'planned';
-}) {
-  if (status === 'live') {
-    return (
-      <span
-        className="
-          inline-flex
-          shrink-0
-          items-center
-          gap-1.5
-
-          rounded-full
-
-          border
-          border-[var(--success)]/15
-
-          bg-[var(--success-soft)]
-
-          px-2
-          py-1
-
-          text-[7px]
-          font-bold
-          uppercase
-          tracking-[0.08em]
-
-          text-[var(--success)]
-        "
-      >
-        <span
-          className="
-            h-1.5
-            w-1.5
-            rounded-full
-            bg-[var(--success)]
-          "
-        />
-
-        Live
-      </span>
-    );
-  }
-
-  return (
-    <span
-      className="
-        inline-flex
-        shrink-0
-        items-center
-        gap-1.5
-
-        rounded-full
-
-        border
-        border-[var(--line)]
-
-        bg-[var(--surface-muted)]
-
-        px-2
-        py-1
-
-        text-[7px]
-        font-bold
-        uppercase
-        tracking-[0.08em]
-
-        text-[var(--text-subtle)]
-      "
-    >
-      <Clock3
-        size={8}
-        strokeWidth={2}
-      />
-
-      Soon
-    </span>
-  );
-}

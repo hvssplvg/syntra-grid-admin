@@ -300,18 +300,95 @@ export async function updatePost(identity: ResolvedIdentity, postId: string, inp
   return getPostOrThrow(postId);
 }
 
-const DELETABLE_STATUSES: SocialPostStatus[] = [SocialPostStatus.DRAFT, SocialPostStatus.CANCELLED, SocialPostStatus.FAILED];
+/**
+ * Deletion is allowed for every status except PUBLISHING (actively
+ * racing a cron/"Publish Now" call) and PUBLISHED/PARTIALLY_PUBLISHED
+ * (requires an explicit separate confirmation, since the post already
+ * exists on the external platform and we never claim to remove it
+ * there too). A past-due scheduledAt has no bearing on any of this —
+ * only SocialPost.status matters.
+ */
+export class PostDeletionConflictError extends Error {
+  code: "CURRENTLY_PUBLISHING" | "REQUIRES_PUBLISHED_CONFIRMATION";
 
-export async function deletePost(postId: string) {
+  constructor(message: string, code: "CURRENTLY_PUBLISHING" | "REQUIRES_PUBLISHED_CONFIRMATION") {
+    super(message);
+    this.code = code;
+  }
+}
+
+const CANCEL_THEN_DELETE_STATUSES: SocialPostStatus[] = [
+  SocialPostStatus.PENDING_REVIEW,
+  SocialPostStatus.CHANGES_REQUESTED,
+  SocialPostStatus.APPROVED,
+  SocialPostStatus.SCHEDULED,
+];
+
+const PUBLISHED_STATUSES: SocialPostStatus[] = [SocialPostStatus.PUBLISHED, SocialPostStatus.PARTIALLY_PUBLISHED];
+
+export async function deletePost(
+  identity: ResolvedIdentity,
+  postId: string,
+  options?: { confirmPublishedRemoval?: boolean },
+) {
   const existing = await getPostOrThrow(postId);
 
-  if (!DELETABLE_STATUSES.includes(existing.status)) {
-    throw new AuthorisationError(
-      `A post in ${existing.status.replace(/_/g, " ").toLowerCase()} status cannot be deleted. Cancel it first.`,
+  if (existing.status === SocialPostStatus.PUBLISHING) {
+    throw new PostDeletionConflictError(
+      "This post is currently publishing and can't be deleted yet. Try again in a moment.",
+      "CURRENTLY_PUBLISHING",
     );
   }
 
-  await prisma.socialPost.delete({ where: { id: postId } });
+  if (PUBLISHED_STATUSES.includes(existing.status) && !options?.confirmPublishedRemoval) {
+    throw new PostDeletionConflictError(
+      "This post has already been published. Confirm removal to continue — this will not delete it from the connected social platform.",
+      "REQUIRES_PUBLISHED_CONFIRMATION",
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // Re-check status inside the transaction: closes the window between
+    // the read above and this write, so a cron/"Publish Now" claim that
+    // lands in between is not blown away mid-flight.
+    const current = await tx.socialPost.findUniqueOrThrow({ where: { id: postId }, select: { status: true } });
+
+    if (current.status === SocialPostStatus.PUBLISHING) {
+      throw new PostDeletionConflictError(
+        "This post started publishing just now and can't be deleted yet. Try again in a moment.",
+        "CURRENTLY_PUBLISHING",
+      );
+    }
+
+    if (CANCEL_THEN_DELETE_STATUSES.includes(current.status)) {
+      await tx.socialPostPlatform.updateMany({
+        where: { postId, status: { in: [SocialPostTargetStatus.PENDING, SocialPostTargetStatus.SCHEDULED] } },
+        data: { status: SocialPostTargetStatus.CANCELLED },
+      });
+    }
+
+    await tx.socialPost.delete({ where: { id: postId } });
+
+    await tx.auditLog.create({
+      data: {
+        actorId: identity.admin.id,
+        action: PUBLISHED_STATUSES.includes(existing.status) ? "SOCIAL_POST_REMOVED_PUBLISHED" : "SOCIAL_POST_DELETED",
+        entityType: "SOCIAL_POST",
+        entityId: postId,
+        metadata: {
+          status: existing.status,
+          title: existing.title,
+          scheduledAt: existing.scheduledAt,
+          targets: existing.targets.map((target) => ({
+            platform: target.platform,
+            status: target.status,
+            remotePostId: target.remotePostId,
+            remotePostUrl: target.remotePostUrl,
+          })),
+        },
+      },
+    });
+  });
 }
 
 export async function duplicatePost(identity: ResolvedIdentity, postId: string) {

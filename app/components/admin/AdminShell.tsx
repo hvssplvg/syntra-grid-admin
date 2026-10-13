@@ -67,6 +67,11 @@ export type AdminShellProps = {
   navigationDirection:
     NavigationDirection;
 
+  onOpenNotificationsWorkspace: () => void;
+  onOpenMyAccount: () => void;
+  onOpenMessagesConversation?: (conversationId: string | null) => void;
+  isMessagesWorkspaceOpen?: boolean;
+
   children: ReactNode;
 };
 
@@ -183,6 +188,10 @@ export default function AdminShell({
   sections,
   isFullAccess = true,
   navigationDirection,
+  onOpenNotificationsWorkspace,
+  onOpenMyAccount,
+  onOpenMessagesConversation,
+  isMessagesWorkspaceOpen,
   children,
 }: AdminShellProps) {
   /* --------------------------------------------------------------------------
@@ -903,6 +912,10 @@ export default function AdminShell({
               isFullAccess={
                 isFullAccess
               }
+              onOpenNotificationsWorkspace={onOpenNotificationsWorkspace}
+              onOpenMyAccount={onOpenMyAccount}
+              onOpenMessagesConversation={onOpenMessagesConversation}
+              isMessagesWorkspaceOpen={isMessagesWorkspaceOpen}
             />
           </div>
 

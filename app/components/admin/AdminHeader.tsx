@@ -24,6 +24,7 @@ import {
   Bell,
   Building2,
   Check,
+  CheckCheck,
   ChevronDown,
   Command,
   LoaderCircle,
@@ -33,8 +34,11 @@ import {
   Search,
   Settings,
   Sun,
+  Trash2,
   UserRound,
   Users,
+  Volume2,
+  VolumeX,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -46,11 +50,23 @@ import type {
 } from "./adminNav";
 
 import {
+  isAdminTab,
   isCommandSection,
   shouldShowSectionTabBar,
 } from "./adminNav";
 
 import { useAdminTheme } from "./AdminThemeProvider";
+import { ModuleStatusBadge } from "./ui/ModuleStatusBadge";
+import {
+  dismissNotification as dismissNotificationApi,
+  fetchNotifications,
+  fetchUnreadNotificationCount,
+  markAllNotificationsRead as markAllNotificationsReadApi,
+  markNotificationRead as markNotificationReadApi,
+  type NotificationItem,
+} from "./notifications/api";
+import { claimNotificationSoundSlot, playNotificationChime, unlockNotificationAudio } from "./notifications/sound";
+import { fetchMyNotificationPreferences, updateMyNotificationPreferences } from "./account/api";
 
 /* =============================================================================
    TYPES
@@ -63,6 +79,14 @@ type AdminHeaderProps = {
   activeTab: AdminTab;
   onTabSelect: (tab: AdminTab) => void;
   isFullAccess?: boolean;
+  onOpenNotificationsWorkspace: () => void;
+  onOpenMyAccount: () => void;
+  /** Opens the messaging workspace with a specific conversation
+   *  pre-selected — used by message-notification click-through. */
+  onOpenMessagesConversation?: (conversationId: string | null) => void;
+  /** Reduces notification-sound noise while the employee is actively in
+   *  the messaging workspace — see NotificationsMenu's sound hook. */
+  isMessagesWorkspaceOpen?: boolean;
 };
 
 type SearchResult = {
@@ -214,6 +238,139 @@ async function fetchCurrentProfile(
 }
 
 /* =============================================================================
+   NOTIFICATION CENTRE
+
+   Polls the real endpoints (app/api/admin/overview/notifications/**).
+   Sound correctness rules (see app/components/admin/notifications/sound.ts
+   and the plan this was built from):
+   - The first successful fetch only ever sets the "seen" baseline —
+     never plays a sound for notifications that already existed.
+   - A sound only ever fires for an item whose createdAt is newer than
+     that baseline, so marking read (which never changes createdAt)
+     can't trigger one, and a poll with nothing new is always silent.
+   - At most one chime per poll tick, regardless of how many new items
+     arrived.
+   - Suppressed for the caller's own actions (actorId check) and for
+     MESSAGE_RECEIVED while the messages workspace is already open.
+============================================================================= */
+
+function useNotificationCentre(currentAdminUserId: string, isMessagesWorkspaceOpen: boolean) {
+  const [items, setItems] = useState<NotificationItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [soundEnabled, setSoundEnabled] = useState(false);
+
+  const seenBaselineRef = useRef<string | null>(null);
+  const hasBaselineRef = useRef(false);
+  const isMessagesWorkspaceOpenRef = useRef(isMessagesWorkspaceOpen);
+
+  useEffect(() => {
+    isMessagesWorkspaceOpenRef.current = isMessagesWorkspaceOpen;
+  }, [isMessagesWorkspaceOpen]);
+
+  useEffect(() => {
+    fetchMyNotificationPreferences()
+      .then((preferences) => setSoundEnabled(preferences.soundEnabled))
+      .catch(() => {});
+  }, []);
+
+  const refreshUnreadCount = useCallback(() => {
+    fetchUnreadNotificationCount()
+      .then(setUnreadCount)
+      .catch(() => {});
+  }, []);
+
+  const refreshList = useCallback(() => {
+    fetchNotifications({ limit: 8 })
+      .then(({ items: result, unreadCount: count }) => {
+        setItems(result);
+        setUnreadCount(count);
+        setStatus("ready");
+
+        const newest = result[0]?.createdAt ?? null;
+
+        if (!hasBaselineRef.current) {
+          hasBaselineRef.current = true;
+          seenBaselineRef.current = newest;
+          return;
+        }
+
+        const baseline = seenBaselineRef.current;
+
+        if (soundEnabled && baseline) {
+          const genuinelyNew = result.find(
+            (item) =>
+              new Date(item.createdAt).getTime() > new Date(baseline).getTime() &&
+              !item.read &&
+              item.actorId !== currentAdminUserId &&
+              !(item.type === "MESSAGE_RECEIVED" && isMessagesWorkspaceOpenRef.current),
+          );
+
+          if (genuinelyNew && claimNotificationSoundSlot(genuinelyNew.id)) {
+            playNotificationChime();
+          }
+        }
+
+        if (newest) seenBaselineRef.current = newest;
+      })
+      .catch(() => setStatus("error"));
+  }, [soundEnabled, currentAdminUserId]);
+
+  useEffect(() => {
+    refreshUnreadCount();
+
+    const interval = window.setInterval(refreshUnreadCount, 20_000);
+    const onFocus = () => refreshUnreadCount();
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshUnreadCount]);
+
+  const toggleSound = useCallback((next: boolean) => {
+    setSoundEnabled(next);
+    void updateMyNotificationPreferences({ soundEnabled: next }).catch(() => {});
+  }, []);
+
+  const markOneRead = useCallback((id: string) => {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, read: true } : item)));
+    setUnreadCount((current) => Math.max(0, current - 1));
+    void markNotificationReadApi(id).catch(() => {});
+  }, []);
+
+  const markAllRead = useCallback(() => {
+    setItems((current) => current.map((item) => ({ ...item, read: true })));
+    setUnreadCount(0);
+    void markAllNotificationsReadApi().catch(() => {});
+  }, []);
+
+  const dismiss = useCallback((id: string) => {
+    setItems((current) => current.filter((item) => item.id !== id));
+    void dismissNotificationApi(id).catch(() => {});
+  }, []);
+
+  return { items, unreadCount, status, soundEnabled, toggleSound, refreshList, markOneRead, markAllRead, dismiss };
+}
+
+function timeAgo(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/* =============================================================================
    HELPERS
 ============================================================================= */
 
@@ -357,8 +514,14 @@ export default function AdminHeader({
   activeTab,
   onTabSelect,
   isFullAccess = true,
+  onOpenNotificationsWorkspace,
+  onOpenMyAccount,
+  onOpenMessagesConversation,
+  isMessagesWorkspaceOpen = false,
 }: AdminHeaderProps) {
   const { theme, setTheme } = useAdminTheme();
+
+  const notificationCentre = useNotificationCentre(admin.id, isMessagesWorkspaceOpen);
 
   const commandWorkspace =
     isCommandSection(activeSection);
@@ -551,9 +714,6 @@ export default function AdminHeader({
 
   const canOpenSettings =
     hasAccessibleTab(sections, "settings");
-
-  const canOpenNotifications =
-    hasAccessibleTab(sections, "notifications");
 
   const canOpenClients =
     isFullAccess &&
@@ -1332,65 +1492,82 @@ export default function AdminHeader({
               NOTIFICATIONS
           ============================================================ */}
 
-          {canOpenNotifications && (
-            <div
-              ref={notificationsRef}
-              className="relative"
+          <div
+            ref={notificationsRef}
+            className="relative"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                unlockNotificationAudio();
+
+                setNotificationsOpen(
+                  (value) => {
+                    const next = !value;
+                    if (next) notificationCentre.refreshList();
+                    return next;
+                  },
+                );
+
+                setContextOpen(false);
+                setProfileOpen(false);
+              }}
+              aria-label={`Notifications${notificationCentre.unreadCount > 0 ? `, ${notificationCentre.unreadCount} unread` : ""}`}
+              aria-expanded={
+                notificationsOpen
+              }
+              className="
+                relative flex h-9 w-9
+                items-center justify-center
+                rounded-full
+                border border-[var(--line)]
+                bg-[var(--surface)]
+                text-[var(--text-muted)]
+                shadow-sm transition-colors
+                hover:bg-[var(--surface-muted)]
+                hover:text-[var(--text)]
+              "
             >
-              <button
-                type="button"
-                onClick={() => {
-                  setNotificationsOpen(
-                    (value) => !value,
-                  );
+              <Bell
+                size={16}
+                strokeWidth={1.9}
+              />
 
-                  setContextOpen(false);
-                  setProfileOpen(false);
-                }}
-                aria-label="Notifications"
-                aria-expanded={
-                  notificationsOpen
-                }
-                className="
-                  relative flex h-9 w-9
-                  items-center justify-center
-                  rounded-full
-                  border border-[var(--line)]
-                  bg-[var(--surface)]
-                  text-[var(--text-muted)]
-                  shadow-sm transition-colors
-                  hover:bg-[var(--surface-muted)]
-                  hover:text-[var(--text)]
-                "
-              >
-                <Bell
-                  size={16}
-                  strokeWidth={1.9}
-                />
-
-                {isFullAccess && (
-                  <span className="absolute right-[7px] top-[7px] h-1.5 w-1.5 rounded-full bg-[var(--accent)] ring-2 ring-[var(--surface)]" />
-                )}
-              </button>
-
-              {notificationsOpen && (
-                <NotificationsMenu
-                  isFullAccess={
-                    isFullAccess
-                  }
-                  onOpenNotifications={() => {
-                    onTabSelect(
-                      "notifications",
-                    );
-
-                    setNotificationsOpen(
-                      false,
-                    );
-                  }}
-                />
+              {notificationCentre.unreadCount > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[8px] font-bold text-white ring-2 ring-[var(--surface)]">
+                  {notificationCentre.unreadCount > 9 ? "9+" : notificationCentre.unreadCount}
+                </span>
               )}
-            </div>
-          )}
+            </button>
+
+            {notificationsOpen && (
+              <NotificationsMenu
+                items={notificationCentre.items}
+                status={notificationCentre.status}
+                unreadCount={notificationCentre.unreadCount}
+                soundEnabled={notificationCentre.soundEnabled}
+                onToggleSound={notificationCentre.toggleSound}
+                onMarkOneRead={notificationCentre.markOneRead}
+                onMarkAllRead={notificationCentre.markAllRead}
+                onDismiss={notificationCentre.dismiss}
+                onOpenItem={(item) => {
+                  notificationCentre.markOneRead(item.id);
+                  setNotificationsOpen(false);
+
+                  if (item.type === "MESSAGE_RECEIVED") {
+                    onOpenMessagesConversation?.(item.entityId);
+                    return;
+                  }
+
+                  if (isAdminTab(item.module)) onTabSelect(item.module);
+                }}
+                onOpenNotifications={() => {
+                  onOpenNotificationsWorkspace();
+                  setNotificationsOpen(false);
+                }}
+              />
+            )}
+          </div>
 
           {/* ============================================================
               PROFILE
@@ -1480,6 +1657,10 @@ export default function AdminHeader({
                 onThemeChange={
                   setTheme
                 }
+                onMyAccount={() => {
+                  onOpenMyAccount();
+                  setProfileOpen(false);
+                }}
                 onTeam={() => {
                   if (!canOpenTeam) return;
 
@@ -1617,11 +1798,8 @@ export default function AdminHeader({
                       {item.title}
                     </span>
 
-                    {item.status ===
-                      "planned" && (
-                      <span className="rounded-full bg-[var(--surface-muted)] px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
-                        Soon
-                      </span>
+                    {item.status !== "ACTIVE" && (
+                      <ModuleStatusBadge status={item.status} />
                     )}
                   </button>
                 );
@@ -1995,59 +2173,66 @@ function ClientStatusDot({
 ============================================================================= */
 
 function NotificationsMenu({
+  items,
+  status,
+  unreadCount,
+  soundEnabled,
+  onToggleSound,
+  onMarkOneRead,
+  onMarkAllRead,
+  onDismiss,
+  onOpenItem,
   onOpenNotifications,
-  isFullAccess,
 }: {
+  items: NotificationItem[];
+  status: "loading" | "ready" | "error";
+  unreadCount: number;
+  soundEnabled: boolean;
+  onToggleSound: (next: boolean) => void;
+  onMarkOneRead: (id: string) => void;
+  onMarkAllRead: () => void;
+  onDismiss: (id: string) => void;
+  onOpenItem: (item: NotificationItem) => void;
   onOpenNotifications: () => void;
-  isFullAccess: boolean;
 }) {
   return (
-    <div className="absolute right-0 top-[calc(100%+10px)] z-[80] w-[320px] overflow-hidden rounded-[20px] border border-[var(--line)] bg-[var(--surface-elevated)] shadow-[var(--shadow-popover)]">
+    <div className="absolute right-0 top-[calc(100%+10px)] z-[80] w-[340px] overflow-hidden rounded-[20px] border border-[var(--line)] bg-[var(--surface-elevated)] shadow-[var(--shadow-popover)]">
       <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3.5">
-        <div>
-          <p className="text-[12px] font-semibold text-[var(--text)]">
-            Notifications
-          </p>
+        <p className="text-[12px] font-semibold text-[var(--text)]">
+          Notifications
+        </p>
 
-          <p className="mt-0.5 text-[9px] text-[var(--text-muted)]">
-            {isFullAccess
-              ? "Company activity requiring attention"
-              : "Your workspace updates"}
-          </p>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => onToggleSound(!soundEnabled)}
+            aria-label={soundEnabled ? "Mute notification sounds" : "Enable notification sounds"}
+            aria-pressed={soundEnabled}
+            title={soundEnabled ? "Sound on" : "Sound off"}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--text-subtle)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--text)]"
+          >
+            {soundEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
+          </button>
+
+          {unreadCount > 0 && (
+            <button
+              type="button"
+              onClick={onMarkAllRead}
+              className="inline-flex items-center gap-1 rounded-full bg-[var(--accent-tint)] px-2 py-1 text-[8px] font-bold text-[var(--accent)] transition-colors hover:brightness-95"
+            >
+              <CheckCheck size={10} />
+              Mark all read
+            </button>
+          )}
         </div>
-
-        {isFullAccess && (
-          <span className="rounded-full bg-[var(--accent-tint)] px-2 py-1 text-[8px] font-bold text-[var(--accent)]">
-            3 new
-          </span>
-        )}
       </div>
 
-      <div className="p-2">
-        {isFullAccess ? (
-          <>
-            <NotificationItem
-              title="Deployment completed"
-              description="A production deployment completed successfully."
-              time="18m"
-              tone="success"
-            />
-
-            <NotificationItem
-              title="Support request"
-              description="A client support ticket is waiting for review."
-              time="42m"
-              tone="warning"
-            />
-
-            <NotificationItem
-              title="Platform check"
-              description="All connected production systems are responding."
-              time="1h"
-              tone="info"
-            />
-          </>
-        ) : (
+      <div className="max-h-[360px] overflow-y-auto p-2">
+        {status === "loading" ? (
+          <div className="px-4 py-8 text-center">
+            <LoaderCircle size={18} className="mx-auto animate-spin text-[var(--text-subtle)]" />
+          </div>
+        ) : items.length === 0 ? (
           <div className="px-4 py-8 text-center">
             <Bell
               size={19}
@@ -2055,13 +2240,23 @@ function NotificationsMenu({
             />
 
             <p className="mt-3 text-[11px] font-semibold text-[var(--text)]">
-              Your notifications
+              You&apos;re all caught up
             </p>
 
             <p className="mt-1 text-[9px] leading-5 text-[var(--text-muted)]">
-              Open your notifications workspace to see your updates.
+              New activity will show up here.
             </p>
           </div>
+        ) : (
+          items.map((item) => (
+            <NotificationRow
+              key={item.id}
+              item={item}
+              onOpen={() => onOpenItem(item)}
+              onMarkRead={() => onMarkOneRead(item.id)}
+              onDismiss={() => onDismiss(item.id)}
+            />
+          ))
         )}
       </div>
 
@@ -2081,53 +2276,72 @@ function NotificationsMenu({
 }
 
 /* =============================================================================
-   NOTIFICATION ITEM
+   NOTIFICATION ROW
 ============================================================================= */
 
-function NotificationItem({
-  title,
-  description,
-  time,
-  tone,
+function NotificationRow({
+  item,
+  onOpen,
+  onMarkRead,
+  onDismiss,
 }: {
-  title: string;
-  description: string;
-  time: string;
-  tone:
-    | "success"
-    | "warning"
-    | "info";
+  item: NotificationItem;
+  onOpen: () => void;
+  onMarkRead: () => void;
+  onDismiss: () => void;
 }) {
-  const toneClass = {
-    success: "bg-[var(--success)]",
-    warning: "bg-[var(--warning)]",
-    info: "bg-[var(--info)]",
-  }[tone];
-
   return (
-    <div className="flex gap-3 rounded-xl px-2.5 py-3 transition-colors hover:bg-[var(--surface-muted)]">
-      <span
-        className={`
-          mt-1.5 h-2 w-2
-          shrink-0 rounded-full
-          ${toneClass}
-        `}
-      />
+    <div
+      className={`group relative flex gap-3 rounded-xl px-2.5 py-3 transition-colors hover:bg-[var(--surface-muted)] ${
+        item.read ? "" : "bg-[var(--accent-tint)]/40"
+      }`}
+    >
+      <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 gap-3 text-left">
+        <span
+          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${item.read ? "bg-transparent" : "bg-[var(--accent)]"}`}
+        />
 
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <p className="text-[10px] font-semibold text-[var(--text)]">
-            {title}
-          </p>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <p className={`text-[10px] ${item.read ? "font-medium text-[var(--text-muted)]" : "font-semibold text-[var(--text)]"}`}>
+              {item.title}
+            </p>
 
-          <span className="shrink-0 text-[8px] text-[var(--text-subtle)]">
-            {time}
-          </span>
+            <span className="shrink-0 text-[8px] text-[var(--text-subtle)]">
+              {timeAgo(item.createdAt)}
+            </span>
+          </div>
+
+          {item.body && (
+            <p className="mt-1 line-clamp-2 text-[9px] leading-4 text-[var(--text-muted)]">
+              {item.body}
+            </p>
+          )}
         </div>
+      </button>
 
-        <p className="mt-1 text-[9px] leading-4 text-[var(--text-muted)]">
-          {description}
-        </p>
+      <div className="flex shrink-0 items-start gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        {!item.read && (
+          <button
+            type="button"
+            onClick={onMarkRead}
+            aria-label="Mark as read"
+            title="Mark as read"
+            className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[var(--text-subtle)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
+          >
+            <Check size={11} />
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          title="Dismiss"
+          className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[var(--text-subtle)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
+        >
+          <Trash2 size={11} />
+        </button>
       </div>
     </div>
   );
@@ -2149,6 +2363,7 @@ function ProfileMenu({
   theme,
   signingOut,
   onThemeChange,
+  onMyAccount,
   onTeam,
   onSettings,
   onSignOut,
@@ -2166,6 +2381,7 @@ function ProfileMenu({
   onThemeChange: (
     theme: ThemeMode,
   ) => void;
+  onMyAccount: () => void;
   onTeam: () => void;
   onSettings: () => void;
   onSignOut: () => void;
@@ -2222,14 +2438,12 @@ function ProfileMenu({
       ================================================================ */}
 
       <div className="p-2">
-        {canOpenTeam && (
-          <ProfileAction
-            icon={UserRound}
-            label="My account"
-            description="Profile and account details"
-            onClick={onTeam}
-          />
-        )}
+        <ProfileAction
+          icon={UserRound}
+          label="My account"
+          description="Profile and account details"
+          onClick={onMyAccount}
+        />
 
         {canOpenTeam && (
           <ProfileAction

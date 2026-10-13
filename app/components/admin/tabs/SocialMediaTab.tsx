@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable @next/next/no-img-element */
 "use client";
@@ -698,7 +699,14 @@ function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean) {
 
 const API_BASE = "/api/admin/social-media";
 
-class ApiRequestError extends Error {}
+class ApiRequestError extends Error {
+  code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.code = code;
+  }
+}
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData;
@@ -713,7 +721,7 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const payload = await response.json().catch(() => null);
 
   if (!response.ok || !payload?.ok) {
-    throw new ApiRequestError(payload?.error || `Request failed (${response.status}).`);
+    throw new ApiRequestError(payload?.error || `Request failed (${response.status}).`, payload?.code);
   }
 
   return payload as T;
@@ -817,8 +825,11 @@ async function updatePostApi(id: string, input: Partial<CreatePostPayload>): Pro
   return fromApiPost(payload.post);
 }
 
-async function deletePostApi(id: string): Promise<void> {
-  await apiRequest(`/posts/${id}`, { method: "DELETE" });
+async function deletePostApi(id: string, options?: { confirmPublishedRemoval?: boolean }): Promise<void> {
+  await apiRequest(`/posts/${id}`, {
+    method: "DELETE",
+    body: JSON.stringify({ confirmPublishedRemoval: options?.confirmPublishedRemoval ?? false }),
+  });
 }
 
 async function duplicatePostApi(id: string): Promise<SocialPost> {
@@ -1405,19 +1416,45 @@ export default function SocialMediaTab() {
 
   const deletePost = useCallback(
     (id: string) => {
-      setDialog({
-        title: "Delete this post?",
-        description: "It's removed from the pipeline and the calendar. This can't be undone.",
-        confirmLabel: "Delete post",
-        tone: "danger",
-        onConfirm: async () => {
-          await deletePostApi(id);
-          setPosts((current) => current.filter((post) => post.id !== id));
-          notify("Post deleted");
-        },
-      });
+      const target = posts.find((post) => post.id === id);
+      const isPublished = target?.realStatus === "PUBLISHED" || target?.realStatus === "PARTIALLY_PUBLISHED";
+      const isScheduled = target?.realStatus === "SCHEDULED";
+
+      if (target?.realStatus === "PUBLISHING") {
+        notifyError(null, "This post is currently publishing and can't be deleted yet. Try again in a moment.");
+        return;
+      }
+
+      setDialog(
+        isPublished
+          ? {
+              title: "Remove published post?",
+              description:
+                "This removes the post from Syntra Grid. It does not automatically remove the published content from the external social media platform.",
+              confirmLabel: "Remove from Syntra Grid",
+              tone: "danger",
+              onConfirm: async () => {
+                await deletePostApi(id, { confirmPublishedRemoval: true });
+                setPosts((current) => current.filter((post) => post.id !== id));
+                notify("Post removed from Syntra Grid");
+              },
+            }
+          : {
+              title: isScheduled ? "Delete scheduled post?" : "Delete this post?",
+              description: isScheduled
+                ? "This will remove the post from Syntra Grid and cancel any pending publication."
+                : "It's removed from the pipeline and the calendar. This can't be undone.",
+              confirmLabel: "Delete post",
+              tone: "danger",
+              onConfirm: async () => {
+                await deletePostApi(id);
+                setPosts((current) => current.filter((post) => post.id !== id));
+                notify("Post deleted");
+              },
+            },
+      );
     },
-    [notify],
+    [notify, notifyError, posts],
   );
 
   const duplicatePost = useCallback(
@@ -2605,7 +2642,7 @@ function PostRow({
         <IconButton label="Edit post" onClick={onEdit}>
           <Edit3 size={14} />
         </IconButton>
-        <RowMenu onDuplicate={onDuplicate} onDelete={onDelete} />
+        <RowMenu onDuplicate={onDuplicate} onDelete={onDelete} deleteDisabled={post.realStatus === "PUBLISHING"} />
       </div>
     </div>
   );
@@ -2633,7 +2670,7 @@ function PostCard({
     >
       <div className="flex items-center justify-between gap-2">
         <PlatformStack platforms={post.platforms} size="md" />
-        <RowMenu onDuplicate={onDuplicate} onDelete={onDelete} />
+        <RowMenu onDuplicate={onDuplicate} onDelete={onDelete} deleteDisabled={post.realStatus === "PUBLISHING"} />
       </div>
 
       {post.image && (
@@ -2671,7 +2708,15 @@ function PostCard({
   );
 }
 
-function RowMenu({ onDuplicate, onDelete }: { onDuplicate: () => void; onDelete: () => void }) {
+function RowMenu({
+  onDuplicate,
+  onDelete,
+  deleteDisabled,
+}: {
+  onDuplicate: () => void;
+  onDelete: () => void;
+  deleteDisabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -2716,12 +2761,15 @@ function RowMenu({ onDuplicate, onDelete }: { onDuplicate: () => void; onDelete:
           <MenuItem
             icon={Trash2}
             danger
+            disabled={deleteDisabled}
+            title={deleteDisabled ? "This post is currently publishing and can't be deleted yet." : undefined}
             onClick={() => {
+              if (deleteDisabled) return;
               setOpen(false);
               onDelete();
             }}
           >
-            Delete post
+            {deleteDisabled ? "Publishing…" : "Delete post"}
           </MenuItem>
         </div>
       )}
@@ -2732,11 +2780,15 @@ function RowMenu({ onDuplicate, onDelete }: { onDuplicate: () => void; onDelete:
 function MenuItem({
   icon: Icon,
   danger,
+  disabled,
+  title,
   onClick,
   children,
 }: {
   icon: IconType;
   danger?: boolean;
+  disabled?: boolean;
+  title?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -2744,13 +2796,17 @@ function MenuItem({
     <button
       type="button"
       role="menuitem"
+      disabled={disabled}
+      title={title}
       onClick={onClick}
       className={cx(
         "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[11.5px] font-medium transition-colors duration-150",
         FOCUS_INSET,
-        danger
-          ? "text-red-600 hover:bg-red-500/10"
-          : "text-[var(--text)] hover:bg-[var(--surface-muted)]",
+        disabled
+          ? "cursor-not-allowed text-[var(--text-subtle)]"
+          : danger
+            ? "text-red-600 hover:bg-red-500/10"
+            : "text-[var(--text)] hover:bg-[var(--surface-muted)]",
       )}
     >
       <Icon size={14} />

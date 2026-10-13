@@ -72,6 +72,10 @@ function TabLoadingFallback() {
   );
 }
 
+const InternalChatWorkspace = dynamic(() => import("./messaging/InternalChatWorkspace"), { loading: TabLoadingFallback });
+const NotificationsWorkspace = dynamic(() => import("./notifications/NotificationsWorkspace"), { loading: TabLoadingFallback });
+const MyAccountWorkspace = dynamic(() => import("./account/MyAccountWorkspace"), { loading: TabLoadingFallback });
+
 const ActivityTab = dynamic(() => import("./tabs/ActivityTab"), { loading: TabLoadingFallback });
 const AnalyticsTab = dynamic(() => import("./tabs/AnalyticsTab"), { loading: TabLoadingFallback });
 const APIKeysTab = dynamic(() => import("./tabs/APIKeysTab"), { loading: TabLoadingFallback });
@@ -185,6 +189,8 @@ type CommandWorkspaceProps = {
   onNavigate: (tab: AdminTab) => void;
 
   onClose: () => void;
+
+  onOpenMessages: () => void;
 };
 
 type ExpandedCommandModuleProps = {
@@ -545,6 +551,67 @@ export default function AdminHome({
   const activeTabRef =
     useRef<AdminTab>(initialTab);
 
+  /* --------------------------------------------------------------------------
+     WORKSPACES (messages / notifications / my-account)
+
+     Independent of activeTab/?tab= — each is opened from Command
+     Overview or the header via ?workspace=<name>, kept orthogonal to
+     tab navigation since e.g. "messages" is already an AdminTab key
+     (the existing, separate client-support tab). Uses pushState (unlike
+     navigateToTab's replaceState) specifically so the browser's own
+     back/forward buttons work for these, per spec.
+  -------------------------------------------------------------------------- */
+
+  type WorkspaceName = "messages" | "notifications" | "my-account";
+
+  const resolveWorkspace = useCallback((value: string | null): WorkspaceName | null => {
+    if (value === "messages" || value === "notifications" || value === "my-account") return value;
+    return null;
+  }, []);
+
+  const initialWorkspace = useMemo<WorkspaceName | null>(
+    () => resolveWorkspace(searchParams.get("workspace")),
+    [searchParams, resolveWorkspace],
+  );
+
+  const [workspace, setWorkspaceState] = useState<WorkspaceName | null>(initialWorkspace);
+  const workspaceRef = useRef<WorkspaceName | null>(initialWorkspace);
+
+  const [messagesConversationId, setMessagesConversationId] = useState<string | null>(null);
+
+  const openWorkspace = useCallback((name: WorkspaceName, params?: { conversationId?: string | null }) => {
+    if (name === "messages" && params?.conversationId !== undefined) {
+      setMessagesConversationId(params.conversationId);
+    }
+
+    if (workspaceRef.current === name) return;
+
+    workspaceRef.current = name;
+    setWorkspaceState(name);
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("workspace", name);
+    window.history.pushState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  const closeWorkspace = useCallback(() => {
+    if (workspaceRef.current === null) return;
+
+    workspaceRef.current = null;
+    setWorkspaceState(null);
+
+    const url = new URL(window.location.href);
+    url.searchParams.delete("workspace");
+    window.history.pushState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  const openMessagesConversation = useCallback(
+    (conversationId: string | null) => {
+      openWorkspace("messages", { conversationId });
+    },
+    [openWorkspace],
+  );
+
   /*
    * Keep track of how a Command module was opened.
    *
@@ -782,6 +849,13 @@ export default function AdminHome({
           window.location.search,
         );
 
+      const nextWorkspace = resolveWorkspace(params.get("workspace"));
+
+      if (workspaceRef.current !== nextWorkspace) {
+        workspaceRef.current = nextWorkspace;
+        setWorkspaceState(nextWorkspace);
+      }
+
       const nextTab = resolveTab(
         params.get("tab"),
       );
@@ -835,7 +909,7 @@ export default function AdminHome({
         handlePopState,
       );
     };
-  }, [resolveTab]);
+  }, [resolveTab, resolveWorkspace]);
 
   /* --------------------------------------------------------------------------
      SCROLL HANDLING
@@ -921,8 +995,26 @@ export default function AdminHome({
         navigationDirection={
           navigationDirection
         }
+        onOpenNotificationsWorkspace={() => openWorkspace("notifications")}
+        onOpenMyAccount={() => openWorkspace("my-account")}
+        onOpenMessagesConversation={openMessagesConversation}
+        isMessagesWorkspaceOpen={workspace === "messages"}
       >
-        {isCommandWorkspace ? (
+        {workspace === "messages" ? (
+          <InternalChatWorkspace
+            currentAdminUserId={admin.id}
+            initialConversationId={messagesConversationId}
+            onBack={closeWorkspace}
+          />
+        ) : workspace === "notifications" ? (
+          <NotificationsWorkspace
+            onBack={closeWorkspace}
+            onOpenMessagesConversation={openMessagesConversation}
+            onNavigateTab={(tab) => navigateToTab(tab, "widget")}
+          />
+        ) : workspace === "my-account" ? (
+          <MyAccountWorkspace onBack={closeWorkspace} />
+        ) : isCommandWorkspace ? (
           <CommandWorkspace
             admin={admin}
             identity={identity}
@@ -942,6 +1034,7 @@ export default function AdminHome({
             onOverviewNavigate={
               handleOverviewNavigate
             }
+            onOpenMessages={() => openWorkspace("messages")}
           />
         ) : (
           <StandardWorkspace
@@ -973,6 +1066,7 @@ function CommandWorkspace({
   onNavigate,
   onClose,
   onOverviewNavigate,
+  onOpenMessages,
 }: CommandWorkspaceProps & {
   onOverviewNavigate: (
     destination: OverviewDestination,
@@ -1014,6 +1108,7 @@ function CommandWorkspace({
           onNavigate={
             onOverviewNavigate
           }
+          onOpenMessages={onOpenMessages}
         />
       </div>
 

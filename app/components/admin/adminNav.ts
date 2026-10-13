@@ -144,8 +144,9 @@ export type AdminSectionLabel =
   | "System";
 
 export type AdminModuleStatus =
-  | "live"
-  | "planned";
+  | "ACTIVE"
+  | "IN_DEVELOPMENT"
+  | "PLANNED";
 
 export type AdminUser = {
   id: string;
@@ -467,7 +468,7 @@ export const ADMIN_TABS: Record<
       "Operations, performance and anything needing attention across the company.",
     section: "Command",
     icon: LayoutDashboard,
-    status: "live",
+    status: "ACTIVE",
   },
 
   analytics: {
@@ -477,7 +478,7 @@ export const ADMIN_TABS: Record<
       "Company performance, growth and operational intelligence.",
     section: "Command",
     icon: BarChart3,
-    status: "live",
+    status: "IN_DEVELOPMENT",
   },
 
   activity: {
@@ -487,7 +488,7 @@ export const ADMIN_TABS: Record<
       "A timeline of important actions and changes across the company.",
     section: "Command",
     icon: Activity,
-    status: "planned",
+    status: "PLANNED",
   },
 
   calendar: {
@@ -497,7 +498,7 @@ export const ADMIN_TABS: Record<
       "Meetings, deadlines, milestones and important company dates.",
     section: "Command",
     icon: CalendarDays,
-    status: "planned",
+    status: "ACTIVE",
   },
 
   notifications: {
@@ -507,7 +508,7 @@ export const ADMIN_TABS: Record<
       "Operational alerts and notifications requiring attention.",
     section: "Command",
     icon: Sparkles,
-    status: "planned",
+    status: "PLANNED",
   },
 
   /* --------------------------------------------------------------------------
@@ -521,7 +522,7 @@ export const ADMIN_TABS: Record<
       "Client accounts, platforms and commercial relationships.",
     section: "CRM",
     icon: Building2,
-    status: "live",
+    status: "ACTIVE",
   },
 
   contacts: {
@@ -531,7 +532,7 @@ export const ADMIN_TABS: Record<
       "People and decision makers across client organisations.",
     section: "CRM",
     icon: Users,
-    status: "planned",
+    status: "ACTIVE",
   },
 
   leads: {
@@ -541,7 +542,7 @@ export const ADMIN_TABS: Record<
       "Potential clients and incoming commercial opportunities.",
     section: "CRM",
     icon: UserRoundPlus,
-    status: "planned",
+    status: "PLANNED",
   },
 
   opportunities: {
@@ -551,7 +552,7 @@ export const ADMIN_TABS: Record<
       "Qualified business opportunities and their potential value.",
     section: "CRM",
     icon: Target,
-    status: "planned",
+    status: "PLANNED",
   },
 
   pipeline: {
@@ -561,7 +562,7 @@ export const ADMIN_TABS: Record<
       "Track commercial opportunities through the sales process.",
     section: "CRM",
     icon: GitBranch,
-    status: "planned",
+    status: "PLANNED",
   },
 
   proposals: {
@@ -571,7 +572,7 @@ export const ADMIN_TABS: Record<
       "Client proposals, scopes and commercial offers.",
     section: "CRM",
     icon: FileText,
-    status: "planned",
+    status: "PLANNED",
   },
 
   /* --------------------------------------------------------------------------
@@ -585,7 +586,7 @@ export const ADMIN_TABS: Record<
       "Client and internal projects delivered by Syntra Grid.",
     section: "Delivery",
     icon: FolderKanban,
-    status: "live",
+    status: "IN_DEVELOPMENT",
   },
 
   tasks: {
@@ -595,7 +596,7 @@ export const ADMIN_TABS: Record<
       "Work items across projects and internal operations.",
     section: "Delivery",
     icon: CheckSquare2,
-    status: "planned",
+    status: "PLANNED",
   },
 
   milestones: {
@@ -605,7 +606,7 @@ export const ADMIN_TABS: Record<
       "Major project targets, deadlines and delivery checkpoints.",
     section: "Delivery",
     icon: Target,
-    status: "planned",
+    status: "PLANNED",
   },
 
   roadmaps: {
@@ -615,7 +616,7 @@ export const ADMIN_TABS: Record<
       "Delivery plans for the months ahead across products and client systems.",
     section: "Delivery",
     icon: Network,
-    status: "planned",
+    status: "PLANNED",
   },
 
   sprints: {
@@ -625,7 +626,7 @@ export const ADMIN_TABS: Record<
       "Development cycles and current delivery commitments.",
     section: "Delivery",
     icon: RefreshCcw,
-    status: "planned",
+    status: "PLANNED",
   },
 
   requirements: {
@@ -635,7 +636,7 @@ export const ADMIN_TABS: Record<
       "Functional, performance and security requirements across projects.",
     section: "Delivery",
     icon: FileCheck2,
-    status: "planned",
+    status: "PLANNED",
   },
 
   qa: {
@@ -645,7 +646,7 @@ export const ADMIN_TABS: Record<
       "Testing, quality assurance and release readiness.",
     section: "Delivery",
     icon: ShieldCheck,
-    status: "planned",
+    status: "PLANNED",
   },
 
   /* --------------------------------------------------------------------------
@@ -659,7 +660,7 @@ export const ADMIN_TABS: Record<
       "Client agreements, renewals and contractual obligations.",
     section: "Commercial",
     icon: BriefcaseBusiness,
-    status: "live",
+    status: "ACTIVE",
   },
 
   quotes: {
@@ -669,7 +670,7 @@ export const ADMIN_TABS: Record<
       "Commercial estimates and quotations issued to clients.",
     section: "Commercial",
     icon: ReceiptText,
-    status: "planned",
+    status: "PLANNED",
   },
 
   invoices: {
@@ -679,7 +680,7 @@ export const ADMIN_TABS: Record<
       "Client invoices, payment status and outstanding balances.",
     section: "Commercial",
     icon: FileText,
-    status: "planned",
+    status: "PLANNED",
   },
 
   subscriptions: {
@@ -689,7 +690,7 @@ export const ADMIN_TABS: Record<
       "Recurring client services, licences and subscriptions.",
     section: "Commercial",
     icon: RefreshCcw,
-    status: "planned",
+    status: "PLANNED",
   },
 
   expenses: {
@@ -699,7 +700,7 @@ export const ADMIN_TABS: Record<
       "Operational and project expenditure across the company.",
     section: "Commercial",
     icon: ReceiptText,
-    status: "planned",
+    status: "PLANNED",
   },
 
   finance: {
@@ -709,7 +710,7 @@ export const ADMIN_TABS: Record<
       "Banking, transactions and company financial operations.",
     section: "Commercial",
     icon: CircleDollarSign,
-    status: "live",
+    status: "IN_DEVELOPMENT",
   },
 
   revenue: {
@@ -719,7 +720,7 @@ export const ADMIN_TABS: Record<
       "Revenue performance across clients, projects and products.",
     section: "Commercial",
     icon: BarChart3,
-    status: "planned",
+    status: "PLANNED",
   },
 
   /* --------------------------------------------------------------------------
@@ -733,7 +734,7 @@ export const ADMIN_TABS: Record<
       "Client support operations and active requests.",
     section: "Client Success",
     icon: Headphones,
-    status: "live",
+    status: "IN_DEVELOPMENT",
   },
 
   tickets: {
@@ -743,7 +744,7 @@ export const ADMIN_TABS: Record<
       "Support tickets across all managed client systems.",
     section: "Client Success",
     icon: TicketCheck,
-    status: "planned",
+    status: "PLANNED",
   },
 
   client_health: {
@@ -753,7 +754,7 @@ export const ADMIN_TABS: Record<
       "Relationship, support and service health for every client.",
     section: "Client Success",
     icon: Activity,
-    status: "planned",
+    status: "PLANNED",
   },
 
   feedback: {
@@ -763,7 +764,7 @@ export const ADMIN_TABS: Record<
       "Client feedback, requests and satisfaction signals.",
     section: "Client Success",
     icon: MessageSquareText,
-    status: "planned",
+    status: "PLANNED",
   },
 
   messages: {
@@ -773,7 +774,7 @@ export const ADMIN_TABS: Record<
       "Client conversations and internal communication.",
     section: "Client Success",
     icon: MessageSquareText,
-    status: "live",
+    status: "IN_DEVELOPMENT",
   },
 
   meetings: {
@@ -783,7 +784,7 @@ export const ADMIN_TABS: Record<
       "Client meetings, notes and follow up actions.",
     section: "Client Success",
     icon: CalendarDays,
-    status: "planned",
+    status: "PLANNED",
   },
 
   /* --------------------------------------------------------------------------
@@ -797,7 +798,7 @@ export const ADMIN_TABS: Record<
       "Infrastructure and production platform health.",
     section: "Engineering",
     icon: Activity,
-    status: "live",
+    status: "IN_DEVELOPMENT",
   },
 
   deployments: {
@@ -807,7 +808,7 @@ export const ADMIN_TABS: Record<
       "Production releases and deployment activity.",
     section: "Engineering",
     icon: Rocket,
-    status: "live",
+    status: "IN_DEVELOPMENT",
   },
 
   systems: {
@@ -817,7 +818,7 @@ export const ADMIN_TABS: Record<
       "Registry of systems operated and maintained by Syntra Grid.",
     section: "Engineering",
     icon: Boxes,
-    status: "planned",
+    status: "PLANNED",
   },
 
   domains: {
@@ -827,7 +828,7 @@ export const ADMIN_TABS: Record<
       "Domains, DNS ownership and renewal information.",
     section: "Engineering",
     icon: Globe2,
-    status: "planned",
+    status: "PLANNED",
   },
 
   environments: {
@@ -837,7 +838,7 @@ export const ADMIN_TABS: Record<
       "Production, staging and development environments.",
     section: "Engineering",
     icon: CloudCog,
-    status: "planned",
+    status: "PLANNED",
   },
 
   repositories: {
@@ -847,7 +848,7 @@ export const ADMIN_TABS: Record<
       "Source repositories across company and client projects.",
     section: "Engineering",
     icon: Code2,
-    status: "planned",
+    status: "PLANNED",
   },
 
   incidents: {
@@ -857,7 +858,7 @@ export const ADMIN_TABS: Record<
       "Production incidents, outages and operational response.",
     section: "Engineering",
     icon: Wrench,
-    status: "planned",
+    status: "PLANNED",
   },
 
   backups: {
@@ -867,7 +868,7 @@ export const ADMIN_TABS: Record<
       "Backup coverage and recovery readiness.",
     section: "Engineering",
     icon: RefreshCcw,
-    status: "planned",
+    status: "PLANNED",
   },
 
   /* --------------------------------------------------------------------------
@@ -881,7 +882,7 @@ export const ADMIN_TABS: Record<
       "Syntra Grid products and internally owned platforms.",
     section: "Products",
     icon: Boxes,
-    status: "planned",
+    status: "PLANNED",
   },
 
   releases: {
@@ -891,7 +892,7 @@ export const ADMIN_TABS: Record<
       "Product versions and release history.",
     section: "Products",
     icon: PackageCheck,
-    status: "planned",
+    status: "PLANNED",
   },
 
   feature_requests: {
@@ -901,7 +902,7 @@ export const ADMIN_TABS: Record<
       "Requested improvements across products and client systems.",
     section: "Products",
     icon: Sparkles,
-    status: "planned",
+    status: "PLANNED",
   },
 
   bugs: {
@@ -911,7 +912,7 @@ export const ADMIN_TABS: Record<
       "Known defects and product engineering issues.",
     section: "Products",
     icon: Wrench,
-    status: "planned",
+    status: "PLANNED",
   },
 
   changelog: {
@@ -921,7 +922,7 @@ export const ADMIN_TABS: Record<
       "History of meaningful product and platform changes.",
     section: "Products",
     icon: History,
-    status: "planned",
+    status: "PLANNED",
   },
 
   /* --------------------------------------------------------------------------
@@ -935,7 +936,7 @@ export const ADMIN_TABS: Record<
       "Search visibility and website performance.",
     section: "Growth",
     icon: Search,
-    status: "planned",
+    status: "PLANNED",
   },
 
   campaigns: {
@@ -945,7 +946,7 @@ export const ADMIN_TABS: Record<
       "Marketing campaigns and growth initiatives.",
     section: "Growth",
     icon: Megaphone,
-    status: "planned",
+    status: "ACTIVE",
   },
 
   social_media: {
@@ -955,7 +956,7 @@ export const ADMIN_TABS: Record<
       "Social channels, publishing and engagement.",
     section: "Growth",
     icon: MessageSquareText,
-    status: "planned",
+    status: "ACTIVE",
   },
 
   brand_assets: {
@@ -965,7 +966,7 @@ export const ADMIN_TABS: Record<
       "Logos, identity assets and approved brand materials.",
     section: "Growth",
     icon: Sparkles,
-    status: "planned",
+    status: "ACTIVE",
   },
 
   /* --------------------------------------------------------------------------
@@ -979,7 +980,7 @@ export const ADMIN_TABS: Record<
       "Everyone who works with Syntra Grid, their roles, reporting lines and dashboard access.",
     section: "Company",
     icon: Users,
-    status: "live",
+    status: "ACTIVE",
   },
 
   departments: {
@@ -989,7 +990,7 @@ export const ADMIN_TABS: Record<
       "Company structure, department leadership and team ownership.",
     section: "Company",
     icon: Building2,
-    status: "live",
+    status: "ACTIVE",
   },
 
   workload: {
@@ -999,7 +1000,7 @@ export const ADMIN_TABS: Record<
       "Team capacity and allocation across company work.",
     section: "Company",
     icon: Activity,
-    status: "planned",
+    status: "ACTIVE",
   },
 
   timesheets: {
@@ -1009,7 +1010,7 @@ export const ADMIN_TABS: Record<
       "Recorded work and time allocation.",
     section: "Company",
     icon: History,
-    status: "planned",
+    status: "ACTIVE",
   },
 
   recruitment: {
@@ -1019,7 +1020,7 @@ export const ADMIN_TABS: Record<
       "Hiring requirements, candidates and recruitment activity.",
     section: "Company",
     icon: UserRoundPlus,
-    status: "planned",
+    status: "ACTIVE",
   },
 
   leave: {
@@ -1029,7 +1030,7 @@ export const ADMIN_TABS: Record<
       "Team leave and availability.",
     section: "Company",
     icon: CalendarDays,
-    status: "planned",
+    status: "ACTIVE",
   },
 
   /* --------------------------------------------------------------------------
@@ -1043,7 +1044,7 @@ export const ADMIN_TABS: Record<
       "Company and client documentation.",
     section: "Knowledge",
     icon: FileText,
-    status: "planned",
+    status: "PLANNED",
   },
 
   knowledge_base: {
@@ -1053,7 +1054,7 @@ export const ADMIN_TABS: Record<
       "Reusable internal knowledge and technical guidance.",
     section: "Knowledge",
     icon: BookOpen,
-    status: "planned",
+    status: "PLANNED",
   },
 
   sops: {
@@ -1063,7 +1064,7 @@ export const ADMIN_TABS: Record<
       "Standard operating procedures for recurring work.",
     section: "Knowledge",
     icon: FileCheck2,
-    status: "planned",
+    status: "PLANNED",
   },
 
   research: {
@@ -1073,7 +1074,7 @@ export const ADMIN_TABS: Record<
       "Research, technical investigations and company intelligence.",
     section: "Knowledge",
     icon: Search,
-    status: "planned",
+    status: "PLANNED",
   },
 
   /* --------------------------------------------------------------------------
@@ -1087,7 +1088,7 @@ export const ADMIN_TABS: Record<
       "Company and client compliance obligations.",
     section: "Governance",
     icon: ShieldCheck,
-    status: "planned",
+    status: "PLANNED",
   },
 
   risks: {
@@ -1097,7 +1098,7 @@ export const ADMIN_TABS: Record<
       "Operational, commercial and technical risk register.",
     section: "Governance",
     icon: Activity,
-    status: "planned",
+    status: "PLANNED",
   },
 
   security: {
@@ -1107,7 +1108,7 @@ export const ADMIN_TABS: Record<
       "Security posture across Syntra Grid systems.",
     section: "Governance",
     icon: ShieldCheck,
-    status: "planned",
+    status: "PLANNED",
   },
 
   audit_logs: {
@@ -1117,7 +1118,7 @@ export const ADMIN_TABS: Record<
       "Administrative and operational audit history.",
     section: "Governance",
     icon: History,
-    status: "planned",
+    status: "PLANNED",
   },
 
   approvals: {
@@ -1127,7 +1128,7 @@ export const ADMIN_TABS: Record<
       "Items awaiting management approval.",
     section: "Governance",
     icon: CheckSquare2,
-    status: "planned",
+    status: "PLANNED",
   },
 
   policies: {
@@ -1137,7 +1138,7 @@ export const ADMIN_TABS: Record<
       "Company policies and governance documentation.",
     section: "Governance",
     icon: FileText,
-    status: "planned",
+    status: "PLANNED",
   },
 
   /* --------------------------------------------------------------------------
@@ -1151,7 +1152,7 @@ export const ADMIN_TABS: Record<
       "Automated company workflows and operational rules.",
     section: "System",
     icon: Workflow,
-    status: "planned",
+    status: "PLANNED",
   },
 
   integrations: {
@@ -1161,7 +1162,7 @@ export const ADMIN_TABS: Record<
       "External services connected to Syntra Grid.",
     section: "System",
     icon: Plug,
-    status: "planned",
+    status: "PLANNED",
   },
 
   roles_permissions: {
@@ -1171,7 +1172,7 @@ export const ADMIN_TABS: Record<
       "Administrative access and permission controls.",
     section: "System",
     icon: ShieldCheck,
-    status: "planned",
+    status: "PLANNED",
   },
 
   api_keys: {
@@ -1181,7 +1182,7 @@ export const ADMIN_TABS: Record<
       "Application credentials and API access management.",
     section: "System",
     icon: KeyRound,
-    status: "planned",
+    status: "PLANNED",
   },
 
   settings: {
@@ -1191,7 +1192,7 @@ export const ADMIN_TABS: Record<
       "Configuration for the whole of Syntra Grid.",
     section: "System",
     icon: Settings,
-    status: "live",
+    status: "IN_DEVELOPMENT",
   },
 };
 

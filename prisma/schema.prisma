@@ -86,8 +86,10 @@ model AdminUser {
   accessInvitesCreated   AccessInvite[]    @relation("AccessInviteCreatedBy")
 
   // Overview personalisation & notifications
-  overviewPreference AdminOverviewPreference?
-  notifications      Notification[]
+  overviewPreference     AdminOverviewPreference?
+  notifications          Notification[]
+  notificationsCaused    Notification[]               @relation("NotificationActor")
+  notificationPreference AdminNotificationPreference?
 
   // Social media
   socialAccountsConnected   SocialAccount[]      @relation("SocialAccountConnectedBy")
@@ -139,6 +141,12 @@ model AdminUser {
   campaignApprovalsAssigned        CampaignApproval[]         @relation("CampaignApprovalAssignedApprover")
   campaignApprovalsDecided         CampaignApproval[]         @relation("CampaignApprovalDecidedBy")
   campaignApprovalComments         CampaignApprovalComment[]  @relation("CampaignApprovalCommentAuthor")
+
+  // Internal messaging
+  internalConversationsCreated       InternalConversation[]       @relation("InternalConversationCreatedBy")
+  internalConversationMembers        InternalConversationMember[]
+  internalMessagesSent               InternalMessage[]            @relation("InternalMessageSender")
+  internalMessageAttachmentsUploaded InternalMessageAttachment[]  @relation("InternalMessageAttachmentUploadedBy")
 
   @@index([departmentId])
 }
@@ -2928,6 +2936,13 @@ enum NotificationType {
   CAMPAIGN_COMPLETED
   CAMPAIGN_BUDGET_EXCEEDED
   CAMPAIGN_EXPENSE_APPROVAL_PENDING
+  MESSAGE_RECEIVED
+  LEAVE_REQUEST_APPROVED
+  LEAVE_REQUEST_REJECTED
+  CALENDAR_EVENT_INVITATION
+  CALENDAR_EVENT_CANCELLED
+  CALENDAR_EVENT_RESCHEDULED
+  BRAND_REQUEST_DECIDED
 }
 
 /**
@@ -2942,6 +2957,7 @@ enum NotificationType {
 model Notification {
   id                   String           @id @default(cuid())
   recipientAdminUserId String
+  actorId              String?
   type                 NotificationType
   title                String
   body                 String?
@@ -2951,13 +2967,39 @@ model Notification {
   sourceKey            String
   read                 Boolean          @default(false)
   readAt               DateTime?
+  dismissedAt          DateTime?
   createdAt            DateTime         @default(now())
 
-  recipient AdminUser @relation(fields: [recipientAdminUserId], references: [id], onDelete: Cascade)
+  recipient AdminUser  @relation(fields: [recipientAdminUserId], references: [id], onDelete: Cascade)
+  actor     AdminUser? @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
 
   @@unique([recipientAdminUserId, sourceKey])
   @@index([recipientAdminUserId, read])
   @@index([recipientAdminUserId, createdAt])
+  @@index([recipientAdminUserId, dismissedAt])
+}
+
+/**
+ * One row per AdminUser, created lazily on first write. A fixed,
+ * explicitly-enumerated set of 8 toggles (not AdminOverviewPreference's
+ * open-ended JSON-blob shape) — deliberate, since this set is small and
+ * known in advance, unlike Overview's evolving widget/wallpaper config.
+ */
+model AdminNotificationPreference {
+  id                 String   @id @default(cuid())
+  adminUserId        String   @unique
+  soundEnabled       Boolean  @default(false)
+  inAppEnabled       Boolean  @default(true)
+  messagesEnabled    Boolean  @default(true)
+  tasksEnabled       Boolean  @default(true)
+  approvalsEnabled   Boolean  @default(true)
+  campaignsEnabled   Boolean  @default(true)
+  socialMediaEnabled Boolean  @default(true)
+  leaveEnabled       Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
 }
 
 /**
@@ -4561,4 +4603,126 @@ model BrandRequestActivity {
 
   @@index([requestId])
   @@index([createdAt])
+}
+
+/**
+ * =============================================================================
+ * INTERNAL EMPLOYEE MESSAGING
+ * Purely additive — no existing table is touched. This is a private,
+ * membership-scoped direct/group messenger for employees who hold an
+ * AdminUser account, surfaced from Command Overview rather than as a
+ * sidebar tab. It is deliberately independent of the PermissionGrant/
+ * AccessAction/AccessScope module-gating system that Social Media,
+ * Campaigns, Brand Assets etc. use for restricted employee accounts:
+ * every active AdminUser (restricted or full-access) can use it, and the
+ * only access boundary is InternalConversationMember row membership — see
+ * lib/messaging/permissions.ts. Not to be confused with MessagesTab.tsx /
+ * the "messages" AdminTab, which is a separate, pre-existing (currently
+ * mock) client-support inbox.
+ * =============================================================================
+ */
+enum InternalConversationType {
+  DIRECT
+  GROUP
+}
+
+enum InternalConversationMemberRole {
+  MEMBER
+  ADMIN
+}
+
+model InternalConversation {
+  id   String                   @id @default(cuid())
+  type InternalConversationType
+
+  // Required for GROUP, always null for DIRECT.
+  name String?
+
+  createdById String
+  createdBy   AdminUser @relation("InternalConversationCreatedBy", fields: [createdById], references: [id])
+
+  members  InternalConversationMember[]
+  messages InternalMessage[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastMessageAt DateTime?
+
+  @@index([lastMessageAt])
+}
+
+/**
+ * One row per (conversation, member). lastReadAt is the read-tracking
+ * boundary — unread counts are derived from it (messages with
+ * createdAt > lastReadAt, excluding the member's own), never from a
+ * per-message read-state table, so the query stays a single indexed
+ * count rather than downloading every message to compute it.
+ */
+model InternalConversationMember {
+  id             String               @id @default(cuid())
+  conversationId String
+  conversation   InternalConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  adminUserId String
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  role InternalConversationMemberRole @default(MEMBER)
+
+  joinedAt   DateTime  @default(now())
+  leftAt     DateTime?
+  lastReadAt DateTime?
+
+  @@unique([conversationId, adminUserId])
+  @@index([adminUserId])
+}
+
+model InternalMessage {
+  id             String               @id @default(cuid())
+  conversationId String
+  conversation   InternalConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  senderId String
+  sender   AdminUser @relation("InternalMessageSender", fields: [senderId], references: [id])
+
+  // Null once the message has been deleted (deletedAt set) — the row is
+  // kept (soft delete) so conversation history/ordering isn't broken; the
+  // frontend renders "This message was deleted." when deletedAt is set.
+  body String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  editedAt  DateTime?
+  deletedAt DateTime?
+
+  attachments InternalMessageAttachment[]
+
+  @@index([conversationId, createdAt])
+}
+
+model InternalMessageAttachment {
+  id String @id @default(cuid())
+
+  // Null until claimed by a sent message — upload happens as its own
+  // step (POST /api/admin/chat/attachments, before the message exists),
+  // then sendMessage() connects it and clears the "pending, unclaimed"
+  // state. uploadedById is who may claim it, so one person's upload can
+  // never be attached to another person's message.
+  messageId String?
+  message   InternalMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  uploadedById String
+  uploadedBy   AdminUser @relation("InternalMessageAttachmentUploadedBy", fields: [uploadedById], references: [id])
+
+  // Uploaded with Cloudinary's "authenticated" delivery type (private,
+  // not reachable via a bare public URL) — see lib/messaging/attachments.ts.
+  cloudinaryPublicId String
+  resourceType       String // "image" | "raw"
+  originalFilename   String
+  mimeType           String
+  size               Int
+
+  createdAt DateTime @default(now())
+
+  @@index([messageId])
+  @@index([uploadedById])
 }

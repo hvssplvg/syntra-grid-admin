@@ -471,7 +471,134 @@ async function syncNotifications(identity: ResolvedIdentity): Promise<void> {
   );
 }
 
-export async function syncAndListNotifications(identity: ResolvedIdentity, limit = 20) {
+/* ============================================================================
+   PREFERENCES
+
+   One row per AdminUser, created lazily. Absence of a row means every
+   default below applies — callers never need a separate "does a row
+   exist" branch.
+============================================================================ */
+
+export type NotificationPreferences = {
+  soundEnabled: boolean;
+  inAppEnabled: boolean;
+  messagesEnabled: boolean;
+  tasksEnabled: boolean;
+  approvalsEnabled: boolean;
+  campaignsEnabled: boolean;
+  socialMediaEnabled: boolean;
+  leaveEnabled: boolean;
+};
+
+const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  soundEnabled: false,
+  inAppEnabled: true,
+  messagesEnabled: true,
+  tasksEnabled: true,
+  approvalsEnabled: true,
+  campaignsEnabled: true,
+  socialMediaEnabled: true,
+  leaveEnabled: true,
+};
+
+export async function getUserNotificationPreferences(adminUserId: string): Promise<NotificationPreferences> {
+  const row = await prisma.adminNotificationPreference.findUnique({ where: { adminUserId } });
+  if (!row) return DEFAULT_NOTIFICATION_PREFERENCES;
+
+  return {
+    soundEnabled: row.soundEnabled,
+    inAppEnabled: row.inAppEnabled,
+    messagesEnabled: row.messagesEnabled,
+    tasksEnabled: row.tasksEnabled,
+    approvalsEnabled: row.approvalsEnabled,
+    campaignsEnabled: row.campaignsEnabled,
+    socialMediaEnabled: row.socialMediaEnabled,
+    leaveEnabled: row.leaveEnabled,
+  };
+}
+
+const PREFERENCE_KEYS = [
+  "soundEnabled",
+  "inAppEnabled",
+  "messagesEnabled",
+  "tasksEnabled",
+  "approvalsEnabled",
+  "campaignsEnabled",
+  "socialMediaEnabled",
+  "leaveEnabled",
+] as const satisfies readonly (keyof NotificationPreferences)[];
+
+/** Allow-lists exactly the 8 known boolean fields — any other key present
+ *  on the input (role, id, anything) is silently ignored, never trusted. */
+export async function updateUserNotificationPreferences(
+  adminUserId: string,
+  patch: Partial<Record<keyof NotificationPreferences, unknown>>,
+): Promise<NotificationPreferences> {
+  const sanitised: Partial<NotificationPreferences> = {};
+
+  for (const key of PREFERENCE_KEYS) {
+    if (typeof patch[key] === "boolean") {
+      sanitised[key] = patch[key];
+    }
+  }
+
+  const current = await getUserNotificationPreferences(adminUserId);
+  const merged = { ...current, ...sanitised };
+
+  await prisma.adminNotificationPreference.upsert({
+    where: { adminUserId },
+    create: { adminUserId, ...merged },
+    update: sanitised,
+  });
+
+  return merged;
+}
+
+/** NotificationTypes gated by a category toggle. Anything not listed here
+ *  (operational alerts like invoice/contract/offer, calendar events) is
+ *  always delivered regardless of preferences. */
+const CATEGORY_TYPES: Record<Exclude<keyof NotificationPreferences, "soundEnabled" | "inAppEnabled">, NotificationType[]> = {
+  messagesEnabled: [NotificationType.MESSAGE_RECEIVED],
+  tasksEnabled: [NotificationType.CAMPAIGN_TASK_ASSIGNED, NotificationType.CAMPAIGN_TASK_OVERDUE],
+  approvalsEnabled: [
+    NotificationType.CAMPAIGN_APPROVAL_PENDING,
+    NotificationType.CAMPAIGN_APPROVAL_DECIDED,
+    NotificationType.CAMPAIGN_EXPENSE_APPROVAL_PENDING,
+    NotificationType.SOCIAL_POST_PENDING_APPROVAL,
+    NotificationType.BRAND_REQUEST_DECIDED,
+  ],
+  campaignsEnabled: [NotificationType.CAMPAIGN_MILESTONE_DUE_SOON],
+  socialMediaEnabled: [
+    NotificationType.SOCIAL_POST_CHANGES_REQUESTED,
+    NotificationType.SOCIAL_POST_PUBLISHED,
+    NotificationType.SOCIAL_POST_FAILED,
+    NotificationType.SOCIAL_ACCOUNT_DISCONNECTED,
+  ],
+  leaveEnabled: [
+    NotificationType.LEAVE_REQUEST_PENDING,
+    NotificationType.LEAVE_REQUEST_APPROVED,
+    NotificationType.LEAVE_REQUEST_REJECTED,
+  ],
+};
+
+function disabledTypesFor(preferences: NotificationPreferences): NotificationType[] {
+  const disabled: NotificationType[] = [];
+
+  for (const [key, types] of Object.entries(CATEGORY_TYPES) as [keyof typeof CATEGORY_TYPES, NotificationType[]][]) {
+    if (!preferences[key]) disabled.push(...types);
+  }
+
+  return disabled;
+}
+
+/* ============================================================================
+   READ / LIST
+============================================================================ */
+
+export async function syncAndListNotifications(
+  identity: ResolvedIdentity,
+  options?: { limit?: number; cursor?: string | null; filter?: "all" | "unread" },
+) {
   // Sync best-effort: if materialising new notifications fails (e.g. one
   // source table is temporarily unavailable), still return whatever is
   // already stored rather than failing the whole notifications panel.
@@ -481,18 +608,51 @@ export async function syncAndListNotifications(identity: ResolvedIdentity, limit
     console.error("[notifications] sync failed, returning existing notifications only:", error);
   }
 
+  const preferences = await getUserNotificationPreferences(identity.admin.id);
+  const limit = Math.min(100, Math.max(1, options?.limit ?? 20));
+
+  if (!preferences.inAppEnabled) {
+    return { items: [], unreadCount: 0, nextCursor: null };
+  }
+
+  const disabledTypes = disabledTypesFor(preferences);
+
+  const baseWhere = {
+    recipientAdminUserId: identity.admin.id,
+    dismissedAt: null,
+    ...(disabledTypes.length > 0 ? { type: { notIn: disabledTypes } } : {}),
+  };
+
   const [items, unreadCount] = await Promise.all([
     prisma.notification.findMany({
-      where: { recipientAdminUserId: identity.admin.id },
+      where: { ...baseWhere, ...(options?.filter === "unread" ? { read: false } : {}) },
       orderBy: { createdAt: "desc" },
-      take: limit,
+      take: limit + 1,
+      ...(options?.cursor ? { skip: 1, cursor: { id: options.cursor } } : {}),
     }),
-    prisma.notification.count({
-      where: { recipientAdminUserId: identity.admin.id, read: false },
-    }),
+    prisma.notification.count({ where: { ...baseWhere, read: false } }),
   ]);
 
-  return { items, unreadCount };
+  const hasMore = items.length > limit;
+  const page = hasMore ? items.slice(0, limit) : items;
+
+  return { items: page, unreadCount, nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null };
+}
+
+export async function getUnreadNotificationCount(adminUserId: string): Promise<number> {
+  const preferences = await getUserNotificationPreferences(adminUserId);
+  if (!preferences.inAppEnabled) return 0;
+
+  const disabledTypes = disabledTypesFor(preferences);
+
+  return prisma.notification.count({
+    where: {
+      recipientAdminUserId: adminUserId,
+      read: false,
+      dismissedAt: null,
+      ...(disabledTypes.length > 0 ? { type: { notIn: disabledTypes } } : {}),
+    },
+  });
 }
 
 export async function markNotificationRead(adminUserId: string, id: string) {
@@ -509,4 +669,13 @@ export async function markAllNotificationsRead(adminUserId: string) {
     where: { recipientAdminUserId: adminUserId, read: false },
     data: { read: true, readAt: new Date() },
   });
+}
+
+export async function dismissNotification(adminUserId: string, id: string) {
+  const result = await prisma.notification.updateMany({
+    where: { id, recipientAdminUserId: adminUserId },
+    data: { dismissedAt: new Date() },
+  });
+
+  return result.count > 0;
 }

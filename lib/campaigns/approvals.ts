@@ -21,6 +21,7 @@ import { isOwnAdminUser, type ResolvedIdentity } from "@/lib/campaigns/permissio
 import { logCampaignActivity } from "@/lib/campaigns/activity";
 import { getCampaignOrThrow } from "@/lib/campaigns/server";
 import { Prisma } from "@/app/generated/prisma/client";
+import { createNotification, NotificationType } from "@/lib/notifications/create";
 
 const ADMIN_SELECT = { id: true, firstName: true, lastName: true, email: true } as const;
 
@@ -158,6 +159,22 @@ export async function decideCampaignApproval(
         : CampaignActivityType.APPROVAL_CHANGES_REQUESTED;
 
   await logCampaignActivity(campaignId, identity.admin.id, activityType, `${approval.type} approval ${decision.toLowerCase().replace("_", " ")}.`);
+
+  if (approval.requestedById) {
+    const campaign = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { name: true } });
+
+    await createNotification({
+      recipientAdminUserId: approval.requestedById,
+      actorId: identity.admin.id,
+      type: NotificationType.CAMPAIGN_APPROVAL_DECIDED,
+      title: `${approval.type} approval ${decision.toLowerCase().replace("_", " ")}`,
+      body: campaign ? `Campaign: ${campaign.name}` : null,
+      module: "campaigns",
+      entityType: "CampaignApproval",
+      entityId: approvalId,
+      sourceKey: `campaign_approval_decided:${approvalId}`,
+    });
+  }
 
   return updated;
 }

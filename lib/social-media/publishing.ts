@@ -716,7 +716,12 @@ export async function runDuePublishJobs(limit = 50): Promise<{ ran: number; resu
   const now = new Date();
 
   const dueTargets = await prisma.socialPostPlatform.findMany({
-    where: { status: SocialPostTargetStatus.SCHEDULED, scheduledAt: { lte: now } },
+    // post status guard is defensive hardening, not load-bearing: deleting
+    // a post cascade-deletes its targets, and cancelling one sets targets
+    // to CANCELLED directly — but excluding a cancelled parent post here
+    // too means a future cancel-without-target-sync path can't resurrect
+    // a publish for a post the user already walked away from.
+    where: { status: SocialPostTargetStatus.SCHEDULED, scheduledAt: { lte: now }, post: { status: { not: SocialPostStatus.CANCELLED } } },
     take: limit,
     include: TARGET_INCLUDE,
   });

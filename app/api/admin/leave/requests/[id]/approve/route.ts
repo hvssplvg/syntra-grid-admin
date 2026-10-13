@@ -9,6 +9,7 @@ import {
 } from "@/lib/leave/server";
 
 import { prisma } from "@/lib/prisma";
+import { createNotification, NotificationType } from "@/lib/notifications/create";
 
 export async function POST(
   request: Request,
@@ -142,6 +143,20 @@ export async function POST(
           return leave;
         },
       );
+
+    if (updated.employee.adminUserId) {
+      await createNotification({
+        recipientAdminUserId: updated.employee.adminUserId,
+        actorId: admin.id,
+        type: NotificationType.LEAVE_REQUEST_APPROVED,
+        title: "Your leave request was approved",
+        body: `${updated.startDate.toDateString()} – ${updated.endDate.toDateString()}`,
+        module: "leave",
+        entityType: "LeaveRequest",
+        entityId: updated.id,
+        sourceKey: `leave_request_decided:${updated.id}`,
+      });
+    }
 
     return Response.json({
       request: {

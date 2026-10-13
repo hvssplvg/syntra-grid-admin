@@ -14,6 +14,7 @@ import { requirePermission } from "@/lib/auth/current-admin";
 import { AccessAction, AccessScope } from "@/app/generated/prisma/enums";
 
 import { prisma } from "@/lib/prisma";
+import { createNotificationsForRecipients, NotificationType } from "@/lib/notifications/create";
 
 type RouteContext = {
   params: Promise<{
@@ -62,6 +63,45 @@ function parseOptionalDate(
   }
 
   return date;
+}
+
+/** Notification failure must never fail the calendar update/cancel — this
+ *  is called after the real write has already committed. */
+async function notifyCalendarAttendees(
+  eventTitle: string,
+  eventId: string,
+  actorId: string,
+  attendees: { employeeId: string; employee: { adminUserId: string | null } }[],
+  type: typeof NotificationType.CALENDAR_EVENT_CANCELLED | typeof NotificationType.CALENDAR_EVENT_RESCHEDULED | typeof NotificationType.CALENDAR_EVENT_INVITATION,
+  // Distinguishes repeat occurrences of the same event+type (e.g. a
+  // second, later reschedule to a different time) from a plain retry of
+  // the same request (which recomputes the same suffix and naturally
+  // dedupes via the sourceKey unique constraint).
+  sourceKeySuffix = "",
+) {
+  const titleByType: Record<string, string> = {
+    [NotificationType.CALENDAR_EVENT_CANCELLED]: `Event cancelled — ${eventTitle}`,
+    [NotificationType.CALENDAR_EVENT_RESCHEDULED]: `Event rescheduled — ${eventTitle}`,
+    [NotificationType.CALENDAR_EVENT_INVITATION]: `You were invited — ${eventTitle}`,
+  };
+
+  const recipients = attendees
+    .map((attendee) => attendee.employee.adminUserId)
+    .filter((adminUserId): adminUserId is string => Boolean(adminUserId) && adminUserId !== actorId);
+
+  await createNotificationsForRecipients(
+    recipients.map((recipientAdminUserId) => ({
+      recipientAdminUserId,
+      actorId,
+      type,
+      title: titleByType[type],
+      body: null,
+      module: "calendar",
+      entityType: "CalendarEvent",
+      entityId: eventId,
+      sourceKey: `${type.toLowerCase()}:${eventId}:${sourceKeySuffix}:${recipientAdminUserId}`,
+    })),
+  );
 }
 
 function enumValue<T extends string>(
@@ -773,6 +813,29 @@ export async function PATCH(
         },
       );
 
+    const previousAttendeeIds = new Set(existing.attendees.map((attendee) => attendee.employeeId));
+    const newlyAddedAttendees = updated.attendees.filter((attendee) => !previousAttendeeIds.has(attendee.employeeId));
+    const continuingAttendees = updated.attendees.filter((attendee) => previousAttendeeIds.has(attendee.employeeId));
+
+    const rescheduled =
+      updated.startAt.getTime() !== existing.startAt.getTime() ||
+      (updated.endAt?.getTime() ?? null) !== (existing.endAt?.getTime() ?? null);
+
+    if (newlyAddedAttendees.length > 0) {
+      await notifyCalendarAttendees(updated.title, updated.id, identity.admin.id, newlyAddedAttendees, NotificationType.CALENDAR_EVENT_INVITATION);
+    }
+
+    if (rescheduled && continuingAttendees.length > 0) {
+      await notifyCalendarAttendees(
+        updated.title,
+        updated.id,
+        identity.admin.id,
+        continuingAttendees,
+        NotificationType.CALENDAR_EVENT_RESCHEDULED,
+        updated.startAt.toISOString(),
+      );
+    }
+
     return Response.json({
       event: updated,
     });
@@ -813,6 +876,13 @@ export async function DELETE(
         select: {
           id: true,
           ownerId: true,
+          title: true,
+          attendees: {
+            select: {
+              employeeId: true,
+              employee: { select: { adminUserId: true } },
+            },
+          },
         },
       });
 
@@ -851,6 +921,10 @@ export async function DELETE(
           identity.admin.id,
       },
     });
+
+    if (existing.attendees.length > 0) {
+      await notifyCalendarAttendees(existing.title, existing.id, identity.admin.id, existing.attendees, NotificationType.CALENDAR_EVENT_CANCELLED);
+    }
 
     return Response.json({
       success: true,

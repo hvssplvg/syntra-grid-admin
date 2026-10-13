@@ -9,6 +9,7 @@ import {
 } from "@/lib/leave/server";
 
 import { prisma } from "@/lib/prisma";
+import { createNotification, NotificationType } from "@/lib/notifications/create";
 
 export async function POST(
   request: Request,
@@ -140,6 +141,25 @@ export async function POST(
           return leave;
         },
       );
+
+    const requestingEmployee = await prisma.employee.findUnique({
+      where: { id: updated.employeeId },
+      select: { adminUserId: true },
+    });
+
+    if (requestingEmployee?.adminUserId) {
+      await createNotification({
+        recipientAdminUserId: requestingEmployee.adminUserId,
+        actorId: admin.id,
+        type: NotificationType.LEAVE_REQUEST_REJECTED,
+        title: "Your leave request was rejected",
+        body: reason,
+        module: "leave",
+        entityType: "LeaveRequest",
+        entityId: updated.id,
+        sourceKey: `leave_request_decided:${updated.id}`,
+      });
+    }
 
     return Response.json({
       request: {

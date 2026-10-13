@@ -41,7 +41,16 @@ export type ServerUploadResult = {
 
 export function uploadBufferToCloudinary(
   buffer: Buffer,
-  options: { folder: string; publicId?: string; resourceType?: 'image' | 'video' | 'raw' },
+  options: {
+    folder: string;
+    publicId?: string;
+    resourceType?: 'image' | 'video' | 'raw';
+    // 'authenticated' uploads are never reachable via a bare public URL —
+    // every delivery requires a freshly server-signed URL. Used for private
+    // attachments (see lib/messaging/attachments.ts). Omit for the default
+    // public delivery every other caller of this helper relies on.
+    type?: 'upload' | 'authenticated';
+  },
 ): Promise<ServerUploadResult> {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
@@ -49,6 +58,7 @@ export function uploadBufferToCloudinary(
         folder: options.folder,
         public_id: options.publicId,
         resource_type: options.resourceType ?? 'image',
+        type: options.type ?? 'upload',
         overwrite: true,
       },
       (error, result) => {
@@ -64,8 +74,31 @@ export function uploadBufferToCloudinary(
   });
 }
 
-export async function destroyCloudinaryAsset(publicId: string, resourceType: 'image' | 'video' | 'raw' = 'image') {
-  await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+export async function destroyCloudinaryAsset(
+  publicId: string,
+  resourceType: 'image' | 'video' | 'raw' = 'image',
+  type: 'upload' | 'authenticated' = 'upload',
+) {
+  await cloudinary.uploader.destroy(publicId, { resource_type: resourceType, type });
+}
+
+/**
+ * A short-lived, signed delivery URL for an 'authenticated' (private)
+ * Cloudinary asset. Cloudinary rejects any request to such an asset
+ * without a valid signature, so this must be generated fresh, server
+ * side, only after the caller has been confirmed authorised to see the
+ * underlying resource — never cached or returned ahead of that check.
+ */
+export function signedAuthenticatedAssetUrl(
+  publicId: string,
+  resourceType: 'image' | 'raw' = 'raw',
+): string {
+  return cloudinary.url(publicId, {
+    resource_type: resourceType,
+    type: 'authenticated',
+    sign_url: true,
+    secure: true,
+  });
 }
 
 // Folder every managed client logo lives under. Exported so the upload
@@ -83,6 +116,12 @@ export const OVERVIEW_WALLPAPER_FOLDER = 'syntragrid/overview/wallpapers';
 export const BRAND_ASSETS_FOLDER = 'syntragrid/brand-assets';
 export const BRAND_TEMPLATES_FOLDER = 'syntragrid/brand-templates';
 export const BRAND_REQUEST_ATTACHMENTS_FOLDER = 'syntragrid/brand-request-attachments';
+
+// Same folder app/api/admin/team/avatar/route.ts (the HR-only upload
+// path) already uses for employee photographs — kept as one constant so
+// the self-service My Account avatar upload (app/api/admin/me/avatar)
+// never drifts from it.
+export const EMPLOYEE_AVATAR_FOLDER = 'syntragrid/employees';
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -123,4 +162,23 @@ export function isOwnWallpaperUrl(url: string): boolean {
   );
 
   return pattern.test(url);
+}
+
+/**
+ * Same safety shape as derivePublicIdFromLogoUrl, scoped to the employee
+ * avatar folder — only ever used to best-effort clean up an employee's
+ * OWN previous self-uploaded photo when replacing/removing it. Returns
+ * null (meaning "do not attempt deletion") for anything that isn't
+ * unambiguously our own upload in this folder, e.g. a provider-supplied
+ * OAuth picture URL that happened to land in AdminUser.avatarUrl.
+ */
+export function derivePublicIdFromEmployeeAvatarUrl(url: string): string | null {
+  if (!CLOUD_NAME) return null;
+
+  const pattern = new RegExp(
+    `^https://res\\.cloudinary\\.com/${escapeRegExp(CLOUD_NAME)}/image/upload/v\\d+/(${escapeRegExp(EMPLOYEE_AVATAR_FOLDER)}/[^./]+)\\.[a-zA-Z0-9]+$`,
+  );
+
+  const match = url.match(pattern);
+  return match ? match[1] : null;
 }

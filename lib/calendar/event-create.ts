@@ -18,6 +18,8 @@ import {
   prisma,
 } from "@/lib/prisma";
 
+import { createNotificationsForRecipients, NotificationType } from "@/lib/notifications/create";
+
 /* ============================================================================
    TYPES
 ============================================================================ */
@@ -978,6 +980,24 @@ export async function createCalendarEvent({
         },
       },
     });
+
+  const invitedAdminUserIds = event.attendees
+    .map((attendee) => attendee.employee.adminUserId)
+    .filter((adminUserId): adminUserId is string => Boolean(adminUserId) && adminUserId !== identity.admin.id);
+
+  await createNotificationsForRecipients(
+    invitedAdminUserIds.map((recipientAdminUserId) => ({
+      recipientAdminUserId,
+      actorId: identity.admin.id,
+      type: NotificationType.CALENDAR_EVENT_INVITATION,
+      title: `You were invited — ${event.title}`,
+      body: null,
+      module: "calendar",
+      entityType: "CalendarEvent",
+      entityId: event.id,
+      sourceKey: `calendar_event_invitation:${event.id}:${recipientAdminUserId}`,
+    })),
+  );
 
   return event;
 }

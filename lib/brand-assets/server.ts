@@ -27,6 +27,7 @@ import {
   type ResolvedIdentity,
 } from "@/lib/brand-assets/permissions";
 import { deleteBrandAssetFiles, uploadBrandAssetFile } from "@/lib/brand-assets/media";
+import { createNotification, NotificationType } from "@/lib/notifications/create";
 
 /* ============================================================================
    PAGINATION — matches lib/social-media/server.ts's own house style
@@ -872,6 +873,20 @@ async function transitionBrandRequest(
   });
 
   await logRequestActivity(requestId, identity.admin.id, activityType, description);
+
+  if ((next === BrandRequestStatus.APPROVED || next === BrandRequestStatus.REJECTED) && existing.requestedById) {
+    await createNotification({
+      recipientAdminUserId: existing.requestedById,
+      actorId: identity.admin.id,
+      type: NotificationType.BRAND_REQUEST_DECIDED,
+      title: `Brand request ${next === BrandRequestStatus.APPROVED ? "approved" : "rejected"} — ${existing.title}`,
+      body: next === BrandRequestStatus.REJECTED ? description : null,
+      module: "brand_assets",
+      entityType: "BrandRequest",
+      entityId: requestId,
+      sourceKey: `brand_request_decided:${requestId}`,
+    });
+  }
 
   return getBrandRequestOrThrow(requestId);
 }
