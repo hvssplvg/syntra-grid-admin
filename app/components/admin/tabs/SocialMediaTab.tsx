@@ -1213,8 +1213,10 @@ export default function SocialMediaTab() {
     refreshAccounts();
     setView("accounts");
 
+    const handle = params.get("handle");
+
     const messages: Record<string, string> = {
-      connected: "Account connected.",
+      connected: handle ? `@${handle} connected successfully.` : "Account connected.",
       access_denied: "Connection cancelled.",
       invalid_state: "Connection could not be verified. Please try again.",
       invalid_session: "Your session changed during connection. Please try again.",
@@ -1234,6 +1236,7 @@ export default function SocialMediaTab() {
     url.searchParams.delete("social");
     url.searchParams.delete("platform");
     url.searchParams.delete("missing");
+    url.searchParams.delete("handle");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}`);
   }, [loaded, refreshAccounts]);
 

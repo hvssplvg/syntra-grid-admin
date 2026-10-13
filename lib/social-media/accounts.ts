@@ -45,6 +45,15 @@ export type PlatformOAuthConfig = {
    *  always surface as an obvious error, so it's made explicit per
    *  platform rather than assumed. */
   scopeDelimiter?: "," | " ";
+  /** How the token endpoint expects the confidential-client credential.
+   *  Defaults to "body" (client_secret as a form field), which is what
+   *  every platform here except X already works with. X's /2/oauth2/token
+   *  documents HTTP Basic Auth as the expected way to authenticate a
+   *  confidential client — sending the secret only in the body is a
+   *  common cause of a silently-rejected token exchange for X
+   *  specifically. Only set this where a platform's docs call for it;
+   *  never change the default for a platform that already works. */
+  tokenAuthMethod?: "basic" | "body";
 };
 
 export const PLATFORM_CONFIG: Record<SocialPlatform, PlatformOAuthConfig> = {
@@ -110,6 +119,7 @@ export const PLATFORM_CONFIG: Record<SocialPlatform, PlatformOAuthConfig> = {
     clientIdParam: "client_id",
     scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
     flow: "pkce",
+    tokenAuthMethod: "basic",
   },
   TIKTOK: {
     label: "TikTok",
@@ -215,12 +225,17 @@ export async function exchangeAuthorisationCode(
 ): Promise<PlatformTokenResponse> {
   const { config, clientId, clientSecret, redirectUri } = requireConfig(platform);
 
+  const useBasicAuth = config.tokenAuthMethod === "basic";
+
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
     redirect_uri: redirectUri,
     [config.clientIdParam]: clientId,
-    client_secret: clientSecret,
+    // Basic-auth platforms (X) authenticate the confidential client via
+    // the Authorization header below instead — sending client_secret in
+    // both places is unnecessary and some token endpoints reject it.
+    ...(useBasicAuth ? {} : { client_secret: clientSecret }),
   });
 
   if (config.flow === "pkce") {
@@ -228,9 +243,14 @@ export async function exchangeAuthorisationCode(
     body.set("code_verifier", pkceVerifier);
   }
 
+  const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
+  if (useBasicAuth) {
+    headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+  }
+
   const response = await fetch(config.tokenUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+    headers,
     body,
   });
 
