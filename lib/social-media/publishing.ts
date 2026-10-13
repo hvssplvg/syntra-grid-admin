@@ -105,18 +105,38 @@ export function registerPublishAdapter(platform: SocialPlatform, adapter: Publis
    and a different author URN (urn:li:organization:{id}) — none of which
    exist yet. See requiredEnvVarsFor/PLATFORM_CONFIG for what IS wired.
 
-   LinkedIn-Version is a required header on every /rest/ call. LinkedIn
-   revises this monthly — re-check it's still accepted before relying on
-   this in production; an unsupported version fails fast with a 426/400
-   rather than silently misbehaving.
+   LinkedIn-Version is a required header on every /rest/ call, format
+   YYYYMM, and LinkedIn only keeps roughly the last 12 months' worth of
+   versions live — anything older is retired and the API starts
+   rejecting it with HTTP 426 {"code":"NONEXISTENT_VERSION"}. There is
+   no "always valid" value to set once and forget; this must be bumped
+   periodically (last confirmed 2026-10-13, set to 202609 — the most
+   recent version confirmed live as of that check). Re-verify against
+   https://learn.microsoft.com/linkedin/marketing/versioning (LinkedIn's
+   REST API versioning applies this same header/scheme across products,
+   not just Marketing) before assuming this value is still accepted.
 ============================================================================ */
 
 const LINKEDIN_API_BASE = "https://api.linkedin.com";
-const LINKEDIN_API_VERSION = "202410";
+const LINKEDIN_API_VERSION = "202609";
 
 class LinkedInApiError extends Error {
-  constructor(public status: number, body: string) {
-    super(`LinkedIn API error ${status}: ${body.slice(0, 300)}`);
+  code?: string;
+
+  constructor(public status: number, rawBody: string) {
+    let message = `LinkedIn API error ${status}: ${rawBody.slice(0, 300)}`;
+    let code: string | undefined;
+
+    try {
+      const json = rawBody ? (JSON.parse(rawBody) as { message?: string; code?: string }) : null;
+      if (json?.message) message = json.message;
+      code = json?.code;
+    } catch {
+      // Non-JSON body — the generic message above already covers it.
+    }
+
+    super(message);
+    this.code = code;
   }
 }
 
@@ -272,6 +292,13 @@ class LinkedInAdapter implements PublishAdapter {
       return { ok: true, remotePostId: id, remotePostUrl: buildLinkedInPostUrl(id) };
     } catch (error) {
       if (error instanceof LinkedInApiError) {
+        if (error.status === 426 || error.code === "NONEXISTENT_VERSION" || error.code === "VERSION_MISSING") {
+          console.error(`[linkedin] Unsupported LinkedIn-Version "${LINKEDIN_API_VERSION}" — update it in lib/social-media/publishing.ts.`);
+          return {
+            ok: false,
+            error: "LinkedIn's API version used by this server is out of date and needs to be updated by an administrator — this is not an account or permission problem.",
+          };
+        }
         if (error.status === 401 || error.status === 403) {
           await markAccountError(params.accountId, error.message);
           return {
