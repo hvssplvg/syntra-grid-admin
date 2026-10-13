@@ -553,19 +553,34 @@ registerPublishAdapter(SocialPlatform.INSTAGRAM, new InstagramAdapter());
    lib/social-media/accounts.ts PLATFORM_CONFIG.X), plus tweet.read /
    users.read / offline.access for profile lookup and token refresh.
 
-   Media: images only, via the v1.1 media upload endpoint
-   (upload.twitter.com) — this is still the current, documented way an
-   OAuth 2.0 user-context app uploads media for a v2 Tweet; v2 has no
-   separate media-upload endpoint of its own. Only the SIMPLE (single
-   request, <=5MB) upload path is implemented — X's chunked
-   INIT/APPEND/FINALIZE flow (required for video and large GIFs) is NOT
-   implemented, so video assets are rejected with an honest error rather
-   than silently dropped or falsely reported as published. Up to 4 images
-   per Tweet, X's own documented limit.
+   Media: images only, via X's v2 media upload endpoints
+   (api.x.com/2/media/upload — INITIALIZE / APPEND / FINALIZE). This
+   integration is OAuth 2.0 only — this codebase never stores an OAuth
+   1.0a consumer key/secret or user access token/secret anywhere (see
+   lib/social-media/accounts.ts PLATFORM_CONFIG.X; only X_CLIENT_ID/
+   X_CLIENT_SECRET, which are OAuth 2.0 app credentials). The legacy
+   v1.1 endpoint (upload.twitter.com/1.1/media/upload.json), used here
+   previously, is documented and built around OAuth 1.0a user-context
+   signing; its OAuth 2.0 Bearer support has been inconsistent and is
+   not the path X's current docs point an OAuth2-only app at. Since
+   there is no OAuth 1.0a credential in this app to fall back to, the
+   v1.1 endpoint could not reliably authenticate here — migrated to the
+   v2 flow, which is documented to accept the same OAuth 2.0 User
+   Context bearer token already used for /2/tweets.
+
+   Still chunked (INITIALIZE → APPEND → FINALIZE, one chunk per image —
+   simple enough that a single-request "simple upload" shortcut isn't
+   needed), still images only. X's chunked media flow's exact endpoint
+   shapes are an actively-evolving part of X's API; re-verify against
+   X's current developer docs if a request starts failing in a way the
+   error messages below don't explain. Video is still NOT implemented —
+   rejected with an honest error rather than silently dropped or falsely
+   reported as published. Up to 4 images per Tweet, X's own documented
+   limit.
 ============================================================================ */
 
 const X_API_BASE = "https://api.x.com";
-const X_MEDIA_UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json";
+const X_MEDIA_UPLOAD_BASE = "https://api.x.com/2/media/upload";
 const X_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const X_MAX_IMAGES_PER_POST = 4;
 const X_SUPPORTED_IMAGE_TYPES: Record<string, string> = {
@@ -573,6 +588,7 @@ const X_SUPPORTED_IMAGE_TYPES: Record<string, string> = {
   "image/png": "png",
   "image/webp": "webp",
 };
+const X_MEDIA_PROCESSING_BUDGET_MS = 30_000;
 
 class XApiError extends Error {
   constructor(public status: number, public title: string | undefined, public detail: string | undefined, rawBody: string) {
@@ -606,10 +622,75 @@ async function xFetch(url: string, init: RequestInit): Promise<Record<string, un
   return json ?? {};
 }
 
-/** Simple (non-chunked) image upload — X's documented path for a single
- *  request under 5MB, which covers ordinary social-post images. Fetches
- *  the asset's existing Cloudinary URL (never a local path) and forwards
- *  its real bytes; the Content-Type returned by that fetch is what gets
+type XMediaProcessingInfo = { state?: string; check_after_secs?: number };
+type XMediaUploadResponse = { data?: { id?: string; media_key?: string; processing_info?: XMediaProcessingInfo } };
+
+async function initializeXMediaUpload(token: string, totalBytes: number, mimeType: string): Promise<string> {
+  const json = (await xFetch(`${X_MEDIA_UPLOAD_BASE}/initialize`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ media_type: mimeType, total_bytes: totalBytes, media_category: "tweet_image" }),
+  })) as XMediaUploadResponse;
+
+  const mediaId = json.data?.id;
+  if (!mediaId) throw new Error("X did not confirm a media upload id.");
+  return mediaId;
+}
+
+async function appendXMediaChunk(token: string, mediaId: string, bytes: Buffer, mimeType: string, extension: string): Promise<void> {
+  const form = new FormData();
+  form.append("segment_index", "0");
+  form.append("media", new Blob([new Uint8Array(bytes)], { type: mimeType }), `image.${extension}`);
+
+  await xFetch(`${X_MEDIA_UPLOAD_BASE}/${encodeURIComponent(mediaId)}/append`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+}
+
+/** Polls FINALIZE's reported processing state until it's done — images
+ *  are normally ready synchronously (no processing_info at all, or
+ *  state already "succeeded"), but this covers the case where X queues
+ *  it, mirroring the same bounded-poll pattern already used for
+ *  LinkedIn's image status and Instagram's video containers. */
+async function waitForXMediaProcessing(token: string, mediaId: string): Promise<void> {
+  const start = Date.now();
+
+  while (Date.now() - start < X_MEDIA_PROCESSING_BUDGET_MS) {
+    const json = (await xFetch(`${X_MEDIA_UPLOAD_BASE}?media_id=${encodeURIComponent(mediaId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })) as XMediaUploadResponse;
+
+    const state = json.data?.processing_info?.state;
+    if (!state || state === "succeeded") return;
+    if (state === "failed") throw new Error("X reported this image failed to process.");
+
+    await sleep((json.data?.processing_info?.check_after_secs ?? 1) * 1000);
+  }
+
+  throw new Error("X is still processing this image — it will be retried on the next scheduled run.");
+}
+
+async function finalizeXMediaUpload(token: string, mediaId: string): Promise<void> {
+  const json = (await xFetch(`${X_MEDIA_UPLOAD_BASE}/${encodeURIComponent(mediaId)}/finalize`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  })) as XMediaUploadResponse;
+
+  const state = json.data?.processing_info?.state;
+  if (!state || state === "succeeded") return;
+  if (state === "failed") throw new Error("X reported this image failed to process.");
+
+  await waitForXMediaProcessing(token, mediaId);
+}
+
+/** Chunked (INITIALIZE → APPEND → FINALIZE) image upload against X's v2
+ *  media endpoints — see the module header comment for why this
+ *  replaced the old v1.1 simple-upload call. Fetches the asset's
+ *  existing Cloudinary URL (never a local path) and forwards its real
+ *  bytes; the Content-Type returned by that fetch is what gets
  *  validated against X's supported formats, not the asset's own `type`
  *  column (which only distinguishes IMAGE/VIDEO, not file format). */
 async function uploadXImage(token: string, asset: SocialMediaAsset): Promise<string> {
@@ -633,20 +714,11 @@ async function uploadXImage(token: string, asset: SocialMediaAsset): Promise<str
     throw new Error(`Image exceeds X's 5MB limit (${(bytes.byteLength / (1024 * 1024)).toFixed(1)}MB).`);
   }
 
-  const form = new FormData();
-  form.append("media", new Blob([bytes], { type: contentType }), `image.${extension}`);
+  const mediaId = await initializeXMediaUpload(token, bytes.byteLength, contentType);
+  await appendXMediaChunk(token, mediaId, bytes, contentType, extension);
+  await finalizeXMediaUpload(token, mediaId);
 
-  const json = await xFetch(X_MEDIA_UPLOAD_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-  });
-
-  if (typeof json.media_id_string !== "string") {
-    throw new Error("X did not confirm a media id for this upload.");
-  }
-
-  return json.media_id_string;
+  return mediaId;
 }
 
 async function createXPost(token: string, text: string, mediaIds: string[]): Promise<string> {
@@ -736,7 +808,12 @@ class XAdapter implements PublishAdapter {
         return { ok: false, error: `X rejected this post: ${error.message}` };
       }
 
-      if (error instanceof Error && /fetch the attached image|does not support this image format|exceeds X's 5MB/.test(error.message)) {
+      if (
+        error instanceof Error &&
+        /fetch the attached image|does not support this image format|exceeds X's 5MB|failed to process|still processing this image|did not confirm a media/.test(
+          error.message,
+        )
+      ) {
         return { ok: false, error: `Image upload failed: ${error.message}` };
       }
 
