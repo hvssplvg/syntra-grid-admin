@@ -4,17 +4,21 @@
 // and the PublishAdapter interface real provider integrations plug into.
 //
 // No adapter here fabricates success. LinkedIn personal-profile posting
-// (LinkedInAdapter), Instagram publishing (InstagramAdapter) and X/Twitter
-// publishing (XAdapter, text + up to 4 images) are real adapters that call
-// the provider's actual API and only report success once the provider
-// confirms a real post/media id. The other 3 platforms (Facebook, TikTok,
-// YouTube) are still stub adapters that resolve to a real failure with an
-// honest, specific reason — either "platform not configured" (no OAuth app
-// registered) or "account not connected" (no valid token) — because that
-// is genuinely the current state in every environment without real
-// provider credentials for them. Each of those is real, substantial,
-// platform-specific work (YouTube's resumable upload, etc.) that plugs in
-// the same way without touching the job-runner orchestration below.
+// (LinkedInAdapter), Instagram publishing (InstagramAdapter), X/Twitter
+// publishing (XAdapter, text + up to 4 images) and TikTok Content Posting
+// (TikTokAdapter, video only) are real adapters that call the provider's
+// actual API and only report success once the provider confirms a real
+// post id — TikTok's confirmation is asynchronous (see "ok:true,
+// pending:true" below and pollPendingTikTokPublishes), so a TikTok target
+// is never marked PUBLISHED just because the initial upload was accepted.
+// The other 2 platforms (Facebook, YouTube) are still stub adapters that
+// resolve to a real failure with an honest, specific reason — either
+// "platform not configured" (no OAuth app registered) or "account not
+// connected" (no valid token) — because that is genuinely the current
+// state in every environment without real provider credentials for them.
+// Each of those is real, substantial, platform-specific work (YouTube's
+// resumable upload, etc.) that plugs in the same way without touching the
+// job-runner orchestration below.
 // X video publishing specifically is also not implemented (needs X's
 // chunked INIT/APPEND/FINALIZE media upload) — XAdapter rejects a video
 // attachment with an honest error rather than silently dropping it.
@@ -39,9 +43,21 @@ export type PublishParams = {
   assets: SocialMediaAsset[];
   /** Only Instagram currently reads this — every other adapter ignores it. */
   placement: SocialMediaPlacement;
+  /** Only TikTok currently reads this — every other adapter ignores it. */
+  metadata: Prisma.JsonValue | null;
 };
 
-export type PublishResult = { ok: true; remotePostId: string; remotePostUrl?: string } | { ok: false; error: string };
+export type PublishResult =
+  | { ok: true; remotePostId: string; remotePostUrl?: string }
+  /**
+   * The provider accepted the request but hasn't confirmed the real
+   * outcome yet (TikTok's Content Posting API is asynchronous — only
+   * its own status-polling endpoint can say what actually happened).
+   * executeTarget leaves the target in PUBLISHING rather than marking
+   * it PUBLISHED; only pollPendingTikTokPublishes can resolve it further.
+   */
+  | { ok: true; remotePostId: string; pending: true }
+  | { ok: false; error: string };
 
 export interface PublishAdapter {
   publish(params: PublishParams): Promise<PublishResult>;
@@ -888,6 +904,409 @@ class XAdapter implements PublishAdapter {
 registerPublishAdapter(SocialPlatform.X, new XAdapter());
 
 /* ============================================================================
+   TIKTOK — Content Posting API. Publishing is asynchronous: FILE_UPLOAD
+   accepts the video and returns a publish_id; the real outcome
+   (published publicly, delivered to the creator's TikTok inbox as a
+   draft, or failed) only becomes known from TikTok's own status-polling
+   endpoint (pollPendingTikTokPublishes, called from runDuePublishJobs).
+   publish() below NEVER returns a final PUBLISHED/DELIVERED_TO_INBOX
+   result — only { ok:true, pending:true }.
+
+   Direct Post (params.metadata.tiktokPostMode === "DIRECT_POST") and
+   Upload-to-TikTok ("UPLOAD_TO_TIKTOK") are genuinely different
+   endpoints with different request shapes — confirmed against TikTok's
+   current official docs, not assumed:
+     - /v2/post/publish/video/init/ (Direct Post) takes a full post_info
+       object: privacy_level (required, must be one of creator_info's
+       privacy_level_options), title/caption, disable_duet/comment/stitch,
+       brand_content_toggle/brand_organic_toggle.
+     - /v2/post/publish/inbox/video/init/ (Upload-to-TikTok) takes ONLY
+       source_info — no post_info, no caption, no privacy level, no
+       toggles. The creator sets all of that themselves inside the
+       TikTok app when they open the draft notification. A post_info
+       body is never sent to this endpoint; it isn't part of its
+       documented schema.
+
+   PULL_FROM_URL is never used: it requires TikTok-side verification of
+   the exact serving domain, independent of and unrelated to
+   syntragrid.com's own DNS verification (that only covers the Login Kit
+   redirect domain), and there is no way for this codebase to confirm
+   Cloudinary's delivery domain is verified with TikTok. FILE_UPLOAD
+   works regardless of that, so every upload downloads the asset's bytes
+   from Cloudinary server-side and chunks them to TikTok directly.
+
+   Chunking rule (TikTok's Content Posting API Media Transfer Guide):
+   videos up to 64MB upload as a single whole-file chunk (mandatory for
+   anything under 5MB, also valid up to 64MB); anything larger is split
+   into chunk_size-sized pieces (fixed at the 64MB ceiling here), with
+   total_chunk_count = floor(video_size / chunk_size) and the final
+   chunk absorbing the remainder (TikTok's own documented rule — the
+   final chunk may exceed chunk_size, up to 128MB, rather than leaving a
+   trailing sub-5MB chunk). Chunks are uploaded strictly in order.
+============================================================================ */
+
+const TIKTOK_API_BASE = "https://open.tiktokapis.com/v2";
+// Files under 5MB must be uploaded whole (handled by the <=
+// TIKTOK_MAX_CHUNK_BYTES branch in computeTikTokChunkPlan below, which
+// already covers both the <5MB-whole-file and 5–64MB-single-chunk cases
+// identically — there's no separate 5MB threshold to branch on).
+const TIKTOK_MAX_CHUNK_BYTES = 64 * 1024 * 1024;
+const TIKTOK_MAX_TITLE_LENGTH = 2200;
+
+export class TikTokApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string | undefined,
+    public logId: string | undefined,
+    rawBody: string,
+  ) {
+    super(TikTokApiError.extractMessage(rawBody, status));
+  }
+
+  private static extractMessage(rawBody: string, status: number): string {
+    try {
+      const json = rawBody ? (JSON.parse(rawBody) as { error?: { message?: string } }) : null;
+      if (json?.error?.message) return json.error.message;
+    } catch {
+      // Non-JSON body — the generic message below already covers it.
+    }
+    return `TikTok API error ${status}: ${rawBody.slice(0, 300)}`;
+  }
+}
+
+/** TikTok's Open API typically answers with HTTP 200 even for a logical
+ *  failure — the real signal is `error.code !== "ok"` inside the JSON
+ *  body, not the HTTP status alone. Both are checked. Every failure is
+ *  logged server-side with status/code/message/log_id only — never a
+ *  token, secret or Authorization header. */
+type TikTokRawResponse<T> = { data?: T; error?: { code?: string; message?: string; log_id?: string; logid?: string } };
+
+async function tiktokFetch<T>(url: string, init: RequestInit): Promise<{ data: T }> {
+  const response = await fetch(url, init);
+  const text = await response.text();
+
+  let json: TikTokRawResponse<T> | null = null;
+  try {
+    json = text ? (JSON.parse(text) as TikTokRawResponse<T>) : null;
+  } catch {
+    // Non-JSON body — handled by the failure branch below.
+  }
+
+  const errorCode = json?.error?.code;
+  const logId = json?.error?.log_id ?? json?.error?.logid;
+
+  if (!response.ok || (errorCode && errorCode !== "ok")) {
+    console.error(
+      JSON.stringify({
+        scope: "tiktok_api_error",
+        endpoint: url.replace(/^https?:\/\/[^/]+/, ""),
+        status: response.status,
+        code: errorCode,
+        message: json?.error?.message,
+        logId,
+      }),
+    );
+    throw new TikTokApiError(response.status, errorCode, logId, text);
+  }
+
+  if (!json?.data) throw new Error("TikTok returned an unreadable response.");
+  return { data: json.data };
+}
+
+export type TikTokCreatorInfo = {
+  privacy_level_options?: string[];
+  comment_disabled?: boolean;
+  duet_disabled?: boolean;
+  stitch_disabled?: boolean;
+  max_video_post_duration_sec?: number;
+};
+
+/** Must be called immediately before every post — these options are
+ *  live, per-creator, and never hardcoded. An unaudited (sandbox) app's
+ *  creator_info is itself restricted (see TIKTOK_FRIENDLY_ERRORS for how
+ *  the resulting publish-time rejection is surfaced). */
+export async function fetchTikTokCreatorInfo(token: string): Promise<TikTokCreatorInfo> {
+  const { data } = await tiktokFetch<TikTokCreatorInfo>(`${TIKTOK_API_BASE}/post/publish/creator_info/query/`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=UTF-8" },
+    body: JSON.stringify({}),
+  });
+  return data;
+}
+
+function computeTikTokChunkPlan(totalBytes: number): { chunkSize: number; totalChunkCount: number } {
+  if (totalBytes <= TIKTOK_MAX_CHUNK_BYTES) {
+    return { chunkSize: totalBytes, totalChunkCount: 1 };
+  }
+
+  const chunkSize = TIKTOK_MAX_CHUNK_BYTES;
+  return { chunkSize, totalChunkCount: Math.max(1, Math.floor(totalBytes / chunkSize)) };
+}
+
+async function uploadTikTokVideoChunks(uploadUrl: string, bytes: Buffer, mimeType: string, chunkSize: number, totalChunkCount: number): Promise<void> {
+  // Sequential, strictly in order (TikTok's own requirement) — also
+  // keeps memory bounded to one chunk at a time rather than buffering
+  // every chunk's request concurrently.
+  for (let index = 0; index < totalChunkCount; index++) {
+    const start = index * chunkSize;
+    const end = index === totalChunkCount - 1 ? bytes.byteLength - 1 : start + chunkSize - 1;
+    const chunk = bytes.subarray(start, end + 1);
+
+    const response = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": mimeType,
+        "Content-Range": `bytes ${start}-${end}/${bytes.byteLength}`,
+        "Content-Length": String(chunk.byteLength),
+      },
+      body: new Uint8Array(chunk),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`TikTok rejected a video chunk upload (${response.status}): ${text.slice(0, 200)}`);
+    }
+  }
+}
+
+type TikTokInitResponse = { publish_id?: string; upload_url?: string };
+
+async function initTikTokVideoUpload(
+  token: string,
+  endpoint: "video/init" | "inbox/video/init",
+  postInfo: Record<string, unknown> | null,
+  totalBytes: number,
+  chunkSize: number,
+  totalChunkCount: number,
+): Promise<{ publishId: string; uploadUrl: string }> {
+  const body: Record<string, unknown> = {
+    source_info: { source: "FILE_UPLOAD", video_size: totalBytes, chunk_size: chunkSize, total_chunk_count: totalChunkCount },
+  };
+  if (postInfo) body.post_info = postInfo;
+
+  const { data } = await tiktokFetch<TikTokInitResponse>(`${TIKTOK_API_BASE}/post/publish/${endpoint}/`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=UTF-8" },
+    body: JSON.stringify(body),
+  });
+
+  if (!data.publish_id || !data.upload_url) throw new Error("TikTok did not return a publish id / upload URL.");
+  return { publishId: data.publish_id, uploadUrl: data.upload_url };
+}
+
+type TikTokPublishMetadata = {
+  tiktokPostMode?: "DIRECT_POST" | "UPLOAD_TO_TIKTOK";
+  tiktokPrivacyLevel?: string;
+  tiktokDisableComment?: boolean;
+  tiktokDisableDuet?: boolean;
+  tiktokDisableStitch?: boolean;
+  tiktokBrandedContent?: boolean;
+  tiktokYourBrand?: boolean;
+};
+
+function parseTikTokMetadata(metadata: Prisma.JsonValue | null): TikTokPublishMetadata {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
+  return metadata as TikTokPublishMetadata;
+}
+
+/** Known TikTok error codes that mean "this is an expected sandbox/app
+ *  restriction," not a bug — surfaced verbatim so an admin never mistakes
+ *  one for a transient failure worth retrying as-is. */
+const TIKTOK_FRIENDLY_ERRORS: Record<string, string> = {
+  unaudited_client_can_only_post_to_private_accounts:
+    "This TikTok app has not been audited/approved by TikTok yet, so TikTok restricts every post from it to private/self-only visibility. This is an expected sandbox limitation, not a bug — it is lifted once TikTok approves the app.",
+  reached_active_user_cap:
+    "This TikTok app is still in sandbox mode, which caps the number of distinct TikTok accounts that can authorize it (a small daily cap). This is an expected sandbox limitation — it is lifted once TikTok approves the app.",
+  spam_risk_too_many_posts: "TikTok flagged this as too many posts in a short period and declined it as a spam-risk precaution. Wait and try again later.",
+  spam_risk_user_banned_from_posting: "TikTok has restricted this account from posting.",
+  scope_not_authorized: "This TikTok connection is missing a permission this action needs. Reconnect the TikTok account to grant it.",
+  privacy_level_option_mismatch:
+    "The chosen privacy setting is no longer one TikTok allows for this account — reopen the composer so it can refresh the available options.",
+};
+
+class TikTokAdapter implements PublishAdapter {
+  async publish(params: PublishParams): Promise<PublishResult> {
+    if (!isPlatformConfigured(SocialPlatform.TIKTOK)) {
+      return { ok: false, error: `${PLATFORM_CONFIG.TIKTOK.label} is not configured.` };
+    }
+
+    const video = params.assets.find((asset) => asset.type === "VIDEO");
+    if (!video) {
+      return { ok: false, error: "TikTok requires an attached video. Add a video to publish to TikTok." };
+    }
+
+    const meta = parseTikTokMetadata(params.metadata);
+    if (meta.tiktokPostMode !== "DIRECT_POST" && meta.tiktokPostMode !== "UPLOAD_TO_TIKTOK") {
+      return {
+        ok: false,
+        error: "TikTok publishing mode was not specified. Choose Direct Post or Upload to TikTok before publishing.",
+      };
+    }
+
+    let token: string;
+    try {
+      token = await getValidSocialAccessToken(params.accountId);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Account is not connected." };
+    }
+
+    try {
+      let postInfo: Record<string, unknown> | null = null;
+
+      if (meta.tiktokPostMode === "DIRECT_POST") {
+        const creatorInfo = await fetchTikTokCreatorInfo(token);
+        const options = creatorInfo.privacy_level_options ?? [];
+
+        if (!meta.tiktokPrivacyLevel || !options.includes(meta.tiktokPrivacyLevel)) {
+          return {
+            ok: false,
+            error:
+              options.length > 0
+                ? `Choose a privacy setting TikTok currently allows for this account: ${options.join(", ")}.`
+                : "TikTok did not return any allowed privacy settings for this account — it may need to be reconnected.",
+          };
+        }
+
+        postInfo = {
+          privacy_level: meta.tiktokPrivacyLevel,
+          title: params.caption.slice(0, TIKTOK_MAX_TITLE_LENGTH),
+          disable_duet: Boolean(meta.tiktokDisableDuet),
+          disable_comment: Boolean(meta.tiktokDisableComment),
+          disable_stitch: Boolean(meta.tiktokDisableStitch),
+          brand_content_toggle: Boolean(meta.tiktokBrandedContent),
+          brand_organic_toggle: Boolean(meta.tiktokYourBrand),
+        };
+      }
+      // Upload-to-TikTok (inbox): deliberately no post_info — that
+      // endpoint's documented schema takes only source_info (see the
+      // module header comment above).
+
+      const assetResponse = await fetch(video.url);
+      if (!assetResponse.ok) {
+        return { ok: false, error: `Could not fetch the attached video for upload (${assetResponse.status}).` };
+      }
+
+      const contentType = assetResponse.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() || "video/mp4";
+      const bytes = Buffer.from(await assetResponse.arrayBuffer());
+
+      if (bytes.byteLength === 0) {
+        return { ok: false, error: "The attached video is empty." };
+      }
+
+      const { chunkSize, totalChunkCount } = computeTikTokChunkPlan(bytes.byteLength);
+      const endpoint = meta.tiktokPostMode === "DIRECT_POST" ? "video/init" : "inbox/video/init";
+
+      const { publishId, uploadUrl } = await initTikTokVideoUpload(token, endpoint, postInfo, bytes.byteLength, chunkSize, totalChunkCount);
+      await uploadTikTokVideoChunks(uploadUrl, bytes, contentType, chunkSize, totalChunkCount);
+
+      // Accepted, not confirmed — see the PublishResult type's "pending"
+      // variant. Only pollPendingTikTokPublishes, reading TikTok's own
+      // status endpoint, may ever mark this PUBLISHED/DELIVERED_TO_INBOX.
+      return { ok: true, remotePostId: publishId, pending: true };
+    } catch (error) {
+      if (error instanceof TikTokApiError) {
+        const friendly = error.code ? TIKTOK_FRIENDLY_ERRORS[error.code] : undefined;
+        if (friendly) return { ok: false, error: friendly };
+
+        if (error.status === 401 || error.code === "access_token_invalid") {
+          await markAccountError(params.accountId, error.message);
+          return { ok: false, error: "Your TikTok connection has expired and needs to be reconnected." };
+        }
+
+        const reference = error.logId ? ` (reference: ${error.logId})` : "";
+        return { ok: false, error: `TikTok rejected this post: ${error.message}${reference}` };
+      }
+
+      return { ok: false, error: error instanceof Error ? error.message : "TikTok publishing failed." };
+    }
+  }
+}
+
+registerPublishAdapter(SocialPlatform.TIKTOK, new TikTokAdapter());
+
+type TikTokStatusResponse = {
+  status?: "PROCESSING_DOWNLOAD" | "PROCESSING_UPLOAD" | "SEND_TO_USER_INBOX" | "PUBLISH_COMPLETE" | "FAILED";
+  fail_reason?: string;
+  publicaly_available_post_id?: string[];
+};
+
+/**
+ * The only thing allowed to move a TikTok target out of PUBLISHING once
+ * it holds a publish_id. Never infers failure from elapsed time — only
+ * from TikTok's own explicit `status: "FAILED"` answer. Any error
+ * actually talking to TikTok (network failure, 5xx, 429, an unparseable
+ * body, a token that needs refreshing) leaves the target completely
+ * unchanged and is simply logged — retried on the next poll. This is
+ * deliberate: a lack of confirmation is not proof of failure, and
+ * polling that can't confirm the outcome must retain the pending status
+ * rather than guess.
+ */
+async function pollPendingTikTokPublishes(): Promise<void> {
+  const pending = await prisma.socialPostPlatform.findMany({
+    where: { platform: SocialPlatform.TIKTOK, status: SocialPostTargetStatus.PUBLISHING, remotePostId: { not: null } },
+    select: { id: true, postId: true, accountId: true, remotePostId: true },
+  });
+
+  for (const target of pending) {
+    try {
+      await prisma.socialPostPlatform.update({ where: { id: target.id }, data: { lastPolledAt: new Date() } });
+
+      const token = await getValidSocialAccessToken(target.accountId);
+      const { data } = await tiktokFetch<TikTokStatusResponse>(`${TIKTOK_API_BASE}/post/publish/status/fetch/`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=UTF-8" },
+        body: JSON.stringify({ publish_id: target.remotePostId }),
+      });
+
+      if (data.status === "PUBLISH_COMPLETE") {
+        const realId = data.publicaly_available_post_id?.[0] ?? target.remotePostId!;
+        await prisma.socialPostPlatform.update({
+          where: { id: target.id },
+          data: { status: SocialPostTargetStatus.PUBLISHED, publishedAt: new Date(), remotePostId: realId, lastError: null },
+        });
+        await logPostActivity(target.postId, null, SocialPostActivityType.PUBLISHED, "TikTok confirmed this post was published.");
+        await reconcilePostStatus(target.postId);
+      } else if (data.status === "SEND_TO_USER_INBOX") {
+        await prisma.socialPostPlatform.update({
+          where: { id: target.id },
+          data: { status: SocialPostTargetStatus.DELIVERED_TO_INBOX, publishedAt: new Date(), lastError: null },
+        });
+        await logPostActivity(
+          target.postId,
+          null,
+          SocialPostActivityType.PUBLISHED,
+          "Delivered to the creator's TikTok inbox as a draft — not published publicly. The creator must open the TikTok app to finish posting it.",
+        );
+        await reconcilePostStatus(target.postId);
+      } else if (data.status === "FAILED") {
+        await prisma.socialPostPlatform.update({
+          where: { id: target.id },
+          data: {
+            status: SocialPostTargetStatus.FAILED,
+            lastError: data.fail_reason ?? "TikTok reported this publish failed.",
+            retryCount: { increment: 1 },
+          },
+        });
+        await reconcilePostStatus(target.postId);
+      }
+      // PROCESSING_DOWNLOAD / PROCESSING_UPLOAD / anything else: no
+      // status change. lastPolledAt above already reflects this check.
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          scope: "tiktok_poll_error",
+          targetId: target.id,
+          code: error instanceof TikTokApiError ? error.code : undefined,
+          message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+        }),
+      );
+      // Never change status here — an error checking TikTok is not the
+      // same as TikTok reporting a failure. Retried on the next poll.
+    }
+  }
+}
+
+/* ============================================================================
    JOB RUNNER — called by the cron route, mirrors app/api/cron/monzo/route.ts's
    per-row try/catch loop shape exactly.
 ============================================================================ */
@@ -909,19 +1328,34 @@ async function reconcilePostStatus(postId: string) {
   if (anyPending) return; // still in flight — leave post status as PUBLISHING
 
   const allPublished = relevant.every((target) => target.status === SocialPostTargetStatus.PUBLISHED);
-  const anyPublished = relevant.some((target) => target.status === SocialPostTargetStatus.PUBLISHED);
+  // TikTok's Upload-to-TikTok workflow: the video reached the creator's
+  // TikTok inbox as a draft, never actually published publicly. Counted
+  // as a real completion for rollup purposes, but never folded into
+  // "published" — a post where every target delivered to an inbox gets
+  // its own distinct status, not SocialPostStatus.PUBLISHED.
+  const allDeliveredToInbox = relevant.every((target) => target.status === SocialPostTargetStatus.DELIVERED_TO_INBOX);
+  const anySucceeded = relevant.some(
+    (target) => target.status === SocialPostTargetStatus.PUBLISHED || target.status === SocialPostTargetStatus.DELIVERED_TO_INBOX,
+  );
 
   const nextStatus = allPublished
     ? SocialPostStatus.PUBLISHED
-    : anyPublished
-      ? SocialPostStatus.PARTIALLY_PUBLISHED
-      : SocialPostStatus.FAILED;
+    : allDeliveredToInbox
+      ? SocialPostStatus.DELIVERED_TO_INBOX
+      : anySucceeded
+        ? SocialPostStatus.PARTIALLY_PUBLISHED
+        : SocialPostStatus.FAILED;
+
+  const isSuccessLike =
+    nextStatus === SocialPostStatus.PUBLISHED ||
+    nextStatus === SocialPostStatus.DELIVERED_TO_INBOX ||
+    nextStatus === SocialPostStatus.PARTIALLY_PUBLISHED;
 
   await prisma.socialPost.update({
     where: { id: postId },
     data: {
       status: nextStatus,
-      publishedAt: nextStatus === SocialPostStatus.PUBLISHED || nextStatus === SocialPostStatus.PARTIALLY_PUBLISHED ? new Date() : undefined,
+      publishedAt: isSuccessLike ? new Date() : undefined,
     },
   });
 
@@ -983,9 +1417,25 @@ async function executeTarget(target: TargetWithRelations): Promise<JobRunResult>
       caption,
       assets,
       placement: target.placement,
+      metadata: target.metadata,
     });
 
-    if (result.ok) {
+    if (result.ok && "pending" in result) {
+      // Accepted by the provider but not yet confirmed (TikTok only,
+      // today) — deliberately NOT marked PUBLISHED. Status stays
+      // PUBLISHING; only pollPendingTikTokPublishes can resolve it
+      // further, once TikTok's own status endpoint gives a real answer.
+      await prisma.socialPostPlatform.update({
+        where: { id: target.id },
+        data: { remotePostId: result.remotePostId, lastError: null },
+      });
+      await logPostActivity(
+        target.postId,
+        null,
+        SocialPostActivityType.PUBLISHING_STARTED,
+        `${target.platform} accepted the upload and is processing it — awaiting confirmation.`,
+      );
+    } else if (result.ok) {
       await prisma.socialPostPlatform.update({
         where: { id: target.id },
         data: {
@@ -1035,11 +1485,27 @@ async function executeTarget(target: TargetWithRelations): Promise<JobRunResult>
  */
 const STALE_PUBLISHING_GRACE_MS = 10 * 60 * 1000;
 
+/**
+ * TikTok is deliberately excluded from this sweep ONCE it has a
+ * remotePostId (TikTok's publish_id) — at that point TikTok itself holds
+ * the real state, and a lack of confirmation within this short window is
+ * not proof of failure; only pollPendingTikTokPublishes, reading TikTok's
+ * own status endpoint, may resolve it further (see the correction this
+ * reflects: never auto-FAIL an async TikTok publish on elapsed time
+ * alone). A TikTok target that's still PUBLISHING with NO remotePostId
+ * past the grace period never even got a publish_id back — that's the
+ * same "the serverless function was killed mid-call" failure mode this
+ * sweep exists for on every other platform, so it's swept normally.
+ */
 async function reconcileStalePublishingTargets(): Promise<void> {
   const cutoff = new Date(Date.now() - STALE_PUBLISHING_GRACE_MS);
 
   const stale = await prisma.socialPostPlatform.findMany({
-    where: { status: SocialPostTargetStatus.PUBLISHING, lastAttemptAt: { lte: cutoff } },
+    where: {
+      status: SocialPostTargetStatus.PUBLISHING,
+      lastAttemptAt: { lte: cutoff },
+      OR: [{ platform: { not: SocialPlatform.TIKTOK } }, { platform: SocialPlatform.TIKTOK, remotePostId: null }],
+    },
     select: { id: true, postId: true },
   });
 
@@ -1058,6 +1524,13 @@ async function reconcileStalePublishingTargets(): Promise<void> {
 
 export async function runDuePublishJobs(limit = 50): Promise<{ ran: number; results: JobRunResult[] }> {
   await reconcileStalePublishingTargets();
+  // Runs on the same (currently once-daily) cron cadence as everything
+  // else here — a TikTok target's confirmation can take up to that long
+  // between polls. Submission itself (publishTargetsNow) is immediate;
+  // only turning "accepted" into a final state is on this schedule.
+  await pollPendingTikTokPublishes().catch((error) =>
+    console.error(JSON.stringify({ scope: "tiktok_poll_error", stage: "batch", message: error instanceof Error ? error.message.slice(0, 200) : "unknown" })),
+  );
 
   const now = new Date();
 

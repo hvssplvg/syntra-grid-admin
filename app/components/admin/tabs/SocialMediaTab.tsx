@@ -72,6 +72,7 @@ type RealPostStatus =
   | "SCHEDULED"
   | "PUBLISHING"
   | "PUBLISHED"
+  | "DELIVERED_TO_INBOX"
   | "PARTIALLY_PUBLISHED"
   | "FAILED"
   | "CANCELLED";
@@ -93,17 +94,37 @@ type InstagramPlacement = "FEED" | "STORY";
 
 type LoadStatus = "loading" | "ready" | "error";
 
-type TargetStatus = "PENDING" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "FAILED" | "CANCELLED";
+type TargetStatus = "PENDING" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "DELIVERED_TO_INBOX" | "FAILED" | "CANCELLED";
+
+type TikTokPostMode = "DIRECT_POST" | "UPLOAD_TO_TIKTOK";
+
+type TikTokTargetMetadata = {
+  tiktokPostMode?: TikTokPostMode;
+  tiktokPrivacyLevel?: string;
+  tiktokDisableComment?: boolean;
+  tiktokDisableDuet?: boolean;
+  tiktokDisableStitch?: boolean;
+  tiktokBrandedContent?: boolean;
+  tiktokYourBrand?: boolean;
+};
 
 type PostTarget = {
   accountId: string;
   platform: SocialPlatform;
   caption: string | null;
   placement: InstagramPlacement;
+  /** Only meaningful for TikTok today; every other platform ignores it. */
+  metadata: TikTokTargetMetadata | null;
   status: TargetStatus;
   remotePostUrl: string | null;
   lastError: string | null;
   publishedAt: string | null;
+  lastAttemptAt: string | null;
+  /** Set only by TikTok's status poller — when its async publish status
+   *  was last checked. Drives the "still processing, last checked…" /
+   *  "taking longer than expected" label; never implies a status change
+   *  on its own. */
+  lastPolledAt: string | null;
   account: ApiAccountRef;
 };
 
@@ -141,6 +162,17 @@ type PostForm = {
   /** Where this should land on Instagram; ignored by every other platform.
    *  A Reel is the automatic result of FEED + a single video. */
   instagramPlacement: InstagramPlacement;
+  /** TikTok-only publish options; ignored by every other platform. Never
+   *  defaulted into either workflow — null until the user explicitly
+   *  picks one, since Direct Post and Upload-to-TikTok are genuinely
+   *  different, non-equivalent workflows. */
+  tiktokPostMode: TikTokPostMode | null;
+  tiktokPrivacyLevel: string | null;
+  tiktokDisableComment: boolean;
+  tiktokDisableDuet: boolean;
+  tiktokDisableStitch: boolean;
+  tiktokBrandedContent: boolean;
+  tiktokYourBrand: boolean;
 };
 
 type ComposerState = {
@@ -327,6 +359,10 @@ const REAL_STATUS_META: Record<RealPostStatus, { label: string; hue: string }> =
   SCHEDULED: { label: "Scheduled", hue: "var(--accent)" },
   PUBLISHING: { label: "Publishing…", hue: "var(--accent)" },
   PUBLISHED: { label: "Published", hue: "#059669" },
+  // TikTok's Upload-to-TikTok workflow only ever delivers a video as a
+  // draft to the creator's TikTok inbox — genuinely distinct from
+  // PUBLISHED, never shown the same way.
+  DELIVERED_TO_INBOX: { label: "Delivered to TikTok inbox", hue: "#7C3AED" },
   PARTIALLY_PUBLISHED: { label: "Partially published", hue: "#D97706" },
   FAILED: { label: "Failed", hue: "#DC2626" },
   CANCELLED: { label: "Cancelled", hue: "var(--text-subtle)" },
@@ -340,8 +376,59 @@ const TARGET_STATUS_META: Record<TargetStatus, { label: string; hue: string }> =
   SCHEDULED: { label: "Scheduled", hue: "var(--accent)" },
   PUBLISHING: { label: "Publishing…", hue: "var(--accent)" },
   PUBLISHED: { label: "Published", hue: "#059669" },
+  DELIVERED_TO_INBOX: { label: "Delivered to TikTok inbox", hue: "#7C3AED" },
   FAILED: { label: "Failed", hue: "#DC2626" },
   CANCELLED: { label: "Cancelled", hue: "var(--text-subtle)" },
+};
+
+/**
+ * Table-driven platform + status → display label, covering the four
+ * TikTok states the Content dashboard must distinguish (Published
+ * publicly / Delivered to TikTok inbox / Processing / Failed) without a
+ * scatter of inline conditionals. Every other platform's label is
+ * exactly TARGET_STATUS_META's generic one, untouched.
+ *
+ * TikTok's PUBLISHING is deliberately re-labelled "Processing" — the
+ * generic "Publishing…" implies a short, synchronous wait, but a TikTok
+ * target in PUBLISHING with a stored remotePostId has already been
+ * accepted by TikTok and is waiting on TikTok's own async confirmation
+ * (see lib/social-media/publishing.ts's pollPendingTikTokPublishes),
+ * which can take a while. The target never shows a public post URL for
+ * DELIVERED_TO_INBOX — remotePostUrl is always null for that state
+ * server-side, so the existing "only render a link when remotePostUrl
+ * is set" check already covers this.
+ */
+function targetDisplayMeta(target: Pick<PostTarget, "platform" | "status" | "lastPolledAt" | "lastAttemptAt">): {
+  label: string;
+  hue: string;
+  detail: string | null;
+} {
+  if (target.platform === "TIKTOK" && target.status === "PUBLISHING") {
+    const checkedAt = target.lastPolledAt ?? target.lastAttemptAt;
+    const ageMs = checkedAt ? Date.now() - new Date(checkedAt).getTime() : null;
+    const takingLong = ageMs !== null && ageMs > 24 * 60 * 60 * 1000;
+
+    return {
+      label: "Processing",
+      hue: "var(--accent)",
+      detail: checkedAt
+        ? `${takingLong ? "Taking longer than TikTok usually takes. " : ""}Last checked ${relativeTime(checkedAt)}.`
+        : "Awaiting TikTok's confirmation.",
+    };
+  }
+
+  const meta = TARGET_STATUS_META[target.status];
+  return { label: meta.label, hue: meta.hue, detail: null };
+}
+
+/** Friendlier labels for TikTok's own privacy_level values — falls back
+ *  to the raw value for anything not listed, so an unrecognized future
+ *  option still renders instead of disappearing. */
+const TIKTOK_PRIVACY_LABELS: Record<string, string> = {
+  PUBLIC_TO_EVERYONE: "Everyone",
+  MUTUAL_FOLLOW_FRIENDS: "Friends",
+  FOLLOWER_OF_CREATOR: "Followers",
+  SELF_ONLY: "Only me",
 };
 
 /** Statuses where the post has already been handed to the scheduler. */
@@ -349,6 +436,7 @@ const POST_SCHEDULE_STATES: RealPostStatus[] = [
   "SCHEDULED",
   "PUBLISHING",
   "PUBLISHED",
+  "DELIVERED_TO_INBOX",
   "PARTIALLY_PUBLISHED",
 ];
 
@@ -757,10 +845,13 @@ type ApiPost = {
     platform: SocialPlatform;
     caption: string | null;
     placement: InstagramPlacement;
+    metadata: TikTokTargetMetadata | null;
     status: TargetStatus;
     remotePostUrl: string | null;
     lastError: string | null;
     publishedAt: string | null;
+    lastAttemptAt: string | null;
+    lastPolledAt: string | null;
     account: ApiAccountRef;
   }>;
   assets: Array<{ assetId: string; position: number; asset: ApiAsset }>;
@@ -772,10 +863,13 @@ function fromApiPost(api: ApiPost): SocialPost {
     platform: target.platform,
     caption: target.caption,
     placement: target.placement,
+    metadata: target.metadata ?? null,
     status: target.status,
     remotePostUrl: target.remotePostUrl,
     lastError: target.lastError,
     publishedAt: target.publishedAt,
+    lastAttemptAt: target.lastAttemptAt ?? null,
+    lastPolledAt: target.lastPolledAt ?? null,
     account: target.account,
   }));
 
@@ -806,7 +900,7 @@ type CreatePostPayload = {
   caption: string;
   category: string | null;
   campaignId: string | null;
-  targets: { accountId: string; caption: string | null; placement?: InstagramPlacement }[];
+  targets: { accountId: string; caption: string | null; placement?: InstagramPlacement; metadata?: TikTokTargetMetadata }[];
   assetIds: string[];
 };
 
@@ -1087,6 +1181,13 @@ function formFromPost(post: SocialPost | null, presetDate: string | null): PostF
     assetIds: post?.assetIds ?? [],
     instagramPlacement:
       post?.targets.find((target) => target.platform === "INSTAGRAM")?.placement ?? "FEED",
+    tiktokPostMode: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokPostMode ?? null,
+    tiktokPrivacyLevel: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokPrivacyLevel ?? null,
+    tiktokDisableComment: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokDisableComment ?? false,
+    tiktokDisableDuet: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokDisableDuet ?? false,
+    tiktokDisableStitch: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokDisableStitch ?? false,
+    tiktokBrandedContent: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokBrandedContent ?? false,
+    tiktokYourBrand: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokYourBrand ?? false,
   };
 }
 
@@ -1108,6 +1209,17 @@ function formSignature(form: PostForm) {
     scheduledAt: form.status === "SCHEDULED" ? form.scheduledAt : "",
     assetIds: form.assetIds,
     instagramPlacement: form.platforms.includes("INSTAGRAM") ? form.instagramPlacement : "",
+    tiktok: form.platforms.includes("TIKTOK")
+      ? {
+          mode: form.tiktokPostMode,
+          privacy: form.tiktokPrivacyLevel,
+          comment: form.tiktokDisableComment,
+          duet: form.tiktokDisableDuet,
+          stitch: form.tiktokDisableStitch,
+          branded: form.tiktokBrandedContent,
+          yourBrand: form.tiktokYourBrand,
+        }
+      : null,
   });
 }
 
@@ -1334,6 +1446,19 @@ export default function SocialMediaTab() {
           accountId: account.id,
           caption: form.platformCaptions[platform]?.trim() || null,
           ...(platform === "INSTAGRAM" ? { placement: form.instagramPlacement } : {}),
+          ...(platform === "TIKTOK"
+            ? {
+                metadata: {
+                  tiktokPostMode: form.tiktokPostMode ?? undefined,
+                  tiktokPrivacyLevel: form.tiktokPrivacyLevel ?? undefined,
+                  tiktokDisableComment: form.tiktokDisableComment,
+                  tiktokDisableDuet: form.tiktokDisableDuet,
+                  tiktokDisableStitch: form.tiktokDisableStitch,
+                  tiktokBrandedContent: form.tiktokBrandedContent,
+                  tiktokYourBrand: form.tiktokYourBrand,
+                },
+              }
+            : {}),
         });
       }
 
@@ -3566,6 +3691,54 @@ function PostComposer({
   const [dragY, setDragY] = useState(0);
   const [previewOpen, setPreviewOpen] = useState(false);
 
+  // Live, per-creator TikTok publish options — never hardcoded (TikTok's
+  // own requirement: privacy_level must be one of what creator_info
+  // actually returns for THIS account right now, and a sandbox/unaudited
+  // app's own creator_info is itself restricted). Refetched whenever the
+  // selected TikTok account changes; a stale selection from a previous
+  // account is never reused.
+  const tiktokAccountId = connectedAccountsByPlatform.get("TIKTOK")?.[0]?.id ?? null;
+  const [tiktokCreatorInfo, setTiktokCreatorInfo] = useState<{
+    privacyLevelOptions: string[];
+    commentDisabled: boolean;
+    duetDisabled: boolean;
+    stitchDisabled: boolean;
+  } | null>(null);
+  const [tiktokCreatorInfoStatus, setTiktokCreatorInfoStatus] = useState<LoadStatus>("loading");
+
+  useEffect(() => {
+    if (!form.platforms.includes("TIKTOK") || !tiktokAccountId) {
+      setTiktokCreatorInfo(null);
+      return;
+    }
+
+    let cancelled = false;
+    setTiktokCreatorInfoStatus("loading");
+
+    apiRequest<{
+      creatorInfo: { privacy_level_options?: string[]; comment_disabled?: boolean; duet_disabled?: boolean; stitch_disabled?: boolean };
+    }>(`/accounts/${tiktokAccountId}/tiktok-creator-info`)
+      .then((payload) => {
+        if (cancelled) return;
+        setTiktokCreatorInfo({
+          privacyLevelOptions: payload.creatorInfo.privacy_level_options ?? [],
+          commentDisabled: Boolean(payload.creatorInfo.comment_disabled),
+          duetDisabled: Boolean(payload.creatorInfo.duet_disabled),
+          stitchDisabled: Boolean(payload.creatorInfo.stitch_disabled),
+        });
+        setTiktokCreatorInfoStatus("ready");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTiktokCreatorInfo(null);
+        setTiktokCreatorInfoStatus("error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form.platforms, tiktokAccountId]);
+
   const panelRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -3777,6 +3950,18 @@ function PostComposer({
             field: "media",
             message: "An Instagram Story takes a single image or video. Remove the extra ones, or switch placement to Feed.",
           };
+        }
+      }
+
+      if (next.platforms.includes("TIKTOK")) {
+        if (next.imageType !== "VIDEO") {
+          return { field: "media", message: "TikTok requires an attached video. Add one, or save this as a draft." };
+        }
+        if (!next.tiktokPostMode) {
+          return { field: "media", message: "Choose how to publish to TikTok: Direct Post or Upload to TikTok." };
+        }
+        if (next.tiktokPostMode === "DIRECT_POST" && !next.tiktokPrivacyLevel) {
+          return { field: "media", message: "Choose a privacy setting for this TikTok post." };
         }
       }
 
@@ -4259,20 +4444,25 @@ function PostComposer({
             {post && post.targets.length > 0 && post.realStatus !== "DRAFT" && post.realStatus !== "CHANGES_REQUESTED" && (
               <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-[var(--line)] px-5 py-2 text-[10.5px] sm:px-6">
                 {post.targets.map((target) => {
-                  const meta = TARGET_STATUS_META[target.status];
+                  const meta = targetDisplayMeta(target);
                   return (
                     <span key={target.accountId} className="inline-flex items-center gap-1.5">
                       <PlatformMark platform={target.platform} size="xs" label={platformDefinition(target.platform).name} />
                       <span className="font-medium text-[var(--text)]">{target.account.accountName}</span>
                       <span style={{ color: meta.hue }}>{meta.label}</span>
-                      {target.status === "PUBLISHED" && target.publishedAt && (
+                      {(target.status === "PUBLISHED" || target.status === "DELIVERED_TO_INBOX") && target.publishedAt && (
                         <span className="text-[var(--text-subtle)]">{formatDateTime(target.publishedAt)}</span>
                       )}
+                      {meta.detail && <span className="text-[var(--text-subtle)]">{meta.detail}</span>}
                       {target.status === "FAILED" && target.lastError && (
                         <span className="max-w-[260px] truncate text-[var(--text-subtle)]" title={target.lastError}>
                           — {target.lastError}
                         </span>
                       )}
+                      {/* remotePostUrl is always null for DELIVERED_TO_INBOX
+                          server-side (TikTok never hands back a URL for an
+                          inbox draft) — so this link never renders for it,
+                          by construction, not a special case here. */}
                       {target.remotePostUrl && (
                         <a
                           href={target.remotePostUrl}
@@ -4282,6 +4472,9 @@ function PostComposer({
                         >
                           View on {platformDefinition(target.platform).name}
                         </a>
+                      )}
+                      {target.status === "DELIVERED_TO_INBOX" && (
+                        <span className="text-[var(--text-subtle)]">Open the TikTok app to finish posting.</span>
                       )}
                     </span>
                   );
@@ -4557,6 +4750,146 @@ function PostComposer({
                       </IconButton>
                     )}
                   </div>
+
+                  {form.platforms.includes("TIKTOK") && (
+                    <div className="sg-fade mt-3 space-y-3 rounded-xl border border-[var(--line)] p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[10.5px] font-semibold text-[var(--text)]">TikTok</span>
+                        <Segmented label="TikTok publishing mode" compact>
+                          <SegmentButton
+                            active={form.tiktokPostMode === "DIRECT_POST"}
+                            onClick={() => update({ tiktokPostMode: "DIRECT_POST" })}
+                            title="Publishes directly to TikTok as a post, subject to this account's privacy setting."
+                          >
+                            Direct Post
+                          </SegmentButton>
+                          <SegmentButton
+                            active={form.tiktokPostMode === "UPLOAD_TO_TIKTOK"}
+                            onClick={() => update({ tiktokPostMode: "UPLOAD_TO_TIKTOK" })}
+                            title="Delivers the video as a draft to the creator's TikTok inbox — they finish posting it inside the TikTok app."
+                          >
+                            Upload to TikTok
+                          </SegmentButton>
+                        </Segmented>
+                      </div>
+
+                      {!form.tiktokPostMode && (
+                        <p className="text-[10.5px] text-[var(--text-subtle)]">
+                          Direct Post publishes immediately (subject to this account&apos;s privacy setting). Upload to TikTok delivers
+                          the video as a draft the creator finishes posting themselves inside the TikTok app — these are genuinely
+                          different outcomes, so a mode must be chosen.
+                        </p>
+                      )}
+
+                      {form.tiktokPostMode === "UPLOAD_TO_TIKTOK" && (
+                        <p className="text-[10.5px] text-[var(--text-subtle)]">
+                          Privacy and interaction settings aren&apos;t sent for this mode — the creator sets them inside the TikTok
+                          app when they open the draft notification.
+                        </p>
+                      )}
+
+                      {form.tiktokPostMode === "DIRECT_POST" && (
+                        <>
+                          {tiktokCreatorInfoStatus === "loading" && (
+                            <p className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-subtle)]">
+                              <Loader2 size={11} className="animate-spin" /> Checking this account&apos;s current TikTok settings…
+                            </p>
+                          )}
+
+                          {tiktokCreatorInfoStatus === "error" && (
+                            <p className="text-[10.5px] text-red-600">
+                              Couldn&apos;t load this TikTok account&apos;s current publish settings. Reopen this panel to try again.
+                            </p>
+                          )}
+
+                          {tiktokCreatorInfoStatus === "ready" && tiktokCreatorInfo && (
+                            <>
+                              <div>
+                                <span className="mb-1 block text-[10.5px] font-medium text-[var(--text)]">Who can see this post</span>
+                                {tiktokCreatorInfo.privacyLevelOptions.length === 0 ? (
+                                  <p className="text-[10.5px] text-[var(--text-subtle)]">
+                                    TikTok did not return any allowed privacy settings for this account — it may need to be
+                                    reconnected.
+                                  </p>
+                                ) : (
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {tiktokCreatorInfo.privacyLevelOptions.map((option) => (
+                                      <button
+                                        key={option}
+                                        type="button"
+                                        onClick={() => update({ tiktokPrivacyLevel: option })}
+                                        className={cx(
+                                          "rounded-lg border px-2.5 py-1 text-[10.5px] font-medium transition-colors",
+                                          FOCUS,
+                                          form.tiktokPrivacyLevel === option
+                                            ? "border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_10%,var(--surface))] text-[var(--accent)]"
+                                            : "border-[var(--line)] text-[var(--text-muted)] hover:text-[var(--text)]",
+                                        )}
+                                      >
+                                        {TIKTOK_PRIVACY_LABELS[option] ?? option}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                                {!tiktokCreatorInfo.commentDisabled && (
+                                  <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                    <input
+                                      type="checkbox"
+                                      checked={form.tiktokDisableComment}
+                                      onChange={(event) => update({ tiktokDisableComment: event.target.checked })}
+                                    />
+                                    Disable comments
+                                  </label>
+                                )}
+                                {!tiktokCreatorInfo.duetDisabled && (
+                                  <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                    <input
+                                      type="checkbox"
+                                      checked={form.tiktokDisableDuet}
+                                      onChange={(event) => update({ tiktokDisableDuet: event.target.checked })}
+                                    />
+                                    Disable duet
+                                  </label>
+                                )}
+                                {!tiktokCreatorInfo.stitchDisabled && (
+                                  <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                    <input
+                                      type="checkbox"
+                                      checked={form.tiktokDisableStitch}
+                                      onChange={(event) => update({ tiktokDisableStitch: event.target.checked })}
+                                    />
+                                    Disable stitch
+                                  </label>
+                                )}
+                              </div>
+
+                              <div className="flex flex-wrap gap-x-4 gap-y-1.5 border-t border-[var(--line)] pt-2">
+                                <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                  <input
+                                    type="checkbox"
+                                    checked={form.tiktokYourBrand}
+                                    onChange={(event) => update({ tiktokYourBrand: event.target.checked })}
+                                  />
+                                  Promoting your own business
+                                </label>
+                                <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                  <input
+                                    type="checkbox"
+                                    checked={form.tiktokBrandedContent}
+                                    onChange={(event) => update({ tiktokBrandedContent: event.target.checked })}
+                                  />
+                                  Paid partnership (third-party brand)
+                                </label>
+                              </div>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
 
                   <Collapse open={libraryOpen}>
                     <div className="mt-2 rounded-xl border border-[var(--line)] p-2.5">

@@ -3907,6 +3907,15 @@ enum SocialPostStatus {
   SCHEDULED
   PUBLISHING
   PUBLISHED
+  /**
+   * Set only when EVERY relevant target resolved to
+   * SocialPostTargetStatus.DELIVERED_TO_INBOX (TikTok's Upload-to-TikTok
+   * workflow) — the video reached the creator's TikTok inbox as a draft,
+   * never actually published publicly. A post mixing this with a truly
+   * PUBLISHED target still uses PARTIALLY_PUBLISHED below, which already
+   * correctly says "not uniformly, fully published."
+   */
+  DELIVERED_TO_INBOX
   PARTIALLY_PUBLISHED
   FAILED
   CANCELLED
@@ -3917,6 +3926,14 @@ enum SocialPostTargetStatus {
   SCHEDULED
   PUBLISHING
   PUBLISHED
+  /**
+   * TikTok's Upload-to-TikTok (video.upload / inbox) workflow only ever
+   * delivers a video as a draft to the creator's TikTok inbox — the
+   * creator must open the TikTok app to finish posting it. This is
+   * never equivalent to PUBLISHED (a real, public post) and must never
+   * be mapped to it.
+   */
+  DELIVERED_TO_INBOX
   FAILED
   CANCELLED
 }
@@ -4080,6 +4097,17 @@ model SocialPostPlatform {
    */
   placement SocialMediaPlacement @default(FEED)
 
+  /**
+   * Generic, platform-specific publish options a target needs to carry.
+   * TikTok is the first (and currently only) consumer: tiktokPostMode
+   * ("DIRECT_POST" | "UPLOAD_TO_TIKTOK"), tiktokPrivacyLevel,
+   * tiktokDisableComment/Duet/Stitch, tiktokBrandedContent,
+   * tiktokYourBrand. Every other platform ignores it. Intentionally not
+   * named per-platform, like `placement`, so a future platform's own
+   * options can reuse this column instead of adding another one.
+   */
+  metadata Json?
+
   status SocialPostTargetStatus @default(PENDING)
 
   scheduledAt DateTime?
@@ -4091,6 +4119,14 @@ model SocialPostPlatform {
   lastError     String?
   retryCount    Int       @default(0)
   lastAttemptAt DateTime?
+  /**
+   * Set only by TikTok's status poller (lib/social-media/publishing.ts) —
+   * the most recent time its async publish status was checked. Distinct
+   * from lastAttemptAt (set once, at the initial claim/submit). Drives a
+   * UI-only "last checked" / "taking longer than expected" label; never
+   * used to decide a terminal status on its own.
+   */
+  lastPolledAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

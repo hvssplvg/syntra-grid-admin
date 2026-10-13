@@ -64,6 +64,7 @@ const ALLOWED_TRANSITIONS: Record<SocialPostStatus, SocialPostStatus[]> = {
   SCHEDULED: [SocialPostStatus.PUBLISHING, SocialPostStatus.CANCELLED],
   PUBLISHING: [SocialPostStatus.PUBLISHED, SocialPostStatus.PARTIALLY_PUBLISHED, SocialPostStatus.FAILED],
   PUBLISHED: [],
+  DELIVERED_TO_INBOX: [],
   PARTIALLY_PUBLISHED: [],
   FAILED: [],
   CANCELLED: [],
@@ -167,7 +168,40 @@ export async function getPostOrThrow(postId: string): Promise<PostWithRelations>
    CREATE / UPDATE / DELETE
 ============================================================================ */
 
-export type PostTargetInput = { accountId: string; caption?: string | null; placement?: SocialMediaPlacement };
+export type PostTargetInput = {
+  accountId: string;
+  caption?: string | null;
+  placement?: SocialMediaPlacement;
+  /** Only TikTok currently reads this — every other platform ignores it. */
+  metadata?: Record<string, unknown> | null;
+};
+
+const TIKTOK_METADATA_KEYS = [
+  "tiktokPostMode",
+  "tiktokPrivacyLevel",
+  "tiktokDisableComment",
+  "tiktokDisableDuet",
+  "tiktokDisableStitch",
+  "tiktokBrandedContent",
+  "tiktokYourBrand",
+] as const;
+
+/**
+ * Allow-lists exactly the known TikTok metadata keys before anything a
+ * client sent reaches the database — never trusts an arbitrary client
+ * JSON blob, even though this column is generic-by-design (see the
+ * SocialPostPlatform.metadata schema comment).
+ */
+function sanitiseTargetMetadata(metadata: Record<string, unknown> | null | undefined): Prisma.InputJsonValue | undefined {
+  if (!metadata || typeof metadata !== "object") return undefined;
+
+  const sanitised: Record<string, unknown> = {};
+  for (const key of TIKTOK_METADATA_KEYS) {
+    if (key in metadata) sanitised[key] = metadata[key];
+  }
+
+  return Object.keys(sanitised).length > 0 ? (sanitised as Prisma.InputJsonValue) : undefined;
+}
 
 export type CreatePostInput = {
   title?: string | null;
@@ -221,6 +255,7 @@ export async function createPost(identity: ResolvedIdentity, input: CreatePostIn
           platform: platformByAccount.get(target.accountId) as SocialPlatform,
           caption: target.caption ?? null,
           placement: target.placement ?? SocialMediaPlacement.FEED,
+          metadata: sanitiseTargetMetadata(target.metadata),
         })),
       },
       assets: {
@@ -272,6 +307,7 @@ export async function updatePost(identity: ResolvedIdentity, postId: string, inp
           platform: platformByAccount.get(target.accountId) as SocialPlatform,
           caption: target.caption ?? null,
           placement: target.placement ?? SocialMediaPlacement.FEED,
+          metadata: sanitiseTargetMetadata(target.metadata),
         })),
       });
     }

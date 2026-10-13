@@ -129,8 +129,15 @@ export const PLATFORM_CONFIG: Record<SocialPlatform, PlatformOAuthConfig> = {
     clientSecretEnv: "TIKTOK_CLIENT_SECRET",
     redirectUriEnv: "TIKTOK_REDIRECT_URI",
     clientIdParam: "client_key",
-    scopes: ["user.info.basic", "video.publish"],
+    // Comma-separated, like Meta's platforms — confirmed against TikTok's
+    // current Login Kit docs (TikTok's authorize endpoint rejects/ignores
+    // a space-separated scope param). video.upload is required for the
+    // Upload-to-TikTok (inbox draft) Content Posting workflow; video.publish
+    // is required for Direct Post. Web OAuth does not require PKCE (only
+    // Desktop/mobile apps do) — flow stays "standard".
+    scopes: ["user.info.basic", "video.publish", "video.upload"],
     flow: "standard",
+    scopeDelimiter: ",",
   },
   YOUTUBE: {
     label: "YouTube",

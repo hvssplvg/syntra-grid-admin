@@ -57,15 +57,19 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
     const targets: PostTargetInput[] | undefined = Array.isArray(body.targets)
       ? body.targets
-          .filter((target: unknown): target is { accountId: string; caption?: string; placement?: string } =>
+          .filter((target: unknown): target is { accountId: string; caption?: string; placement?: string; metadata?: unknown } =>
             Boolean(target && typeof (target as Record<string, unknown>).accountId === "string"),
           )
-          .map((target: { accountId: string; caption?: string; placement?: string }) => ({
+          .map((target: { accountId: string; caption?: string; placement?: string; metadata?: unknown }) => ({
             accountId: target.accountId,
             caption: typeof target.caption === "string" ? target.caption : null,
             placement:
               typeof target.placement === "string" && placementValues.includes(target.placement)
                 ? (target.placement as SocialMediaPlacement)
+                : undefined,
+            metadata:
+              target.metadata && typeof target.metadata === "object" && !Array.isArray(target.metadata)
+                ? (target.metadata as Record<string, unknown>)
                 : undefined,
           }))
       : undefined;
