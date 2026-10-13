@@ -618,14 +618,27 @@ const X_SUPPORTED_IMAGE_TYPES: Record<string, string> = {
 const X_MEDIA_PROCESSING_BUDGET_MS = 30_000;
 
 class XApiError extends Error {
-  constructor(public status: number, public title: string | undefined, public detail: string | undefined, rawBody: string) {
+  constructor(
+    public status: number,
+    public title: string | undefined,
+    public detail: string | undefined,
+    public type: string | undefined,
+    public code: string | number | undefined,
+    public requestId: string | undefined,
+    rawBody: string,
+  ) {
     super(detail || title || `X API error ${status}: ${rawBody.slice(0, 300)}`);
   }
 }
 
-/** X v2 errors arrive as either RFC7807 problem details ({title, detail})
- *  or a legacy {errors: [{message}]} array — never guess a reason beyond
- *  what the response actually says. */
+/** X v2 errors arrive as either RFC7807 problem details ({title, detail,
+ *  type}) or a legacy {errors: [{message, code}]} array — never guess a
+ *  reason beyond what the response actually says. Every failure is
+ *  logged server-side with the full safe diagnostic set (status, title,
+ *  detail, type URI, provider code, X's own request id if supplied, and
+ *  rate-limit headers) — enough to hand to X Developer Support without
+ *  ever including the Authorization header, the access/refresh token,
+ *  or any other secret. */
 async function xFetch(url: string, init: RequestInit): Promise<Record<string, unknown>> {
   const response = await fetch(url, init);
   const text = await response.text();
@@ -640,10 +653,29 @@ async function xFetch(url: string, init: RequestInit): Promise<Record<string, un
   if (!response.ok) {
     const title = typeof json?.title === "string" ? json.title : undefined;
     const detail = typeof json?.detail === "string" ? json.detail : undefined;
-    const legacyMessage = Array.isArray(json?.errors)
-      ? (json!.errors as Array<{ message?: string }>).map((entry) => entry.message).filter(Boolean).join("; ")
-      : undefined;
-    throw new XApiError(response.status, title, detail ?? legacyMessage, text);
+    const type = typeof json?.type === "string" ? json.type : undefined;
+    const legacyErrors = Array.isArray(json?.errors) ? (json!.errors as Array<{ message?: string; code?: string | number }>) : undefined;
+    const legacyMessage = legacyErrors?.map((entry) => entry.message).filter(Boolean).join("; ");
+    const code = (typeof json?.code === "string" || typeof json?.code === "number" ? json.code : undefined) ?? legacyErrors?.[0]?.code;
+    const requestId = response.headers.get("x-request-id") ?? response.headers.get("x-transaction-id") ?? undefined;
+
+    console.error(
+      JSON.stringify({
+        scope: "x_api_error",
+        endpoint: url.replace(/^https?:\/\/[^/]+/, ""),
+        status: response.status,
+        title,
+        detail: detail ?? legacyMessage,
+        type,
+        code,
+        requestId,
+        rateLimitLimit: response.headers.get("x-rate-limit-limit"),
+        rateLimitRemaining: response.headers.get("x-rate-limit-remaining"),
+        rateLimitReset: response.headers.get("x-rate-limit-reset"),
+      }),
+    );
+
+    throw new XApiError(response.status, title, detail ?? legacyMessage, type, code, requestId, text);
   }
 
   return json ?? {};
@@ -829,7 +861,11 @@ class XAdapter implements PublishAdapter {
         }
 
         if (error.status === 403) {
-          return { ok: false, error: `X rejected this post: ${error.detail ?? error.title ?? "insufficient permission for this action."}` };
+          const reference = error.requestId ? ` (reference: ${error.requestId})` : "";
+          return {
+            ok: false,
+            error: `X rejected this post: ${error.detail ?? error.title ?? "insufficient permission for this action."}${reference} — this is typically an X Developer Console / account restriction, not something retrying fixes.`,
+          };
         }
 
         return { ok: false, error: `X rejected this post: ${error.message}` };
