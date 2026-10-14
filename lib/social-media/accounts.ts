@@ -117,7 +117,15 @@ export const PLATFORM_CONFIG: Record<SocialPlatform, PlatformOAuthConfig> = {
     clientSecretEnv: "X_CLIENT_SECRET",
     redirectUriEnv: "X_REDIRECT_URI",
     clientIdParam: "client_id",
-    scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
+    // media.write is required for X API v2's /2/media/upload (the
+    // INITIALIZE/APPEND/FINALIZE flow in lib/social-media/publishing.ts's
+    // XAdapter) — confirmed against X's own current docs: that endpoint
+    // is gated by OAuth2UserToken with media.write specifically, separate
+    // from tweet.write. Without it, image posts 403 at the INITIALIZE
+    // call while text-only posts (which never touch media upload) keep
+    // working. Scopes are fixed at token issuance, so an already-connected
+    // account's existing token won't gain this until it's reconnected.
+    scopes: ["tweet.read", "tweet.write", "users.read", "offline.access", "media.write"],
     flow: "pkce",
     tokenAuthMethod: "basic",
   },
