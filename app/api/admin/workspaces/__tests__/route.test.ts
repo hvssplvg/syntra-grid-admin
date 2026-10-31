@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { requireAdmin } from "@/lib/auth/current-admin";
+import { getCurrentIdentity, hasPermission } from "@/lib/auth/current-admin";
 
 describe("GET /api/admin/workspaces", () => {
   beforeEach(() => {
@@ -7,12 +7,16 @@ describe("GET /api/admin/workspaces", () => {
   });
 
   afterEach(() => {
-    vi.mocked(requireAdmin).mockReset();
+    vi.mocked(getCurrentIdentity).mockReset();
+    vi.mocked(hasPermission).mockReset();
   });
 
-  it("returns the seeded workspace list for a full-access admin", async () => {
-    vi.mocked(requireAdmin).mockResolvedValue({ id: "admin-1" } as never);
-    const workspaces = [{ id: "w1", key: "executive", name: "Executive", description: null, icon: null, colour: null, sectionKeys: [] }];
+  it("returns the full, unfiltered workspace list for a full-access admin", async () => {
+    vi.mocked(getCurrentIdentity).mockResolvedValue({ isFullAccess: true } as never);
+    const workspaces = [
+      { id: "w1", key: "executive", name: "Executive", description: null, icon: null, colour: null, sectionKeys: [] },
+      { id: "w2", key: "technology", name: "Technology", description: null, icon: null, colour: null, sectionKeys: ["engineering", "products"] },
+    ];
     vi.doMock("@/lib/workspaces/server", () => ({ listWorkspaces: vi.fn().mockResolvedValue(workspaces) }));
 
     const { GET } = await import("@/app/api/admin/workspaces/route");
@@ -23,18 +27,40 @@ describe("GET /api/admin/workspaces", () => {
     expect(payload.workspaces).toEqual(workspaces);
   });
 
-  it("403s a non-full-access caller — requireAdmin() rejects restricted accounts", async () => {
-    const { AuthorisationError } = await import("@/lib/auth/current-admin");
-    vi.mocked(requireAdmin).mockRejectedValue(new AuthorisationError("Your account does not have access to this area."));
-    const listWorkspaces = vi.fn();
-    vi.doMock("@/lib/workspaces/server", () => ({ listWorkspaces }));
+  it("narrows a restricted caller to workspaces whose sectionKeys they can actually reach", async () => {
+    vi.mocked(getCurrentIdentity).mockResolvedValue({ isFullAccess: false } as never);
+    // Only the "projects" module (Delivery section) is granted.
+    vi.mocked(hasPermission).mockImplementation((_identity, module) => module === "projects");
+
+    const workspaces = [
+      { id: "w-exec", key: "executive", name: "Executive", description: null, icon: null, colour: null, sectionKeys: [] },
+      { id: "w-proj", key: "projects_operations", name: "Projects / Operations", description: null, icon: null, colour: null, sectionKeys: ["delivery"] },
+      { id: "w-tech", key: "technology", name: "Technology", description: null, icon: null, colour: null, sectionKeys: ["engineering", "products"] },
+    ];
+    vi.doMock("@/lib/workspaces/server", () => ({ listWorkspaces: vi.fn().mockResolvedValue(workspaces) }));
 
     const { GET } = await import("@/app/api/admin/workspaces/route");
     const response = await GET();
     const payload = await response.json();
 
-    expect(response.status).toBe(403);
-    expect(payload.ok).toBe(false);
-    expect(listWorkspaces).not.toHaveBeenCalled();
+    expect(payload.ok).toBe(true);
+    expect(payload.workspaces.map((w: { key: string }) => w.key)).toEqual(["projects_operations"]);
+  });
+
+  it("excludes the Executive workspace (empty sectionKeys) for every restricted caller, regardless of grants", async () => {
+    vi.mocked(getCurrentIdentity).mockResolvedValue({ isFullAccess: false } as never);
+    vi.mocked(hasPermission).mockReturnValue(true); // grant everything
+
+    const workspaces = [
+      { id: "w-exec", key: "executive", name: "Executive", description: null, icon: null, colour: null, sectionKeys: [] },
+      { id: "w-tech", key: "technology", name: "Technology", description: null, icon: null, colour: null, sectionKeys: ["engineering", "products"] },
+    ];
+    vi.doMock("@/lib/workspaces/server", () => ({ listWorkspaces: vi.fn().mockResolvedValue(workspaces) }));
+
+    const { GET } = await import("@/app/api/admin/workspaces/route");
+    const response = await GET();
+    const payload = await response.json();
+
+    expect(payload.workspaces.map((w: { key: string }) => w.key)).toEqual(["technology"]);
   });
 });

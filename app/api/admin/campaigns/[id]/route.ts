@@ -23,7 +23,7 @@ export async function GET(_request: NextRequest, { params }: Params) {
     const identity = await requireCampaignsPermission(AccessAction.VIEW);
     const { id } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.VIEW, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.VIEW, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
     return NextResponse.json({ ok: true, campaign });
   } catch (error) {
     return errorResponse(error);
@@ -36,7 +36,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const { id } = await params;
 
     const existing = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: existing.createdById, departmentId: existing.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: existing.createdById, departmentId: existing.departmentId, clientId: existing.clientId });
 
     const body = await request.json().catch(() => ({}));
 
@@ -80,7 +80,21 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const ownerId = parseOptionalId(body.ownerId);
     const managerId = parseOptionalId(body.managerId);
 
-    if ([clientId, projectId, departmentId, ownerId, managerId].some((value) => value === undefined)) {
+    // Same fix as POST /api/admin/campaigns: parseOptionalId returns
+    // undefined both for "field absent from the body" (a normal partial
+    // PATCH — most edits don't touch every relational field) and "field
+    // present but malformed." Only the second is an error.
+    const invalidRelatedId = (
+      [
+        ["clientId", body.clientId, clientId],
+        ["projectId", body.projectId, projectId],
+        ["departmentId", body.departmentId, departmentId],
+        ["ownerId", body.ownerId, ownerId],
+        ["managerId", body.managerId, managerId],
+      ] as const
+    ).some(([, raw, parsed]) => raw !== undefined && parsed === undefined);
+
+    if (invalidRelatedId) {
       return NextResponse.json({ ok: false, error: "One of the selected related records is invalid." }, { status: 400 });
     }
 

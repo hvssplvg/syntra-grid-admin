@@ -3,7 +3,10 @@ import {
   NextResponse,
 } from "next/server";
 
+import { AccessAction } from "@/app/generated/prisma/enums";
+
 import {
+  assertContactRowAccess,
   contactApiError,
   contactDTO,
   deleteContact,
@@ -79,6 +82,12 @@ export async function GET(
         resolvedContactId,
       );
 
+    assertContactRowAccess(
+      identity,
+      AccessAction.VIEW,
+      contact,
+    );
+
     return NextResponse.json(
       {
         contact:
@@ -138,6 +147,12 @@ export async function PATCH(
       await requireContact(
         resolvedContactId,
       );
+
+    assertContactRowAccess(
+      identity,
+      AccessAction.VIEW,
+      existing,
+    );
 
     const body =
       await readJsonBody(

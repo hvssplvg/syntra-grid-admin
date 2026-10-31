@@ -16,6 +16,10 @@ vi.mock("@/lib/auth/current-admin", () => {
     hasPermission: vi.fn(),
     requirePermission: vi.fn(),
     requireAdmin: vi.fn(),
+    getAssignedClientIds: vi.fn(),
+    resolveClientScope: vi.fn(),
+    clientScopeIdFilter: vi.fn(),
+    assertClientRowAccess: vi.fn(),
   };
 });
 

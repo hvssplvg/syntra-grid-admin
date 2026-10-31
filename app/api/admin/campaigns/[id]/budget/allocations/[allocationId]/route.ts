@@ -24,7 +24,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const identity = await requireCampaignsPermission(AccessAction.EDIT);
     const { id, allocationId } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     const body = await request.json().catch(() => ({}));
 
@@ -47,7 +47,7 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
     const identity = await requireCampaignsPermission(AccessAction.MANAGE);
     const { id, allocationId } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     await deleteCampaignBudgetAllocation(id, allocationId);
     return NextResponse.json({ ok: true });

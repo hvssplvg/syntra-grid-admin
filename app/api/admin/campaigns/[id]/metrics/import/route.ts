@@ -13,7 +13,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const identity = await requireCampaignsPermission(AccessAction.CREATE);
     const { id } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.CREATE, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.CREATE, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     const formData = await request.formData();
     const file = formData.get("file");

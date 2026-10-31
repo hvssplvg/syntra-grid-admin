@@ -3,7 +3,10 @@ import {
   NextResponse,
 } from "next/server";
 
+import { AccessAction } from "@/app/generated/prisma/enums";
+
 import {
+  assertContractRowAccess,
   contractApiError,
   contractDTO,
   deleteContract,
@@ -69,6 +72,12 @@ export async function GET(
       await requireContract(
         id,
       );
+
+    assertContractRowAccess(
+      identity,
+      AccessAction.VIEW,
+      contract,
+    );
 
     return NextResponse.json(
       {

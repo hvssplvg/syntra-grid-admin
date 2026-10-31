@@ -8,6 +8,7 @@
 import { AccessAction, AccessScope } from "@/app/generated/prisma/enums";
 import {
   AuthorisationError,
+  clientScopeIdFilter,
   getCurrentIdentity,
   hasPermission,
   requirePermission,
@@ -57,11 +58,15 @@ export function socialMediaOwnScopeFilter(
 }
 
 /** Throws unless the caller holds the given action on social_media,
- *  additionally requiring OWN-scope callers to be the row's own creator. */
+ *  additionally requiring OWN-scope callers to be the row's own creator,
+ *  and CLIENT-scope callers to be assigned to the row's owning client.
+ *  `clientId` only applies to SocialAccount today (null means Syntra
+ *  Grid's own) — a CLIENT-scoped caller can never act on a null-owned or
+ *  another client's account, exactly the isolation spec §9 requires. */
 export function assertSocialMediaRowAccess(
   identity: ResolvedIdentity,
   action: AccessAction,
-  row: { createdById: string | null },
+  row: { createdById: string | null; clientId?: string | null },
 ): void {
   if (identity.isFullAccess) return;
 
@@ -74,4 +79,20 @@ export function assertSocialMediaRowAccess(
   if (grantedScope === AccessScope.OWN && row.createdById !== identity.admin.id) {
     throw new AuthorisationError("You can only act on social media content you created.");
   }
+
+  if (grantedScope === AccessScope.CLIENT) {
+    if (!row.clientId || !identity.assignedClientIds.includes(row.clientId)) {
+      throw new AuthorisationError(
+        "You can only act on social media accounts belonging to your assigned clients.",
+      );
+    }
+  }
+}
+
+/** The `{ in: [...] }` client-id condition for a CLIENT-scoped
+ *  restricted caller's SocialAccount list query. A `null` clientId
+ *  (Syntra Grid's own accounts) never matches an `in` filter, so this
+ *  naturally excludes them without any extra special-casing. */
+export function socialMediaClientScopeFilter(identity: ResolvedIdentity, action: AccessAction) {
+  return clientScopeIdFilter(identity, SOCIAL_MEDIA_MODULE, action);
 }

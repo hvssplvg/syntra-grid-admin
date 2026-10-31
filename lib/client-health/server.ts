@@ -26,11 +26,17 @@ export type ClientHealthListFilters = {
   priority?: ClientPriority;
   /** Narrows to exactly one client — e.g. when the header's
    *  client-context switcher (SelectedClientContext.tsx) has a client
-   *  selected. Purely a convenience filter, same as every other filter
-   *  here: it never substitutes for the module's own permission check,
-   *  and ClientAssignment-based isolation still isn't enforced anywhere
-   *  (see lib/client-health/permissions.ts's doc comment). */
+   *  selected. A pure convenience filter on its own; the actual security
+   *  boundary for a CLIENT-scoped restricted caller is allowedClientIds
+   *  below, which the caller must always resolve and pass. */
   clientId?: string;
+  /** CLIENT-scope restriction (see clientHealthClientScopeFilter in
+   *  lib/client-health/permissions.ts) — when set, results are narrowed
+   *  to exactly these client ids regardless of what `clientId` above
+   *  requests, so a restricted caller can never request their way past
+   *  their own ClientAssignment rows. Undefined for full-access/ALL-scope
+   *  callers, meaning no narrowing at all. */
+  allowedClientIds?: string[];
 };
 
 export type ClientHealthSummary = {
@@ -131,9 +137,17 @@ function toSummary(client: ClientHealthRow): ClientHealthSummary {
 }
 
 export async function listClientHealth(filters: ClientHealthListFilters = {}): Promise<ClientHealthSummary[]> {
+  const clientIdWhere = filters.allowedClientIds
+    ? filters.clientId
+      ? filters.allowedClientIds.includes(filters.clientId)
+        ? filters.clientId
+        : "__unresolvable__"
+      : { in: filters.allowedClientIds }
+    : filters.clientId;
+
   const clients = await prisma.client.findMany({
     where: {
-      ...(filters.clientId ? { id: filters.clientId } : {}),
+      ...(clientIdWhere ? { id: clientIdWhere } : {}),
       ...(filters.search
         ? { OR: [{ name: { contains: filters.search, mode: "insensitive" } }, { displayName: { contains: filters.search, mode: "insensitive" } }] }
         : {}),

@@ -15,6 +15,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -38,11 +39,13 @@ import {
   CircleDollarSign,
   Clock3,
   Code2,
+  Command,
   ExternalLink,
   Filter,
   Flag,
   FolderKanban,
   Headphones,
+  Keyboard,
   Loader2,
   Lock,
   MapPin,
@@ -237,6 +240,7 @@ type EventDraft = {
   key: number;
   date: Date;
   startTime?: string;
+  endTime?: string;
 };
 
 type PositionedEvent = {
@@ -560,6 +564,76 @@ function suggestEventType(title: string): ManualEventType | null {
   }
 
   return null;
+}
+
+type TitleHints = { time?: string; date?: string; duration?: number; cleanTitle: string; summary: string };
+
+const WEEKDAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+/**
+ * Reads a time, a day and a length out of a title such as
+ * "Lunch with Grace tomorrow at 1pm for 45 min", so the form can offer to
+ * fill itself in. It only ever suggests; nothing changes until Use it.
+ */
+function readTitleHints(title: string, baseDate: Date): TitleHints | null {
+  let text = ` ${title} `;
+  const hints: Partial<TitleHints> = {};
+  const parts: string[] = [];
+
+  const timeMatch = text.match(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?=[\s,.!?])/i) ?? text.match(/\s(?:at\s+)(\d{1,2})(?::(\d{2}))?(?=[\s,.!?])/i) ?? text.match(/\s(\d{1,2}):(\d{2})(?=[\s,.!?])/);
+  if (timeMatch) {
+    let hour = Number(timeMatch[1]);
+    const minute = Number(timeMatch[2] ?? 0);
+    const meridiem = (timeMatch[3] ?? '').toLowerCase();
+    if (meridiem === 'pm' && hour < 12) hour += 12;
+    if (meridiem === 'am' && hour === 12) hour = 0;
+    if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) {
+      hints.time = `${pad(hour)}:${pad(minute)}`;
+      parts.push(hints.time);
+      text = text.replace(timeMatch[0], ' ');
+    }
+  }
+
+  const dayMatch = text.match(/\s(today|tomorrow|(?:next\s+|on\s+|this\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday))(?=[\s,.!?])/i);
+  if (dayMatch) {
+    const word = dayMatch[1].toLowerCase();
+    let date: Date | null = null;
+    if (word === 'today') date = startOfDay(new Date());
+    else if (word === 'tomorrow') date = addDays(startOfDay(new Date()), 1);
+    else {
+      const name = (dayMatch[2] ?? '').toLowerCase();
+      const target = WEEKDAY_NAMES.indexOf(name);
+      if (target >= 0) {
+        const from = startOfDay(new Date());
+        const current = (from.getDay() + 6) % 7;
+        let delta = (target - current + 7) % 7;
+        if (delta === 0) delta = 7;
+        date = addDays(from, delta);
+      }
+    }
+    if (date) {
+      hints.date = toDateKey(date);
+      parts.push(relativeDayLabel(date, startOfDay(new Date())) ?? formatShortDate(date));
+      text = text.replace(dayMatch[0], ' ');
+    }
+  }
+
+  const lengthMatch = text.match(/\s(?:for\s+)?(\d{1,3})\s*(min|mins|minutes|h|hr|hrs|hour|hours)(?=[\s,.!?])/i);
+  if (lengthMatch) {
+    const amount = Number(lengthMatch[1]);
+    const unit = lengthMatch[2].toLowerCase();
+    const minutes = unit.startsWith('h') ? amount * 60 : amount;
+    if (minutes >= 5 && minutes <= 12 * 60) {
+      hints.duration = minutes;
+      parts.push(formatDuration(minutes));
+      text = text.replace(lengthMatch[0], ' ');
+    }
+  }
+
+  if (!parts.length) return null;
+  const cleanTitle = text.replace(/\s+/g, ' ').replace(/\s+([,.!?])/g, '$1').trim();
+  if (hints.date && hints.date === toDateKey(baseDate) && !hints.time && !hints.duration) return null;
+  return { ...hints, cleanTitle, summary: parts.join(' · ') };
 }
 
 function nextHalfHour() {
@@ -947,8 +1021,13 @@ export default function CalendarTab() {
     setSelectedDate(startOfDay(date));
   }, []);
 
+  const [slide, setSlide] = useState<1 | -1>(1);
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
   const navigate = useCallback(
     (direction: 1 | -1) => {
+      setSlide(direction);
       setCurrentDate((date) => {
         if (view === 'month') return addMonths(date, direction);
         if (view === 'week') return addDays(date, direction * 7);
@@ -967,8 +1046,11 @@ export default function CalendarTab() {
   );
 
   const jumpToDate = useCallback((date: Date) => {
+    setCurrentDate((current) => {
+      setSlide(date.getTime() >= current.getTime() ? 1 : -1);
+      return date;
+    });
     setSelectedDate(startOfDay(date));
-    setCurrentDate(date);
   }, []);
 
   /* ---------- Actions ---------- */
@@ -976,10 +1058,10 @@ export default function CalendarTab() {
   const canCreate = options?.permissions.canCreate ?? false;
 
   const openCreate = useCallback(
-    (date: Date, startTime?: string) => {
+    (date: Date, startTime?: string, endTime?: string) => {
       if (!options?.permissions.canCreate) return;
       setSelectedDate(startOfDay(date));
-      setDraft({ key: Date.now(), date, startTime });
+      setDraft({ key: Date.now(), date, startTime, endTime });
       setCreateOpen(true);
     },
     [options],
@@ -1021,6 +1103,12 @@ export default function CalendarTab() {
   shortcutRef.current = (event: KeyboardEvent) => {
     if (createOpen || detailOpen || smartPlannerOpen || event.defaultPrevented) return;
 
+    if (event.key === 'Escape' && (periodOpen || shortcutsOpen)) {
+      setPeriodOpen(false);
+      setShortcutsOpen(false);
+      return;
+    }
+
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
       event.preventDefault();
       searchRef.current?.focus();
@@ -1060,6 +1148,9 @@ export default function CalendarTab() {
       case 'ArrowRight':
         navigate(1);
         break;
+      case '?':
+        setShortcutsOpen((open) => !open);
+        break;
     }
   };
 
@@ -1074,9 +1165,9 @@ export default function CalendarTab() {
   return (
     <PortalTheme.Provider value={theme.vars}>
       <div ref={theme.ref} className="mx-auto flex min-h-[calc(100dvh-96px)] w-full min-w-0 max-w-[1800px] flex-col gap-4">
-        <section className="rounded-[26px] border border-[var(--line)] bg-[var(--surface)] p-3 shadow-sm sm:p-4">
+        <section className="relative rounded-[26px] border border-[var(--line)] bg-[var(--surface)] p-3 shadow-[0_1px_2px_rgba(16,24,40,0.04),0_12px_32px_-24px_rgba(16,24,40,0.25)] sm:p-4">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 items-center gap-3 xl:flex-1">
               <div className="flex shrink-0 items-center rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] p-1">
                 <NavButton label="Previous period" hint="Left arrow" icon={ChevronLeft} onClick={() => navigate(-1)} />
                 <button
@@ -1084,7 +1175,10 @@ export default function CalendarTab() {
                   onClick={goToday}
                   title="Go to today (T)"
                   className={cx(
-                    'h-8 rounded-lg px-3 text-[11px] font-semibold text-[var(--text-muted)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--text)]',
+                    'h-8 rounded-lg px-3 text-[11px] font-semibold transition-colors',
+                    isSameMonth(currentDate, today) && (view !== 'week' || isSameDate(startOfWeekMonday(currentDate), startOfWeekMonday(today)))
+                      ? 'text-[var(--text-subtle)]'
+                      : 'bg-[var(--surface)] text-[var(--text)] shadow-sm',
                     focusRing,
                   )}
                 >
@@ -1093,21 +1187,56 @@ export default function CalendarTab() {
                 <NavButton label="Next period" hint="Right arrow" icon={ChevronRight} onClick={() => navigate(1)} />
               </div>
 
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 className="truncate text-[20px] font-semibold leading-tight tracking-[-0.03em] text-[var(--text)]">
+              <div className="relative min-w-0 flex-1">
+                <button
+                  type="button"
+                  onClick={() => setPeriodOpen((open) => !open)}
+                  aria-expanded={periodOpen}
+                  aria-haspopup="dialog"
+                  title="Jump to a month"
+                  className={cx(
+                    'group -ml-2 flex max-w-full items-center gap-2 rounded-xl px-2 py-1 text-left transition-colors hover:bg-[var(--surface-muted)]',
+                    focusRing,
+                  )}
+                >
+                  <h2 className="truncate text-[24px] font-semibold leading-tight tracking-[-0.035em] text-[var(--text)]">
                     {title.primary}{' '}
                     <span className="font-normal text-[var(--text-subtle)]">{title.secondary}</span>
                   </h2>
+                  <ChevronDown
+                    size={15}
+                    className={cx(
+                      'shrink-0 text-[var(--text-subtle)] transition-transform group-hover:text-[var(--text)]',
+                      periodOpen && 'rotate-180',
+                    )}
+                  />
                   {refreshing ? <Loader2 size={13} className="animate-spin text-[var(--text-subtle)]" /> : null}
-                </div>
-                <p className="mt-0.5 text-[11px] text-[var(--text-muted)]" aria-live="polite">
+                </button>
+                <p className="mt-0.5 flex items-center gap-2 pl-0.5 text-[11px] text-[var(--text-muted)]" aria-live="polite">
+                  {rangeSummary.high > 0 && !loading ? (
+                    <span className="inline-flex h-1.5 w-1.5 rounded-full bg-red-500" aria-hidden="true" />
+                  ) : null}
                   {summaryText}
                 </p>
+
+                <AnimatePresence>
+                  {periodOpen ? (
+                    <PeriodPicker
+                      currentDate={currentDate}
+                      today={today}
+                      view={view}
+                      onPick={(date) => {
+                        jumpToDate(date);
+                        setPeriodOpen(false);
+                      }}
+                      onClose={() => setPeriodOpen(false)}
+                    />
+                  ) : null}
+                </AnimatePresence>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
               <label className="flex h-10 min-w-[200px] flex-1 items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] px-3 transition focus-within:border-[var(--accent)] focus-within:bg-[var(--surface)] xl:w-[230px] xl:flex-none">
                 <Search size={14} className="shrink-0 text-[var(--text-subtle)]" />
                 <input
@@ -1264,10 +1393,19 @@ export default function CalendarTab() {
         ) : null}
 
         <section className="grid min-w-0 flex-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="relative flex min-h-[calc(100dvh-230px)] min-w-0 flex-col overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-sm">
+          <div className="relative flex min-h-[calc(100dvh-230px)] min-w-0 flex-col overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_1px_2px_rgba(16,24,40,0.04),0_18px_44px_-30px_rgba(16,24,40,0.3)] 2xl:h-[calc(100dvh-230px)] 2xl:self-start">
             <AnimatePresence>{loading ? <CalendarLoadingOverlay /> : null}</AnimatePresence>
 
             <div className="flex min-h-0 flex-1 flex-col overflow-x-auto [&>*]:flex-1">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={`${view}-${toDateKey(visibleRange.start)}`}
+                  initial={{ opacity: 0, x: slide * 18 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: slide * -12 }}
+                  transition={{ duration: 0.16, ease: 'easeOut' }}
+                  className="flex min-h-0 flex-1 flex-col [&>*]:flex-1"
+                >
               {view === 'month' ? (
                 <MonthView
                   currentDate={currentDate}
@@ -1306,9 +1444,11 @@ export default function CalendarTab() {
                   onSelectEvent={openEvent}
                 />
               ) : null}
+                </motion.div>
+              </AnimatePresence>
             </div>
 
-            <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] px-4 py-3">
+            <footer className="relative flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] px-4 py-3">
               <div className="flex flex-wrap items-center gap-0.5">
                 {ALL_DISPLAY_TYPES.map((type) => {
                   const meta = EVENT_TYPES[type];
@@ -1334,13 +1474,34 @@ export default function CalendarTab() {
                   );
                 })}
               </div>
-              <p className="hidden text-[10px] text-[var(--text-subtle)] lg:block">
-                Leave, interviews and deployments sync in automatically
-              </p>
+              <div className="flex items-center gap-3">
+                <p className="hidden text-[10px] text-[var(--text-subtle)] xl:block">
+                  Leave, interviews and deployments sync in automatically
+                </p>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShortcutsOpen((open) => !open)}
+                    aria-expanded={shortcutsOpen}
+                    title="Keyboard shortcuts (?)"
+                    className={cx(
+                      'flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2 text-[10px] font-semibold text-[var(--text-muted)] transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)]',
+                      shortcutsOpen && 'bg-[var(--surface-muted)] text-[var(--text)]',
+                      focusRing,
+                    )}
+                  >
+                    <Keyboard size={12} />
+                    Shortcuts
+                  </button>
+                  <AnimatePresence>
+                    {shortcutsOpen ? <ShortcutsPopover onClose={() => setShortcutsOpen(false)} /> : null}
+                  </AnimatePresence>
+                </div>
+              </div>
             </footer>
           </div>
 
-          <aside className="flex min-w-0 flex-col overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-sm">
+          <aside className="flex min-w-0 flex-col overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_1px_2px_rgba(16,24,40,0.04),0_18px_44px_-30px_rgba(16,24,40,0.3)]">
             <div className="grid flex-1 divide-y divide-[var(--line)] md:grid-cols-2 md:divide-x md:divide-y-0 2xl:flex 2xl:flex-col 2xl:divide-x-0 2xl:divide-y">
               <MiniCalendar selectedDate={selectedDate} today={today} eventsByDate={eventsByDate} onSelect={jumpToDate} />
 
@@ -1534,8 +1695,8 @@ function MonthView({
 
     const measure = () => {
       const rowHeight = element.clientHeight / 6;
-      // 40px for the date header and padding, 27px per event row.
-      setMaxEvents(Math.max(2, Math.min(8, Math.floor((rowHeight - 40) / 27))));
+      // 38px for the date header and padding, 26px per event row.
+      setMaxEvents(Math.max(1, Math.min(8, Math.floor((rowHeight - 38) / 26))));
     };
 
     measure();
@@ -1560,7 +1721,7 @@ function MonthView({
         ))}
       </div>
 
-      <div ref={gridRef} className="grid flex-1 grid-cols-7 grid-rows-[repeat(6,minmax(128px,1fr))]">
+      <div ref={gridRef} className="grid flex-1 grid-cols-7 grid-rows-[repeat(6,minmax(96px,1fr))]">
         {days.map((date, index) => {
           const key = toDateKey(date);
 
@@ -1631,12 +1792,13 @@ function DayCell({
       className={cx(
         'group relative flex min-h-0 cursor-default flex-col gap-1 overflow-hidden border-[var(--line)] p-1.5 transition-colors',
         isSelected
-          ? 'bg-[color:var(--accent)]/[0.08]'
+          ? 'bg-[color:var(--accent)]/[0.07]'
           : isToday
-            ? 'bg-[color:var(--accent)]/[0.04] hover:bg-[color:var(--accent)]/[0.07]'
+            ? 'bg-[color:var(--accent)]/[0.035] hover:bg-[color:var(--accent)]/[0.06]'
             : isWeekend
-              ? 'bg-[var(--surface-muted)]/50 hover:bg-[var(--surface-muted)]/80'
+              ? 'bg-[var(--surface-muted)]/55 hover:bg-[var(--surface-muted)]/85'
               : 'hover:bg-[var(--surface-muted)]/60',
+        !inMonth && 'bg-[repeating-linear-gradient(135deg,transparent_0_10px,rgba(0,0,0,0.012)_10px_11px)]',
         !isLastColumn && 'border-r',
         !isLastRow && 'border-b',
       )}
@@ -1644,6 +1806,7 @@ function DayCell({
       {isSelected ? (
         <span className="pointer-events-none absolute inset-0 ring-2 ring-inset ring-[color:var(--accent)]/55" />
       ) : null}
+      {isToday ? <span className="pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-[var(--accent)]" /> : null}
 
       <div className={cx('flex items-center justify-between', !inMonth && 'opacity-45')}>
         <button
@@ -1775,7 +1938,7 @@ function WeekView({
   eventsByDate: Map<string, CalendarItem[]>;
   canCreate: boolean;
   onSelectDate: (date: Date) => void;
-  onCreate: (date: Date, startTime?: string) => void;
+  onCreate: (date: Date, startTime?: string, endTime?: string) => void;
   onSelectEvent: (event: CalendarItem) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1807,10 +1970,57 @@ function WeekView({
   }, [currentDate, eventsByDate]);
 
   const hasAllDay = columns.some((column) => column.allDay.length > 0);
-  const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * HOUR_HEIGHT;
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const nowTop = (nowMinutes / 60) * HOUR_HEIGHT;
+  const weekHasToday = columns.some((column) => isSameDate(column.date, today));
+
+  /*
+   * Press and drag on empty time to block out a range. A plain click still
+   * starts an hour long event at the nearest half hour.
+   */
+  const [drag, setDrag] = useState<{ key: string; start: number; end: number } | null>(null);
+  const dragRef = useRef<{ key: string; origin: number; moved: boolean } | null>(null);
+
+  const minutesAt = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const raw = ((event.clientY - rect.top) / HOUR_HEIGHT) * 60;
+    return Math.max(0, Math.min(24 * 60 - 15, Math.round(raw / 15) * 15));
+  };
+
+  const onColumnPointerDown = (key: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!canCreate || event.button !== 0) return;
+    if ((event.target as HTMLElement).closest('[data-event]')) return;
+    const origin = minutesAt(event);
+    dragRef.current = { key, origin, moved: false };
+    setDrag({ key, start: origin, end: origin + 30 });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onColumnPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const current = dragRef.current;
+    if (!current) return;
+    const at = minutesAt(event);
+    if (at !== current.origin) current.moved = true;
+    const start = Math.min(current.origin, at);
+    const end = Math.max(current.origin, at) + 15;
+    setDrag({ key: current.key, start, end: Math.max(end, start + 15) });
+  };
+
+  const onColumnPointerUp = (date: Date) => () => {
+    const current = dragRef.current;
+    dragRef.current = null;
+    if (!current) return;
+    const range = drag;
+    setDrag(null);
+    if (current.moved && range) {
+      onCreate(date, minutesToTime(range.start), minutesToTime(range.end));
+    } else {
+      onCreate(date, minutesToTime(Math.floor(current.origin / 30) * 30));
+    }
+  };
 
   return (
-    <div className="min-w-[860px]">
+    <div className="flex min-h-0 min-w-[860px] flex-col">
       <div className={cx(WEEK_GRID, 'border-b border-[var(--line)]')}>
         <div />
         {columns.map(({ date, key }, index) => {
@@ -1860,44 +2070,78 @@ function WeekView({
         </div>
       ) : null}
 
-      <div ref={scrollRef} className="h-[max(520px,calc(100dvh-330px))] overflow-y-auto overscroll-contain">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain max-2xl:max-h-[calc(100dvh-330px)] max-2xl:min-h-[480px]">
         <div className={cx(WEEK_GRID, 'relative')} style={{ height: 24 * HOUR_HEIGHT }}>
           <div className="relative">
             {HOURS.slice(1).map((hour) => (
               <span
                 key={hour}
-                className="absolute right-2 -translate-y-1/2 text-[9.5px] tabular-nums text-[var(--text-subtle)]"
+                className={cx(
+                  'absolute right-2 -translate-y-1/2 text-[9.5px] tabular-nums text-[var(--text-subtle)] transition-opacity',
+                  weekHasToday && Math.abs(hour * 60 - nowMinutes) < 18 && 'opacity-0',
+                )}
                 style={{ top: hour * HOUR_HEIGHT }}
               >
                 {pad(hour)}:00
               </span>
             ))}
+            {weekHasToday ? (
+              <span
+                className="absolute right-1.5 z-30 -translate-y-1/2 rounded-md bg-[var(--accent)] px-1.5 py-0.5 text-[9.5px] font-bold tabular-nums text-white shadow-sm"
+                style={{ top: nowTop }}
+              >
+                {pad(now.getHours())}:{pad(now.getMinutes())}
+              </span>
+            ) : null}
           </div>
 
-          {columns.map(({ date, key, timed }) => {
+          {columns.map(({ date, key, timed }, index) => {
             const isToday = isSameDate(date, today);
+            const ghost = drag && drag.key === key ? drag : null;
 
             return (
               <div
                 key={key}
-                className={cx('relative border-l border-[var(--line)]', isToday && 'bg-[color:var(--accent)]/[0.035]')}
+                onPointerDown={onColumnPointerDown(key)}
+                onPointerMove={onColumnPointerMove}
+                onPointerUp={onColumnPointerUp(date)}
+                onPointerCancel={() => {
+                  dragRef.current = null;
+                  setDrag(null);
+                }}
+                className={cx(
+                  'relative select-none border-l border-[var(--line)] transition-colors',
+                  canCreate && 'cursor-crosshair hover:bg-[var(--surface-muted)]/35',
+                  isToday ? 'bg-[color:var(--accent)]/[0.035]' : index >= 5 && 'bg-[var(--surface-muted)]/35',
+                  ghost && 'touch-none',
+                )}
               >
                 {HOURS.map((hour) => (
-                  <button
+                  <div
                     key={hour}
-                    type="button"
-                    tabIndex={-1}
                     aria-hidden="true"
-                    disabled={!canCreate}
-                    onClick={() => onCreate(date, `${pad(hour)}:00`)}
-                    className="block w-full border-t border-[var(--line)]/60 transition-colors first:border-t-0 enabled:hover:bg-[var(--surface-muted)]/60"
+                    className="pointer-events-none block w-full border-t border-[var(--line)]/60 first:border-t-0"
                     style={{ height: HOUR_HEIGHT }}
-                  />
+                  >
+                    <span className="block h-1/2 border-b border-dashed border-[var(--line)]/35" />
+                  </div>
                 ))}
 
                 {timed.map((item) => (
                   <TimeGridEvent key={item.event.id} item={item} onClick={() => onSelectEvent(item.event)} />
                 ))}
+
+                {ghost ? (
+                  <div
+                    className="pointer-events-none absolute inset-x-[3px] z-20 flex items-start rounded-[9px] border-2 border-dashed border-[var(--accent)] bg-[color:var(--accent)]/[0.12] px-2 py-1"
+                    style={{ top: (ghost.start / 60) * HOUR_HEIGHT + 1, height: ((ghost.end - ghost.start) / 60) * HOUR_HEIGHT - 2 }}
+                  >
+                    <span className="flex min-w-0 flex-col text-[10.5px] font-semibold tabular-nums leading-tight text-[var(--text)]">
+                      <span className="truncate">{minutesToTime(ghost.start)} to {minutesToTime(ghost.end)}</span>
+                      <span className="truncate font-medium text-[var(--text-muted)]">{formatDuration(ghost.end - ghost.start)}</span>
+                    </span>
+                  </div>
+                ) : null}
 
                 {isToday ? (
                   <div className="pointer-events-none absolute inset-x-0 z-30" style={{ top: nowTop }}>
@@ -1924,7 +2168,9 @@ function TimeGridEvent({ item, onClick }: { item: PositionedEvent; onClick: () =
 
   return (
     <div
-      className="absolute z-10 rounded-[9px] bg-[var(--surface)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-white transition-shadow hover:z-20 hover:shadow-md"
+      data-event=""
+      onPointerDown={(event) => event.stopPropagation()}
+      className="absolute z-10 cursor-pointer rounded-[9px] bg-[var(--surface)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-white transition-shadow hover:z-20 hover:shadow-md"
       style={{
         top,
         height,
@@ -2257,7 +2503,7 @@ function SelectedDayPanel({
           events.map((event) => <SidebarEventRow key={event.id} event={event} onClick={() => onSelectEvent(event)} />)
         ) : (
           <p className="rounded-[12px] border border-dashed border-[var(--line)] px-3 py-5 text-center text-[10.5px] text-[var(--text-subtle)]">
-            Nothing scheduled.{canCreate ? ' Double click a day to add something.' : ''}
+            Nothing scheduled.{canCreate ? ' Press N, or drag across a time in week view.' : ''}
           </p>
         )}
       </div>
@@ -2491,6 +2737,150 @@ function MonthPulse({
  * VIEW SWITCHER
  * =============================================================================
  */
+
+/** Jump straight to a month without stepping through the arrows. */
+function PeriodPicker({
+  currentDate,
+  today,
+  view,
+  onPick,
+  onClose,
+}: {
+  currentDate: Date;
+  today: Date;
+  view: CalendarView;
+  onPick: (date: Date) => void;
+  onClose: () => void;
+}) {
+  const reduceMotion = useReducedMotion();
+  const ref = useRef<HTMLDivElement>(null);
+  const [year, setYear] = useState(currentDate.getFullYear());
+
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (ref.current?.contains(target)) return;
+      if ((target as HTMLElement).closest?.('[aria-haspopup="dialog"]')) return;
+      onClose();
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [onClose]);
+
+  return (
+    <motion.div
+      ref={ref}
+      role="dialog"
+      aria-label="Jump to a month"
+      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, scale: 0.98 }}
+      transition={{ duration: 0.16, ease: 'easeOut' }}
+      className="absolute left-0 top-[calc(100%+8px)] z-40 w-[300px] rounded-[18px] border border-[var(--line)] bg-[var(--surface)] p-3 shadow-[0_24px_60px_-20px_rgba(16,24,40,0.35)]"
+    >
+      <div className="flex items-center justify-between px-1">
+        <NavButton label="Previous year" icon={ChevronLeft} size="sm" onClick={() => setYear((value) => value - 1)} />
+        <span className="text-[13px] font-semibold tabular-nums text-[var(--text)]">{year}</span>
+        <NavButton label="Next year" icon={ChevronRight} size="sm" onClick={() => setYear((value) => value + 1)} />
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-1">
+        {MONTHS.map((name, index) => {
+          const date = new Date(year, index, 1);
+          const isCurrent = year === currentDate.getFullYear() && index === currentDate.getMonth();
+          const isThisMonth = year === today.getFullYear() && index === today.getMonth();
+          return (
+            <button
+              key={name}
+              type="button"
+              onClick={() => onPick(isThisMonth ? today : date)}
+              aria-current={isCurrent ? 'date' : undefined}
+              className={cx(
+                'h-9 rounded-lg text-[11px] font-semibold transition-colors',
+                isCurrent
+                  ? 'bg-[var(--accent)] text-white'
+                  : isThisMonth
+                    ? 'text-[var(--accent)] hover:bg-[var(--surface-muted)]'
+                    : 'text-[var(--text-muted)] hover:bg-[var(--surface-muted)] hover:text-[var(--text)]',
+                focusRing,
+              )}
+            >
+              {name.slice(0, 3)}
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex items-center justify-between border-t border-[var(--line)] pt-2">
+        <span className="text-[10px] text-[var(--text-subtle)]">{view === 'month' ? 'Opens the month' : view === 'week' ? 'Opens the first week' : 'Starts the agenda there'}</span>
+        <button
+          type="button"
+          onClick={() => onPick(today)}
+          className={cx('h-7 rounded-md px-2 text-[10.5px] font-semibold text-[var(--accent)] hover:bg-[var(--surface-muted)]', focusRing)}
+        >
+          Today
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+const SHORTCUTS: Array<{ keys: string[]; label: string }> = [
+  { keys: ['N'], label: 'New event on the selected day' },
+  { keys: ['T'], label: 'Jump to today' },
+  { keys: ['←', '→'], label: 'Previous or next period' },
+  { keys: ['M', 'W', 'A'], label: 'Month, week or agenda' },
+  { keys: ['/'], label: 'Search' },
+  { keys: ['⌘', 'K'], label: 'Search' },
+  { keys: ['Esc'], label: 'Close anything open' },
+  { keys: ['?'], label: 'This list' },
+];
+
+function ShortcutsPopover({ onClose }: { onClose: () => void }) {
+  const reduceMotion = useReducedMotion();
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement;
+      if (ref.current?.contains(target) || target.closest?.('[title="Keyboard shortcuts (?)"]')) return;
+      onClose();
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [onClose]);
+
+  return (
+    <motion.div
+      ref={ref}
+      role="dialog"
+      aria-label="Keyboard shortcuts"
+      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 4, scale: 0.98 }}
+      transition={{ duration: 0.16, ease: 'easeOut' }}
+      className="absolute bottom-[calc(100%+8px)] right-0 z-40 w-[280px] rounded-[18px] border border-[var(--line)] bg-[var(--surface)] p-2 shadow-[0_24px_60px_-20px_rgba(16,24,40,0.35)]"
+    >
+      <p className="flex items-center gap-2 px-2 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
+        <Command size={11} />
+        Keyboard
+      </p>
+      <ul className="space-y-0.5">
+        {SHORTCUTS.map((item) => (
+          <li key={item.label + item.keys.join()} className="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-[11px] text-[var(--text-muted)]">
+            <span>{item.label}</span>
+            <span className="flex shrink-0 items-center gap-1">
+              {item.keys.map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 border-t border-[var(--line)] px-2 pb-1 pt-2 text-[10px] text-[var(--text-subtle)]">
+        In week view, press and drag on empty time to block out a slot.
+      </p>
+    </motion.div>
+  );
+}
 
 function ViewSwitcher({ value, onChange }: { value: CalendarView; onChange: (value: CalendarView) => void }) {
   const reduceMotion = useReducedMotion();
@@ -2806,7 +3196,7 @@ function CreateEventForm({
       typeAuto: true,
       date: toDateKey(draft.date),
       startTime: start,
-      endTime: minutesToTime(timeToMinutes(start) + 60),
+      endTime: draft.endTime ?? minutesToTime(timeToMinutes(start) + 60),
       allDay: false,
       scope: allowedScopes.includes('PERSONAL') ? 'PERSONAL' : allowedScopes[0],
       priority: allowedPriorities.includes('NORMAL') ? 'NORMAL' : allowedPriorities[0],
@@ -2827,6 +3217,27 @@ function CreateEventForm({
   const [saving, setSaving] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [attendeeQuery, setAttendeeQuery] = useState('');
+  const [hintDismissedFor, setHintDismissedFor] = useState('');
+
+  const titleHints = useMemo(() => readTitleHints(form.title, draft.date), [form.title, draft.date]);
+  const showTitleHints = Boolean(titleHints && titleHints.summary !== hintDismissedFor);
+
+  const applyTitleHints = () => {
+    if (!titleHints) return;
+    setForm((current) => {
+      const start = titleHints.time ?? current.startTime;
+      const length = titleHints.duration ?? Math.max(timeToMinutes(current.endTime) - timeToMinutes(current.startTime), 15);
+      return {
+        ...current,
+        title: titleHints.cleanTitle || current.title,
+        date: titleHints.date ?? current.date,
+        startTime: start,
+        endTime: minutesToTime(Math.min(timeToMinutes(start) + length, 24 * 60 - 1)),
+        allDay: titleHints.time ? false : current.allDay,
+      };
+    });
+    setHintDismissedFor('');
+  };
 
   const isMac = useMemo(
     () => typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform),
@@ -3028,6 +3439,39 @@ function CreateEventForm({
           />
         </label>
         {titleError ? <p className="mt-1 text-[9px] font-medium text-red-600">{titleError}</p> : null}
+
+        <AnimatePresence initial={false}>
+          {showTitleHints && titleHints ? (
+            <motion.div
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: 'auto' }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, height: 0 }}
+              className="overflow-hidden"
+            >
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--accent)]/30 bg-[color:var(--accent)]/[0.06] px-3 py-2">
+                <Wand2 size={12} className="shrink-0 text-[var(--accent)]" />
+                <span className="min-w-0 flex-1 text-[10.5px] text-[var(--text-muted)]">
+                  From your title: <span className="font-semibold text-[var(--text)]">{titleHints.summary}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={applyTitleHints}
+                  className={cx('h-6 rounded-md bg-[var(--accent)] px-2 text-[10px] font-semibold text-white hover:opacity-90', focusRing)}
+                >
+                  Use it
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHintDismissedFor(titleHints.summary)}
+                  aria-label="Dismiss suggestion"
+                  className={cx('flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-subtle)] hover:bg-[var(--surface)] hover:text-[var(--text)]', focusRing)}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-7">

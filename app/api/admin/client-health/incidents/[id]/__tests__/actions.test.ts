@@ -8,7 +8,12 @@ function postRequest() {
 describe("POST /api/admin/client-health/incidents/:id/acknowledge", () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.mocked(requirePermission).mockResolvedValue({ admin: { id: "admin-1" } } as never);
+    vi.mocked(requirePermission).mockResolvedValue({
+      admin: { id: "admin-1" },
+      isFullAccess: true,
+      permissions: new Map(),
+      assignedClientIds: [],
+    } as never);
   });
 
   afterEach(() => {
@@ -56,7 +61,12 @@ describe("POST /api/admin/client-health/incidents/:id/acknowledge", () => {
 describe("POST /api/admin/client-health/incidents/:id/resolve", () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.mocked(requirePermission).mockResolvedValue({ admin: { id: "admin-1" } } as never);
+    vi.mocked(requirePermission).mockResolvedValue({
+      admin: { id: "admin-1" },
+      isFullAccess: true,
+      permissions: new Map(),
+      assignedClientIds: [],
+    } as never);
   });
 
   afterEach(() => {

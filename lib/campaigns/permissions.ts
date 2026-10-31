@@ -18,6 +18,8 @@
 import { AccessAction, AccessScope } from "@/app/generated/prisma/enums";
 import {
   AuthorisationError,
+  assertClientRowAccess,
+  clientScopeIdFilter,
   getCurrentIdentity,
   hasPermission,
   requirePermission,
@@ -45,13 +47,16 @@ export function hasCampaignsPermission(
 }
 
 /**
- * OWN restricts to campaigns the caller created herself. DEPARTMENT now
+ * OWN restricts to campaigns the caller created herself. DEPARTMENT
  * restricts to campaigns whose departmentId matches the caller's own
  * Employee.departmentId (Campaign gained a real departmentId in the
  * 20261012170000_campaigns_full_build migration, so this is no longer the
  * "no natural department boundary" case Social Media documents — a caller
  * granted DEPARTMENT with no resolvable department of their own sees
- * nothing, rather than silently falling back to ALL).
+ * nothing, rather than silently falling back to ALL). CLIENT restricts to
+ * campaigns whose clientId is one of the caller's ClientAssignment rows,
+ * via the generic clientScopeIdFilter (lib/auth/current-admin.ts) — the
+ * same resolution every other client-owned module uses.
  */
 export function campaignOwnScopeFilter(
   identity: ResolvedIdentity,
@@ -70,17 +75,23 @@ export function campaignOwnScopeFilter(
     return { departmentId: identity.employee.departmentId };
   }
 
+  if (grantedScope === AccessScope.CLIENT) {
+    const clientIdIn = clientScopeIdFilter(identity, CAMPAIGNS_MODULE, action);
+    return clientIdIn ? { clientId: clientIdIn } : undefined;
+  }
+
   return undefined;
 }
 
 /** Throws unless the caller holds the given action on campaigns,
- *  additionally requiring OWN/DEPARTMENT-scoped callers to be within their
- *  scope for this specific campaign row. Every sub-resource route calls
- *  this against its PARENT campaign before mutating the sub-resource. */
+ *  additionally requiring an OWN/DEPARTMENT/CLIENT-scoped caller to be
+ *  within their scope for this specific campaign row. Every sub-resource
+ *  route calls this against its PARENT campaign before mutating the
+ *  sub-resource. */
 export function assertCampaignRowAccess(
   identity: ResolvedIdentity,
   action: AccessAction,
-  row: { createdById: string | null; departmentId?: string | null },
+  row: { createdById: string | null; departmentId?: string | null; clientId?: string | null },
 ): void {
   if (identity.isFullAccess) return;
 
@@ -99,6 +110,10 @@ export function assertCampaignRowAccess(
     if (!callerDepartmentId || row.departmentId !== callerDepartmentId) {
       throw new AuthorisationError("You can only act on campaigns in your own department.");
     }
+  }
+
+  if (grantedScope === AccessScope.CLIENT) {
+    assertClientRowAccess(identity, CAMPAIGNS_MODULE, action, { clientId: row.clientId ?? null });
   }
 }
 

@@ -22,7 +22,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     const identity = await requireCampaignsPermission(AccessAction.VIEW);
     const { id } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.VIEW, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.VIEW, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
     const kpis = await listCampaignKpis(id);
     return NextResponse.json({ ok: true, kpis });
   } catch (error) {
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const identity = await requireCampaignsPermission(AccessAction.CREATE);
     const { id } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.CREATE, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.CREATE, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     const body = await request.json().catch(() => null);
     const name = parseOptionalString(body?.name);

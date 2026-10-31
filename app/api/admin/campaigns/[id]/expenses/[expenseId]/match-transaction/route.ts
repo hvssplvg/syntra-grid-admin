@@ -13,7 +13,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const identity = await requireCampaignsPermission(AccessAction.EDIT);
     const { id, expenseId } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     const body = await request.json().catch(() => null);
     const monzoTransactionId = typeof body?.monzoTransactionId === "string" ? body.monzoTransactionId : null;

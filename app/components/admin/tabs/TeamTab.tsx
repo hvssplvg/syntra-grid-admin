@@ -79,6 +79,11 @@ import {
   isModuleSecured,
   type AdminTab,
 } from '../adminNav';
+import {
+  mergeRoleTemplateGrants,
+  type RoleTemplateGrantInput,
+} from '@/lib/access/roleTemplateGrants';
+import { AccessAction, AccessScope } from '@/app/generated/prisma/enums';
 
 /* =============================================================================
  * TYPES
@@ -913,6 +918,7 @@ export default function TeamTab() {
 
   const [addOpen, setAddOpen] = useState(false);
   const [addKey, setAddKey] = useState(0);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<
     string | null
   >(null);
@@ -1281,6 +1287,14 @@ export default function TeamTab() {
     />
   );
 
+  const previewModal = (
+    <PreviewAccessModal
+      open={previewOpen}
+      employees={employees}
+      onClose={() => setPreviewOpen(false)}
+    />
+  );
+
   let content: ReactNode;
 
   if (selectedEmployeeId) {
@@ -1474,6 +1488,18 @@ export default function TeamTab() {
 
                   <button
                     type="button"
+                    onClick={() => setPreviewOpen(true)}
+                    className={cx(
+                      'inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3.5 text-[11px] font-semibold text-[var(--text-muted)] transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)]',
+                      focusRing,
+                    )}
+                  >
+                    <ShieldCheck size={14} strokeWidth={1.9} />
+                    Preview access
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={openAdd}
                     className={cx(
                       'inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--accent)] pl-4 pr-2.5 text-[11px] font-semibold text-white shadow-sm transition hover:opacity-90',
@@ -1559,6 +1585,7 @@ export default function TeamTab() {
       <div ref={theme.ref} className="mx-auto w-full max-w-[1600px]">
         {content}
         {permissions?.canManageTeam ? addModal : null}
+        {permissions?.canManageTeam ? previewModal : null}
         {toastNode}
       </div>
     </PortalTheme.Provider>
@@ -3967,10 +3994,12 @@ const PERMISSION_ACTIONS = [
   'EDIT',
   'MANAGE',
   'APPROVE',
+  'PUBLISH',
+  'DELETE',
 ] as const;
 
 type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
-type PermissionScope = 'OWN' | 'DEPARTMENT' | 'ALL';
+type PermissionScope = 'OWN' | 'CLIENT' | 'DEPARTMENT' | 'ALL';
 
 type ModuleGrant = {
   actions: Set<PermissionAction>;
@@ -4019,68 +4048,119 @@ function defaultScopeForModule(tab: string): PermissionScope {
 
 const SCOPE_OPTIONS: Array<DropdownOption<PermissionScope>> = [
   { value: 'OWN', label: 'Her own' },
+  { value: 'CLIENT', label: 'Assigned clients only' },
   { value: 'DEPARTMENT', label: 'Her department' },
   { value: 'ALL', label: 'Entire company' },
 ];
 
-type RoleTemplateGrants = Record<
-  string,
-  { actions: PermissionAction[]; scope: PermissionScope }
->;
-
-const ACCESS_ROLE_TEMPLATES: {
+// Role templates are now real, database-backed rows (RoleTemplate /
+// RoleTemplateGrant — see prisma/schema.prisma) rather than the
+// hardcoded presets this file used to define inline. Fetched fresh from
+// /api/admin/role-templates whenever the modal opens; see
+// useRoleTemplates below. Multiple templates can be selected together
+// (e.g. "Developer" + "Project Manager"), merged via the shared
+// mergeRoleTemplateGrants (lib/access/roleTemplateGrants.ts) — the exact
+// same precedence rule the backend applies when resolving an employee's
+// effective grants, so the matrix preview here never diverges from what
+// actually gets saved.
+type DbRoleTemplate = {
   id: string;
-  label: string;
-  description: string;
-  grants: RoleTemplateGrants;
-}[] = [
-  {
-    id: 'marketing-executive',
-    label: 'Marketing Executive',
-    description:
-      'Calendar and Notifications for her own schedule, full control over Social Media and Campaigns, read-only SEO & Analytics, her department’s Team view, self-service leave.',
-    grants: {
-      calendar: { actions: ['VIEW', 'CREATE', 'EDIT'], scope: 'OWN' },
-      notifications: { actions: ['VIEW'], scope: 'ALL' },
-      social_media: { actions: ['VIEW', 'CREATE', 'EDIT'], scope: 'ALL' },
-      campaigns: { actions: ['VIEW', 'CREATE', 'EDIT'], scope: 'ALL' },
-      brand_assets: { actions: ['VIEW', 'CREATE', 'EDIT'], scope: 'ALL' },
-      seo_analytics: { actions: ['VIEW'], scope: 'ALL' },
-      team: { actions: ['VIEW'], scope: 'DEPARTMENT' },
-      leave: { actions: ['VIEW', 'CREATE'], scope: 'OWN' },
-    },
-  },
-  {
-    id: 'department-viewer',
-    label: 'Department Viewer',
-    description:
-      'Read-only department Team view and self-service leave. Nothing else.',
-    grants: {
-      team: { actions: ['VIEW'], scope: 'DEPARTMENT' },
-      leave: { actions: ['VIEW', 'CREATE'], scope: 'OWN' },
-    },
-  },
-  {
-    id: 'custom',
-    label: 'Custom',
-    description: 'Start from nothing and check exactly what she needs.',
-    grants: {},
-  },
-];
+  key: string;
+  name: string;
+  description: string | null;
+  defaultWorkspaceId: string | null;
+  grants: { module: string; action: string; scope: string }[];
+  _count?: { assignedUsers: number };
+};
 
-function grantStateFromTemplateGrants(
-  templateGrants: RoleTemplateGrants,
-): GrantState {
-  const state: GrantState = {};
+function useRoleTemplates(open: boolean) {
+  const [templates, setTemplates] = useState<DbRoleTemplate[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  for (const [tab, grant] of Object.entries(templateGrants)) {
-    state[tab as AdminTab] = {
-      actions: new Set(grant.actions),
-      scope: grant.scope,
+  useEffect(() => {
+    if (!open) return;
+
+    let cancelled = false;
+    setLoading(true);
+
+    fetch('/api/admin/role-templates', { credentials: 'include', cache: 'no-store' })
+      .then((response) => response.json())
+      .then((payload: { ok?: boolean; templates?: DbRoleTemplate[] }) => {
+        if (!cancelled && payload?.ok) {
+          setTemplates(payload.templates ?? []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTemplates([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
     };
-  }
+  }, [open]);
 
-  return state;
+  return { templates, loadingTemplates: loading };
+}
+
+type AssignableClient = { id: string; name: string; displayName: string | null };
+
+function useAssignableClients(open: boolean) {
+  const [clients, setClients] = useState<AssignableClient[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    let cancelled = false;
+
+    fetch('/api/admin/clients', { credentials: 'include', cache: 'no-store' })
+      .then((response) => response.json())
+      .then((payload: { ok?: boolean; clients?: AssignableClient[] }) => {
+        if (!cancelled && payload?.ok) {
+          setClients(payload.clients ?? []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setClients([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  return clients;
+}
+
+type AssignableWorkspace = { id: string; key: string; name: string };
+
+function useAssignableWorkspaces(open: boolean) {
+  const [workspaces, setWorkspaces] = useState<AssignableWorkspace[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    let cancelled = false;
+
+    fetch('/api/admin/workspaces', { credentials: 'include', cache: 'no-store' })
+      .then((response) => response.json())
+      .then((payload: { ok?: boolean; workspaces?: AssignableWorkspace[] }) => {
+        if (!cancelled && payload?.ok) {
+          setWorkspaces(payload.workspaces ?? []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaces([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  return workspaces;
 }
 
 function grantStateFromRecord(
@@ -4127,6 +4207,10 @@ function GrantAccessModal({
   mode,
   employeeId,
   initialGrants,
+  initialRoleTemplateIds,
+  initialClientIds,
+  initialDefaultWorkspaceId,
+  initialDefaultClientId,
   onClose,
   onSaved,
 }: {
@@ -4134,14 +4218,23 @@ function GrantAccessModal({
   mode: 'grant' | 'change';
   employeeId: string;
   initialGrants?: { module: string; action: string; scope?: string }[];
+  initialRoleTemplateIds?: string[];
+  initialClientIds?: string[];
+  initialDefaultWorkspaceId?: string | null;
+  initialDefaultClientId?: string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const titleId = useId();
-  const [templateId, setTemplateId] = useState('marketing-executive');
-  const [grants, setGrants] = useState<GrantState>(() =>
-    grantStateFromTemplateGrants(ACCESS_ROLE_TEMPLATES[0].grants),
-  );
+  const { templates } = useRoleTemplates(open);
+  const assignableClients = useAssignableClients(open);
+  const assignableWorkspaces = useAssignableWorkspaces(open);
+
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<Set<string>>(new Set());
+  const [grants, setGrants] = useState<GrantState>({});
+  const [assignedClientIds, setAssignedClientIds] = useState<Set<string>>(new Set());
+  const [defaultWorkspaceId, setDefaultWorkspaceId] = useState<string | null>(null);
+  const [defaultClientId, setDefaultClientId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
@@ -4164,6 +4257,12 @@ function GrantAccessModal({
     [],
   );
 
+  // Any module+action currently at CLIENT scope means "assigned clients"
+  // matters for this account — the multi-select below only appears then.
+  const hasClientScopedGrant = Object.values(grants).some(
+    (grant) => grant?.scope === 'CLIENT',
+  );
+
   useEffect(() => {
     if (!open) return;
 
@@ -4175,31 +4274,87 @@ function GrantAccessModal({
     let initialState: GrantState;
 
     if (mode === 'change' && initialGrants) {
-      setTemplateId('custom');
       initialState = grantStateFromRecord(initialGrants);
+      setSelectedTemplateIds(new Set(initialRoleTemplateIds ?? []));
     } else {
-      setTemplateId('marketing-executive');
-      initialState = grantStateFromTemplateGrants(
-        ACCESS_ROLE_TEMPLATES[0].grants,
-      );
+      initialState = {};
+      setSelectedTemplateIds(new Set());
     }
 
     setGrants(initialState);
     setExpanded(expandSectionsWithSelections(initialState));
-  }, [open, mode, initialGrants, expandSectionsWithSelections]);
+    setAssignedClientIds(new Set(initialClientIds ?? []));
+    setDefaultWorkspaceId(initialDefaultWorkspaceId ?? null);
+    setDefaultClientId(initialDefaultClientId ?? null);
+  }, [
+    open,
+    mode,
+    initialGrants,
+    initialRoleTemplateIds,
+    initialClientIds,
+    initialDefaultWorkspaceId,
+    initialDefaultClientId,
+    expandSectionsWithSelections,
+  ]);
 
-  const applyTemplate = (id: string) => {
-    setTemplateId(id);
+  // Toggling a template fully re-derives the matrix from every currently
+  // selected template, merged via the shared precedence rule (highest
+  // scope wins per module+action, actions union) — the same resolution
+  // the backend applies. This replaces whatever manual edits were made
+  // since the last template toggle, exactly like the single-template
+  // picker this replaced; the matrix stays fully editable afterwards.
+  const applyTemplateSelection = (ids: Set<string>) => {
+    const selected = templates.filter((template) => ids.has(template.id));
+    const merged: RoleTemplateGrantInput[] = mergeRoleTemplateGrants(
+      selected.map((template) => ({
+        grants: template.grants.map((grant) => ({
+          module: grant.module,
+          action: grant.action as AccessAction,
+          scope: grant.scope as AccessScope,
+        })),
+      })),
+    );
 
-    const template = ACCESS_ROLE_TEMPLATES.find((item) => item.id === id);
-    const nextState = grantStateFromTemplateGrants(template?.grants ?? {});
-
+    const nextState = grantStateFromRecord(merged);
     setGrants(nextState);
     setExpanded(expandSectionsWithSelections(nextState));
+
+    // Suggest the first selected template's default workspace if one
+    // isn't already set — a convenience, never silently overwritten.
+    if (!defaultWorkspaceId) {
+      const withDefault = selected.find((template) => template.defaultWorkspaceId);
+      if (withDefault?.defaultWorkspaceId) {
+        setDefaultWorkspaceId(withDefault.defaultWorkspaceId);
+      }
+    }
+  };
+
+  const toggleTemplate = (id: string) => {
+    setSelectedTemplateIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      applyTemplateSelection(next);
+      return next;
+    });
+  };
+
+  const toggleAssignedClient = (clientId: string) => {
+    setAssignedClientIds((current) => {
+      const next = new Set(current);
+      if (next.has(clientId)) {
+        next.delete(clientId);
+      } else {
+        next.add(clientId);
+      }
+      return next;
+    });
   };
 
   const toggleAction = (tab: AdminTab, action: PermissionAction) => {
-    setTemplateId('custom');
     setGrants((current) => {
       const existing = current[tab] ?? {
         actions: new Set<PermissionAction>(),
@@ -4227,7 +4382,6 @@ function GrantAccessModal({
   };
 
   const selectAllForModule = (tab: AdminTab) => {
-    setTemplateId('custom');
     setGrants((current) => ({
       ...current,
       [tab]: {
@@ -4238,7 +4392,6 @@ function GrantAccessModal({
   };
 
   const clearModule = (tab: AdminTab) => {
-    setTemplateId('custom');
     setGrants((current) => {
       const next = { ...current };
       delete next[tab];
@@ -4247,8 +4400,6 @@ function GrantAccessModal({
   };
 
   const selectAllInSection = (sectionId: string) => {
-    setTemplateId('custom');
-
     const section = PERMISSION_SECTIONS.find((item) => item.id === sectionId);
     if (!section) return;
 
@@ -4267,8 +4418,6 @@ function GrantAccessModal({
   };
 
   const clearSection = (sectionId: string) => {
-    setTemplateId('custom');
-
     const section = PERMISSION_SECTIONS.find((item) => item.id === sectionId);
     if (!section) return;
 
@@ -4280,7 +4429,6 @@ function GrantAccessModal({
   };
 
   const clearAllGrants = () => {
-    setTemplateId('custom');
     setGrants({});
   };
 
@@ -4311,7 +4459,13 @@ function GrantAccessModal({
         method: mode === 'grant' ? 'POST' : 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ grants: grantStateToPayload(grants) }),
+        body: JSON.stringify({
+          grants: grantStateToPayload(grants),
+          roleTemplateIds: Array.from(selectedTemplateIds),
+          clientIds: hasClientScopedGrant ? Array.from(assignedClientIds) : [],
+          defaultWorkspaceId,
+          defaultClientId,
+        }),
       });
 
       const payload = (await response.json().catch(() => null)) as {
@@ -4410,31 +4564,39 @@ function GrantAccessModal({
               ) : null}
             </div>
 
-            {mode === 'grant' ? (
-              <div className="mt-4">
-                <p className="mb-2 text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
-                  Start from a template
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {ACCESS_ROLE_TEMPLATES.map((template) => (
-                    <button
-                      key={template.id}
-                      type="button"
-                      onClick={() => applyTemplate(template.id)}
-                      title={template.description}
-                      className={cx(
-                        'rounded-full border px-3 py-1.5 text-[10px] font-semibold transition',
-                        templateId === template.id
-                          ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
-                          : 'border-[var(--line)] text-[var(--text-muted)] hover:text-[var(--text)]',
-                      )}
-                    >
-                      {template.label}
-                    </button>
-                  ))}
-                </div>
+            <div className="mt-4">
+              <p className="mb-2 text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
+                Role templates — select one or more
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {templates.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() => toggleTemplate(template.id)}
+                    title={template.description ?? undefined}
+                    className={cx(
+                      'rounded-full border px-3 py-1.5 text-[10px] font-semibold transition',
+                      selectedTemplateIds.has(template.id)
+                        ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                        : 'border-[var(--line)] text-[var(--text-muted)] hover:text-[var(--text)]',
+                    )}
+                  >
+                    {template.name}
+                  </button>
+                ))}
+                {templates.length === 0 ? (
+                  <span className="text-[10px] text-[var(--text-subtle)]">
+                    No role templates yet — build the matrix below manually.
+                  </span>
+                ) : null}
               </div>
-            ) : null}
+              <p className="mt-1.5 text-[9px] text-[var(--text-subtle)]">
+                Selecting a template re-fills the matrix below from scratch, merging multiple
+                templates to the broadest scope and the union of their actions. Everything stays
+                editable afterwards.
+              </p>
+            </div>
 
             <div className="mt-4 flex items-center gap-2">
               <div className="relative flex-1">
@@ -4619,6 +4781,92 @@ function GrantAccessModal({
               ) : null}
             </div>
 
+            {hasClientScopedGrant ? (
+              <div className="mt-4 rounded-xl border border-[var(--line)] p-3.5">
+                <p className="text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
+                  Assigned clients
+                </p>
+                <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+                  At least one module above is scoped to &quot;Assigned clients only&quot;. She can
+                  only access records belonging to the clients checked here — not the full
+                  directory, and never another client&apos;s by changing a URL or calling the API
+                  directly.
+                </p>
+                <div className="mt-3 flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+                  {assignableClients.map((client) => (
+                    <label
+                      key={client.id}
+                      className={cx(
+                        'flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-[10px] font-semibold transition',
+                        assignedClientIds.has(client.id)
+                          ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                          : 'border-[var(--line)] text-[var(--text-muted)] hover:text-[var(--text)]',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={assignedClientIds.has(client.id)}
+                        onChange={() => toggleAssignedClient(client.id)}
+                      />
+                      {client.displayName || client.name}
+                    </label>
+                  ))}
+                  {assignableClients.length === 0 ? (
+                    <span className="text-[10px] text-[var(--text-subtle)]">Loading clients…</span>
+                  ) : null}
+                </div>
+                {assignedClientIds.size === 0 ? (
+                  <p className="mt-2 text-[9px] text-amber-600">
+                    No clients assigned yet — she will see nothing for these modules until at
+                    least one is checked.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div>
+                <p className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
+                  Default workspace
+                </p>
+                <select
+                  value={defaultWorkspaceId ?? ''}
+                  onChange={(event) => setDefaultWorkspaceId(event.target.value || null)}
+                  className="h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[11px] text-[var(--text)] outline-none transition focus:border-[var(--accent)]"
+                >
+                  <option value="">No default — company-wide landing</option>
+                  {assignableWorkspaces.map((workspace) => (
+                    <option key={workspace.id} value={workspace.id}>
+                      {workspace.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <p className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
+                  Default client context
+                </p>
+                <select
+                  value={defaultClientId ?? ''}
+                  onChange={(event) => setDefaultClientId(event.target.value || null)}
+                  className="h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[11px] text-[var(--text)] outline-none transition focus:border-[var(--accent)]"
+                >
+                  <option value="">No default — Syntra Grid, company-wide</option>
+                  {assignableClients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.displayName || client.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <p className="mt-1 text-[9px] text-[var(--text-subtle)]">
+              Both are pure navigation convenience — they change what she sees first, never what
+              she can actually access.
+            </p>
+
             {error ? (
               <p className="mt-4 text-[11px] text-red-600">{error}</p>
             ) : null}
@@ -4657,6 +4905,271 @@ function GrantAccessModal({
   );
 }
 
+/* =============================================================================
+ * PREVIEW ACCESS — read-only "Preview as" (task spec §10)
+ * =============================================================================
+ */
+
+type AccessPreviewResult = {
+  subjectLabel: string;
+  deactivated: boolean;
+  appliedTemplateNames: string[];
+  sections: {
+    id: string;
+    label: string;
+    modules: { tab: string; label: string; actions: string[]; scope: string | null }[];
+  }[];
+  workspaces: { id: string; key: string; name: string }[];
+  clients: { id: string; name: string; displayName: string | null }[];
+  restrictedModuleCount: number;
+};
+
+function PreviewAccessModal({
+  open,
+  employees,
+  onClose,
+}: {
+  open: boolean;
+  employees: EmployeeSummary[];
+  onClose: () => void;
+}) {
+  const titleId = useId();
+  const { templates } = useRoleTemplates(open);
+
+  const [mode, setMode] = useState<'templates' | 'employee'>('templates');
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<Set<string>>(new Set());
+  const [employeeId, setEmployeeId] = useState<string>('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<AccessPreviewResult | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setPreview(null);
+      setError(null);
+      setMode('templates');
+      setSelectedTemplateIds(new Set());
+      setEmployeeId('');
+    }
+  }, [open]);
+
+  const employeesWithAccess = useMemo(
+    () => employees.filter((employee) => Boolean(employee.adminUserId)),
+    [employees],
+  );
+
+  const runPreview = async () => {
+    setLoading(true);
+    setError(null);
+    setPreview(null);
+
+    try {
+      const query =
+        mode === 'employee'
+          ? `employeeId=${encodeURIComponent(employeeId)}`
+          : `roleTemplateIds=${encodeURIComponent(Array.from(selectedTemplateIds).join(','))}`;
+
+      const response = await fetch(`/api/admin/access-preview?${query}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: string;
+        preview?: AccessPreviewResult;
+      } | null;
+
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.error || 'Could not build the preview.');
+      }
+
+      setPreview(payload.preview ?? null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not build the preview.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const canRun =
+    mode === 'employee' ? Boolean(employeeId) : selectedTemplateIds.size > 0;
+
+  return (
+    <ModalShell open={open} onClose={onClose} labelledBy={titleId} size="lg">
+      <div className="px-5 pb-5 pt-5 sm:px-6 sm:pt-6">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 id={titleId} className="text-[16px] font-semibold text-[var(--text)]">
+              Preview access
+            </h3>
+            <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+              Read-only. This never changes your own CEO permissions or session, grants no
+              additional access, and never signs in as anyone — it feeds a hypothetical identity
+              through the exact same resolution logic a real restricted login uses.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setMode('templates')}
+            className={cx(
+              'h-9 flex-1 rounded-lg border text-[11px] font-semibold transition',
+              mode === 'templates'
+                ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                : 'border-[var(--line)] text-[var(--text-muted)]',
+            )}
+          >
+            Role template(s)
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('employee')}
+            className={cx(
+              'h-9 flex-1 rounded-lg border text-[11px] font-semibold transition',
+              mode === 'employee'
+                ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                : 'border-[var(--line)] text-[var(--text-muted)]',
+            )}
+          >
+            Specific employee
+          </button>
+        </div>
+
+        {mode === 'templates' ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {templates.map((template) => (
+              <button
+                key={template.id}
+                type="button"
+                onClick={() =>
+                  setSelectedTemplateIds((current) => {
+                    const next = new Set(current);
+                    if (next.has(template.id)) next.delete(template.id);
+                    else next.add(template.id);
+                    return next;
+                  })
+                }
+                className={cx(
+                  'rounded-full border px-3 py-1.5 text-[10px] font-semibold transition',
+                  selectedTemplateIds.has(template.id)
+                    ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                    : 'border-[var(--line)] text-[var(--text-muted)]',
+                )}
+              >
+                {template.name}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <select
+            value={employeeId}
+            onChange={(event) => setEmployeeId(event.target.value)}
+            className="mt-3 h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[11px] text-[var(--text)] outline-none transition focus:border-[var(--accent)]"
+          >
+            <option value="">Choose an employee with dashboard access…</option>
+            {employeesWithAccess.map((employee) => (
+              <option key={employee.id} value={employee.id}>
+                {[employee.firstName, employee.lastName].filter(Boolean).join(' ')}
+              </option>
+            ))}
+          </select>
+        )}
+
+        <button
+          type="button"
+          onClick={() => void runPreview()}
+          disabled={!canRun || loading}
+          className="mt-4 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[10px] font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+        >
+          {loading ? <Loader2 size={13} className="animate-spin" /> : null}
+          {loading ? 'Building preview' : 'Build preview'}
+        </button>
+
+        {error ? <p className="mt-3 text-[11px] text-red-600">{error}</p> : null}
+
+        {preview ? (
+          <div className="mt-4 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-3.5">
+            <p className="text-[11px] font-semibold text-[var(--accent)]">
+              Previewing as — {preview.subjectLabel}
+              {preview.appliedTemplateNames.length > 0
+                ? ` (${preview.appliedTemplateNames.join(' + ')})`
+                : ''}
+            </p>
+
+            {preview.deactivated ? (
+              <p className="mt-2 text-[11px] text-red-600">
+                This account is deactivated — it would see and access nothing.
+              </p>
+            ) : (
+              <>
+                <div className="mt-3">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
+                    Visible navigation
+                  </p>
+                  <div className="mt-1.5 space-y-1.5">
+                    {preview.sections.map((section) => (
+                      <div key={section.id} className="text-[11px] text-[var(--text)]">
+                        <span className="font-semibold">{section.label}:</span>{' '}
+                        {section.modules.map((module) => module.label).join(', ')}
+                      </div>
+                    ))}
+                    {preview.sections.length === 0 ? (
+                      <p className="text-[11px] text-[var(--text-subtle)]">
+                        Nothing beyond the personalised Command overview — no modules granted.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
+                    Available department workspaces
+                  </p>
+                  <p className="mt-1 text-[11px] text-[var(--text)]">
+                    {preview.workspaces.length > 0
+                      ? preview.workspaces.map((workspace) => workspace.name).join(', ')
+                      : 'None'}
+                  </p>
+                </div>
+
+                <div className="mt-3">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--text-subtle)]">
+                    Available clients
+                  </p>
+                  <p className="mt-1 text-[11px] text-[var(--text)]">
+                    {preview.clients.length > 0
+                      ? preview.clients.map((client) => client.displayName || client.name).join(', ')
+                      : mode === 'templates'
+                        ? 'Depends on this employee’s ClientAssignment rows once created — none yet.'
+                        : 'None assigned'}
+                  </p>
+                </div>
+
+                <p className="mt-3 text-[10px] text-[var(--text-subtle)]">
+                  Restricted from {preview.restrictedModuleCount} other module
+                  {preview.restrictedModuleCount === 1 ? '' : 's'} in the dashboard.
+                </p>
+              </>
+            )}
+          </div>
+        ) : null}
+
+        <div className="mt-5 flex items-center justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 rounded-lg border border-[var(--line)] px-4 text-[10px] font-semibold text-[var(--text-muted)] transition hover:bg-[var(--surface-muted)]"
+          >
+            Exit preview
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
 function AccessPanel({
   employee,
   notify,
@@ -4676,6 +5189,10 @@ function AccessPanel({
   const [currentGrants, setCurrentGrants] = useState<
     { module: string; action: string; scope?: string }[] | null
   >(null);
+  const [currentRoleTemplateIds, setCurrentRoleTemplateIds] = useState<string[]>([]);
+  const [currentClientIds, setCurrentClientIds] = useState<string[]>([]);
+  const [currentDefaultWorkspaceId, setCurrentDefaultWorkspaceId] = useState<string | null>(null);
+  const [currentDefaultClientId, setCurrentDefaultClientId] = useState<string | null>(null);
 
   const account = employee.adminUser;
 
@@ -4802,13 +5319,31 @@ function AccessPanel({
                     cache: 'no-store',
                   });
                   const payload = await response.json().catch(() => null);
-                  setCurrentGrants(
-                    (payload?.employee?.adminUser?.permissionGrants as
-                      | { module: string; action: string; scope?: string }[]
-                      | undefined) ?? [],
+                  const adminUser = payload?.employee?.adminUser as
+                    | {
+                        permissionGrants?: { module: string; action: string; scope?: string }[];
+                        roleTemplatesAssigned?: { roleTemplateId: string }[];
+                        clientAssignments?: { clientId: string }[];
+                        defaultWorkspaceId?: string | null;
+                        defaultClientId?: string | null;
+                      }
+                    | undefined;
+
+                  setCurrentGrants(adminUser?.permissionGrants ?? []);
+                  setCurrentRoleTemplateIds(
+                    (adminUser?.roleTemplatesAssigned ?? []).map((row) => row.roleTemplateId),
                   );
+                  setCurrentClientIds(
+                    (adminUser?.clientAssignments ?? []).map((row) => row.clientId),
+                  );
+                  setCurrentDefaultWorkspaceId(adminUser?.defaultWorkspaceId ?? null);
+                  setCurrentDefaultClientId(adminUser?.defaultClientId ?? null);
                 } catch {
                   setCurrentGrants([]);
+                  setCurrentRoleTemplateIds([]);
+                  setCurrentClientIds([]);
+                  setCurrentDefaultWorkspaceId(null);
+                  setCurrentDefaultClientId(null);
                 }
                 setChangeOpen(true);
               }}
@@ -4867,6 +5402,10 @@ function AccessPanel({
         mode="change"
         employeeId={employee.id}
         initialGrants={currentGrants ?? []}
+        initialRoleTemplateIds={currentRoleTemplateIds}
+        initialClientIds={currentClientIds}
+        initialDefaultWorkspaceId={currentDefaultWorkspaceId}
+        initialDefaultClientId={currentDefaultClientId}
         onClose={() => setChangeOpen(false)}
         onSaved={onChanged}
       />

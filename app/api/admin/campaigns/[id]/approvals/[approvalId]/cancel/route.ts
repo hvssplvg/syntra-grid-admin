@@ -19,7 +19,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
       if (!hasCampaignsPermission(identity, AccessAction.MANAGE)) {
         return NextResponse.json({ ok: false, error: "You are not authorised to cancel this approval." }, { status: 403 });
       }
-      assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+      assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
     }
 
     const cancelled = await cancelCampaignApproval(identity, id, approvalId);

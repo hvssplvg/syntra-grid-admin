@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { AuthenticationError, AuthorisationError } from "@/lib/auth/current-admin";
-import { AccessAction, requireClientHealthPermission } from "@/lib/client-health/permissions";
+import { AccessAction, assertClientHealthRowAccess, requireClientHealthPermission } from "@/lib/client-health/permissions";
 import { getClientHealthDetail } from "@/lib/client-health/server";
 
 export const runtime = "nodejs";
@@ -16,8 +16,10 @@ export const dynamic = "force-dynamic";
 ============================================================================ */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ clientId: string }> }) {
   try {
-    await requireClientHealthPermission(AccessAction.VIEW);
+    const identity = await requireClientHealthPermission(AccessAction.VIEW);
     const { clientId } = await params;
+
+    assertClientHealthRowAccess(identity, AccessAction.VIEW, clientId);
 
     const detail = await getClientHealthDetail(clientId);
     if (!detail) {

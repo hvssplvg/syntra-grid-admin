@@ -1,12 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { AccessAction } from '@/app/generated/prisma/enums';
 import {
   AuthenticationError,
   AuthorisationError,
-  requireAdmin,
+  clientScopeIdFilter,
+  getCurrentIdentity,
+  hasPermission,
   requireClientEditor,
 } from '@/lib/auth/current-admin';
 import { prisma } from '@/lib/prisma';
+
+/** The fine-grained permission module key for the Clients directory —
+ *  see adminNav.ts's "clients" AdminTab and SECURED_MODULE_KEYS. */
+const CLIENTS_MODULE = 'clients';
 
 /* ============================================================================
    HELPERS
@@ -86,7 +93,11 @@ function errorResponse(error: unknown) {
 
 export async function GET(request: NextRequest) {
   try {
-    await requireAdmin();
+    const identity = await getCurrentIdentity();
+
+    if (!identity.isFullAccess && !hasPermission(identity, CLIENTS_MODULE, AccessAction.VIEW)) {
+      throw new AuthorisationError('You are not authorised to view clients.');
+    }
 
     const { searchParams } = new URL(request.url);
 
@@ -94,8 +105,14 @@ export async function GET(request: NextRequest) {
     const status = cleanString(searchParams.get('status'));
     const priority = cleanString(searchParams.get('priority'));
 
+    // A CLIENT-scoped restricted caller's "all clients" view aggregates
+    // only their assigned clients — never the full company directory.
+    const clientIdIn = clientScopeIdFilter(identity, CLIENTS_MODULE, AccessAction.VIEW);
+
     const clients = await prisma.client.findMany({
       where: {
+        ...(clientIdIn ? { id: clientIdIn } : {}),
+
         ...(search
           ? {
               OR: [

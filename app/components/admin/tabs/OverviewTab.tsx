@@ -68,6 +68,7 @@ import {
   useState,
   type ChangeEvent,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -242,6 +243,14 @@ type Spotlight = {
 /** "mix" is a gradient the user builds themselves in the Customise panel. */
 type WallpaperType = "preset" | "auto" | "custom" | "gradient" | "solid" | "mix";
 
+/** How a photo sits on the screen: fill crops to the edges, fit shows all of it on a soft blurred copy. */
+type WallpaperFit = "fill" | "fit";
+
+/** Text colour over a photo. Auto reads the photo itself when it is uploaded. */
+type PhotoTone = "auto" | "light" | "dark";
+
+type WallpaperFocus = { x: number; y: number };
+
 type WidgetTheme = "dark" | "light" | "auto";
 
 type WidgetVisibility = {
@@ -283,6 +292,14 @@ type DashboardPreferences = {
   wallpaperType: WallpaperType;
   wallpaperId: string;
   customWallpaper: string | null;
+  /** Photo framing. The focal point is kept in view however the screen crops the photo. */
+  wallpaperFit: WallpaperFit;
+  wallpaperFocus: WallpaperFocus;
+  /** Extra zoom on a photo as a percentage, 100 is none. */
+  wallpaperZoom: number;
+  photoTone: PhotoTone;
+  /** Measured from the photo when it is uploaded. */
+  photoToneDetected: Tone;
   gradientId: string;
   customGradient: CustomGradient;
   solidColor: string;
@@ -396,6 +413,11 @@ const DEFAULT_PREFERENCES: DashboardPreferences = {
   wallpaperType: "preset",
   wallpaperId: "horizon",
   customWallpaper: null,
+  wallpaperFit: "fill",
+  wallpaperFocus: { x: 50, y: 50 },
+  wallpaperZoom: 100,
+  photoTone: "auto",
+  photoToneDetected: "dark",
   gradientId: "ocean",
   customGradient: DEFAULT_GRADIENT,
   solidColor: "#A8C9DD",
@@ -794,7 +816,8 @@ function autoWallpaperId(hour: number) {
 
 function resolveWallpaper(preferences: DashboardPreferences, hour: number): { background: string; tone: Tone } {
   if (preferences.wallpaperType === "custom" && preferences.customWallpaper) {
-    return { background: `url("${preferences.customWallpaper}")`, tone: "dark" };
+    const tone: Tone = preferences.photoTone === "auto" ? preferences.photoToneDetected : preferences.photoTone;
+    return { background: `url("${preferences.customWallpaper}")`, tone };
   }
 
   if (preferences.wallpaperType === "solid") {
@@ -821,16 +844,32 @@ function resolveWallpaper(preferences: DashboardPreferences, hour: number): { ba
   return { background: preset.background, tone: preset.tone };
 }
 
-function wallpaperStyleFor(background: string, blur: number): CSSProperties {
+type WallpaperFraming = { blur: number; photo: boolean; fit: WallpaperFit; focus: WallpaperFocus; zoom: number };
+
+function wallpaperStyleFor(background: string, framing: WallpaperFraming): CSSProperties {
   const solid = background.trim().startsWith("#");
   // Longhand only: React warns when the background shorthand is mixed
-  // with backgroundSize or backgroundPosition. Size and position live in CSS.
+  // with backgroundSize or backgroundPosition.
+  const focus = `${clamp(framing.focus.x, 0, 100)}% ${clamp(framing.focus.y, 0, 100)}%`;
+  const zoom = framing.photo && framing.fit === "fill" ? clamp(framing.zoom, 100, 180) / 100 : 1;
+  const scale = Math.max(zoom, framing.blur > 0 ? 1.05 : 1);
   return {
     backgroundColor: solid ? background : undefined,
     backgroundImage: solid ? "none" : background,
-    filter: blur > 0 ? `blur(${blur}px)` : undefined,
-    transform: blur > 0 ? "scale(1.05)" : undefined,
+    backgroundSize: framing.photo ? (framing.fit === "fit" ? "contain" : "cover") : undefined,
+    backgroundPosition: framing.photo ? focus : undefined,
+    filter: framing.blur > 0 ? `blur(${framing.blur}px)` : undefined,
+    transform: scale !== 1 ? `scale(${scale.toFixed(3)})` : undefined,
+    transformOrigin: framing.photo ? focus : undefined,
   };
+}
+
+function sanitizeFocus(value: unknown): WallpaperFocus {
+  if (!value || typeof value !== "object") return { x: 50, y: 50 };
+  const record = value as Record<string, unknown>;
+  const x = typeof record.x === "number" ? clamp(record.x, 0, 100) : 50;
+  const y = typeof record.y === "number" ? clamp(record.y, 0, 100) : 50;
+  return { x, y };
 }
 
 function getStorageKey(admin?: OverviewTabProps["admin"]) {
@@ -877,6 +916,11 @@ function mergePreferencesFromRaw(parsed: unknown): DashboardPreferences {
       angle: typeof savedGradient.angle === "number" ? clamp(savedGradient.angle, 0, 360) : DEFAULT_GRADIENT.angle,
       stops: savedStops.length >= 2 ? savedStops : [...DEFAULT_GRADIENT.stops],
     },
+    wallpaperFit: record.wallpaperFit === "fit" ? "fit" : "fill",
+    wallpaperFocus: sanitizeFocus(record.wallpaperFocus),
+    wallpaperZoom: typeof record.wallpaperZoom === "number" ? clamp(record.wallpaperZoom, 100, 180) : 100,
+    photoTone: ["auto", "light", "dark"].includes(record.photoTone as string) ? (record.photoTone as PhotoTone) : "auto",
+    photoToneDetected: record.photoToneDetected === "light" ? "light" : "dark",
     pinnedShortcuts: Array.isArray(record.pinnedShortcuts)
       ? record.pinnedShortcuts.filter((id: unknown): id is Destination => typeof id === "string")
       : null,
@@ -1181,8 +1225,32 @@ function smoothPath(values: number[], width: number, height: number, padding = 4
 
 /* ---------- Image upload ---------- */
 
-async function processWallpaper(file: File): Promise<string> {
+type ProcessedWallpaper = { dataUrl: string; tone: Tone; width: number; height: number };
+
+/** Reads how bright the middle of the photo is, where the greeting sits, so text can pick its colour. */
+function measureTone(image: HTMLImageElement): Tone {
+  try {
+    const sample = document.createElement("canvas");
+    sample.width = 24;
+    sample.height = 24;
+    const context = sample.getContext("2d", { willReadFrequently: true });
+    if (!context) return "dark";
+    context.drawImage(image, 0, 0, 24, 24);
+    const { data } = context.getImageData(4, 2, 16, 14);
+    let total = 0;
+    for (let i = 0; i < data.length; i += 4) total += (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255;
+    const average = total / (data.length / 4);
+    return average > 0.62 ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+async function processWallpaper(file: File): Promise<ProcessedWallpaper> {
   const MAX_UPLOAD_SIZE = 12 * 1024 * 1024;
+  // Long edge for the stored copy. Enough for a 4K display without
+  // uploading the raw camera file.
+  const MAX_EDGE = 2560;
 
   if (!file.type.startsWith("image/")) throw new Error("Please choose an image file.");
   if (file.size > MAX_UPLOAD_SIZE) throw new Error("Please choose an image smaller than 12 MB.");
@@ -1193,7 +1261,7 @@ async function processWallpaper(file: File): Promise<string> {
 
     image.onload = () => {
       try {
-        const scale = Math.min(1, 1600 / Math.max(image.width, image.height));
+        const scale = Math.min(1, MAX_EDGE / Math.max(image.width, image.height));
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round(image.width * scale));
         canvas.height = Math.max(1, Math.round(image.height * scale));
@@ -1201,9 +1269,12 @@ async function processWallpaper(file: File): Promise<string> {
         const context = canvas.getContext("2d");
         if (!context) throw new Error("Unable to process the selected image.");
 
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const tone = measureTone(image);
         URL.revokeObjectURL(objectUrl);
-        resolve(canvas.toDataURL("image/jpeg", 0.74));
+        resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.86), tone, width: canvas.width, height: canvas.height });
       } catch (error) {
         URL.revokeObjectURL(objectUrl);
         reject(error);
@@ -2176,6 +2247,7 @@ const OVERVIEW_CSS = `
 .sgo {
   --r: 24px;
   --ga: 0.68;
+  --wall-h: 100dvh;
   position: relative;
   isolation: isolate;
   display: flex;
@@ -2183,7 +2255,7 @@ const OVERVIEW_CSS = `
   width: 100%;
   min-width: 0;
   min-height: calc(100dvh - 58px);
-  overflow: hidden;
+  overflow: clip;
   background: #8DBBE4;
   font-family: var(--font-sans), Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -2207,7 +2279,9 @@ const OVERVIEW_CSS = `
   --chip: #FFFFFF;
   --chip-ink: #121A1F;
   --menu: rgba(26, 32, 37, 0.97);
+  --edge: rgba(255, 255, 255, 0.16);
   --shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 20px 50px rgba(10, 20, 30, 0.18);
+  --shadow-hover: inset 0 1px 0 rgba(255,255,255,0.1), 0 30px 70px rgba(10, 20, 30, 0.26);
 }
 .sgo[data-theme="light"] {
   --g: rgba(255, 255, 255, var(--ga));
@@ -2225,7 +2299,9 @@ const OVERVIEW_CSS = `
   --chip: #15232B;
   --chip-ink: #FFFFFF;
   --menu: rgba(255, 255, 255, 0.98);
+  --edge: rgba(255, 255, 255, 0.95);
   --shadow: inset 0 1px 0 rgba(255,255,255,0.8), 0 20px 50px rgba(10, 20, 30, 0.08);
+  --shadow-hover: inset 0 1px 0 rgba(255,255,255,0.9), 0 30px 70px rgba(10, 20, 30, 0.14);
 }
 .sgo[data-hero="light"] {
   --h: #14222A;
@@ -2236,25 +2312,39 @@ const OVERVIEW_CSS = `
 }
 .sgo[data-hero="dark"] {
   --h: #FFFFFF;
-  --h2: rgba(255, 255, 255, 0.80);
-  --hg: rgba(18, 26, 32, 0.42);
-  --hln: rgba(255, 255, 255, 0.16);
-  --hshadow: 0 1px 18px rgba(0, 0, 0, 0.28);
+  --h2: rgba(255, 255, 255, 0.82);
+  --hg: rgba(18, 26, 32, 0.40);
+  --hln: rgba(255, 255, 255, 0.18);
+  --hshadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 24px rgba(0, 0, 0, 0.28);
 }
 
-/* Wallpaper */
+/* Wallpaper
+   The frame covers the whole page. Inside it a sticky view the height of the
+   scroll area carries the picture, so it is sized to the screen rather than
+   to the full height of the dashboard, and it stays put while the widgets
+   scroll over it. Sticky survives transformed wrappers, fixed does not. */
+.sgo-wall-frame { position: absolute; inset: 0; z-index: -4; overflow: clip; pointer-events: none; }
+.sgo-wall-view {
+  position: sticky; top: 0; width: 100%;
+  height: 100vh; height: var(--wall-h); overflow: hidden; background: #0F1720;
+}
 .sgo-wall {
-  position: absolute; inset: 0; z-index: -4;
+  position: absolute; inset: 0;
   background-size: cover; background-position: center; background-repeat: no-repeat;
-  transition: filter 300ms ease;
-  pointer-events: none;
+  transition: filter 300ms ease, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), background-position 220ms ease;
+  will-change: transform;
+}
+.sgo-wall-ambient {
+  position: absolute; inset: -6%;
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+  filter: blur(34px) saturate(125%) brightness(0.9); transform: scale(1.06);
 }
 .sgo-glow {
-  position: absolute; inset: -20%; z-index: -3;
-  background: radial-gradient(circle at 70% 20%, rgba(255,255,255,0.28), transparent 35%);
+  position: absolute; inset: -20%;
+  background: radial-gradient(circle at 70% 20%, rgba(255,255,255,0.26), transparent 35%);
   animation: sgo-drift 38s ease-in-out infinite alternate;
-  pointer-events: none;
 }
+.sgo[data-photo="true"] .sgo-glow { opacity: 0.55; mix-blend-mode: soft-light; }
 .sgo-shade { position: absolute; inset: 0; z-index: -2; background: rgba(0, 0, 0, var(--shade, 0)); pointer-events: none; }
 .sgo-grain { position: absolute; inset: 0; z-index: -1; opacity: 0.22; mix-blend-mode: overlay; pointer-events: none; }
 
@@ -2263,7 +2353,7 @@ const OVERVIEW_CSS = `
   position: relative; z-index: 1;
   display: flex; flex: 1; flex-direction: column;
   width: 100%; max-width: 1520px; margin: 0 auto;
-  padding: 22px 28px 28px;
+  padding: 22px 32px 34px;
 }
 .sgo[data-editing="true"] .sgo-content { padding-bottom: 110px; }
 .sgo-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -2282,10 +2372,11 @@ const OVERVIEW_CSS = `
   padding: 0 14px; border: 1px solid var(--hln); border-radius: 12px;
   background: var(--hg); color: var(--h);
   font-size: 11px; font-weight: 650;
+  box-shadow: 0 8px 24px rgba(8, 16, 22, 0.08);
   backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%);
-  cursor: pointer; transition: transform 180ms ease, background 180ms ease;
+  cursor: pointer; transition: transform 180ms ease, background 180ms ease, box-shadow 180ms ease;
 }
-.sgo-top-btn:hover:not(:disabled) { transform: translateY(-1px); }
+.sgo-top-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 12px 28px rgba(8, 16, 22, 0.14); }
 .sgo-top-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .sgo-top-btn.is-icon { width: 38px; padding: 0; }
 .sgo-top-btn[aria-pressed="true"] { background: var(--chip); color: var(--chip-ink); border-color: transparent; }
@@ -2298,11 +2389,21 @@ const OVERVIEW_CSS = `
 }
 
 /* Hero */
-.sgo-hero { padding: 46px 12px 34px; text-align: center; color: var(--h); text-shadow: var(--hshadow); }
+.sgo-hero { position: relative; z-index: 0; padding: 50px 12px 36px; text-align: center; color: var(--h); text-shadow: var(--hshadow); }
+.sgo[data-photo="true"][data-hero="dark"] .sgo-hero::before {
+  content: ""; position: absolute; left: 50%; top: 50%; z-index: -1; width: min(980px, 130%); height: 170%;
+  transform: translate(-50%, -50%); pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(6, 12, 18, 0.34), rgba(6, 12, 18, 0.12) 45%, transparent 68%);
+}
+.sgo[data-photo="true"][data-hero="light"] .sgo-hero::before {
+  content: ""; position: absolute; left: 50%; top: 50%; z-index: -1; width: min(980px, 130%); height: 170%;
+  transform: translate(-50%, -50%); pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.1) 45%, transparent 68%);
+}
 .sgo-hero-date { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--h2); }
 .sgo-clock { font-variant-numeric: tabular-nums; font-weight: 650; color: var(--h); }
 .sgo-colon { animation: sgo-blink 2s steps(1) infinite; }
-.sgo-hero-title { margin: 10px 0 0; font-size: clamp(36px, 4.6vw, 64px); font-weight: 600; line-height: 1.08; letter-spacing: -0.06em; }
+.sgo-hero-title { margin: 10px 0 0; font-size: clamp(38px, 4.8vw, 68px); font-weight: 620; line-height: 1.04; letter-spacing: -0.055em; }
 .sgo-hero-name { font-family: Georgia, "Times New Roman", serif; font-style: italic; font-weight: 400; letter-spacing: -0.04em; }
 .sgo-hero-sub { max-width: 560px; margin: 12px auto 0; font-size: 13.5px; line-height: 1.7; color: var(--h2); }
 .sgo-hero-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin-top: 18px; }
@@ -2333,7 +2434,7 @@ button.sgo-hero-chip:hover:not(:disabled) { transform: translateY(-1px); }
 }
 
 /* Grid */
-.sgo-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-flow: row dense; gap: 14px; align-items: stretch; }
+.sgo-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-flow: row dense; gap: 16px; align-items: stretch; }
 .sgo-span-4 { grid-column: span 4; } .sgo-span-6 { grid-column: span 6; }
 .sgo-span-8 { grid-column: span 8; } .sgo-span-12 { grid-column: span 12; }
 
@@ -2448,14 +2549,21 @@ button.sgo-hero-chip:hover:not(:disabled) { transform: translateY(-1px); }
   backdrop-filter: blur(26px) saturate(150%); -webkit-backdrop-filter: blur(26px) saturate(150%);
   animation: sgo-rise 650ms cubic-bezier(0.22, 1, 0.36, 1) both;
   animation-delay: calc(var(--i, 0) * 45ms);
-  transition: border-color 200ms ease, background 200ms ease, padding 200ms ease;
+  transition: border-color 200ms ease, background 200ms ease, padding 200ms ease, box-shadow 260ms ease;
 }
-.sgo-card:hover { border-color: var(--ln2); }
+/* A hairline of light along the top edge, the way real glass catches it. */
+.sgo-card::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: linear-gradient(180deg, var(--edge), transparent 38%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity: 0.8;
+}
+.sgo-card:hover { border-color: var(--ln2); box-shadow: var(--shadow-hover); }
 .sgo-card[data-collapsed="true"] { padding-top: 14px; padding-bottom: 14px; }
 .sgo-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; min-height: 30px; }
 .sgo-card[data-collapsed="true"] .sgo-card-head { margin-bottom: 0; }
 .sgo-card-title { display: inline-flex; align-items: center; gap: 9px; min-width: 0; font-size: 13px; font-weight: 650; letter-spacing: -0.02em; }
-.sgo-card-icon { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 10px; background: var(--btn); color: var(--t2); flex-shrink: 0; }
+.sgo-card-icon { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 10px; background: var(--btn); color: var(--t2); flex-shrink: 0; box-shadow: inset 0 1px 0 var(--inset); }
 .sgo-card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .sgo-collapse {
   display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border: 0; border-radius: 8px;
@@ -2521,7 +2629,7 @@ button.sgo-hero-chip:hover:not(:disabled) { transform: translateY(-1px); }
 .sgo-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sgo-title-sm { font-size: 12px; font-weight: 650; letter-spacing: -0.01em; }
 .sgo-sub { font-size: 10.5px; color: var(--t3); margin-top: 2px; }
-.sgo-big { font-size: 32px; font-weight: 650; letter-spacing: -0.06em; line-height: 1; font-variant-numeric: tabular-nums; }
+.sgo-big { font-size: 34px; font-weight: 650; letter-spacing: -0.055em; line-height: 1; font-variant-numeric: tabular-nums; font-feature-settings: "tnum", "ss01"; }
 .sgo-divider { height: 1px; background: var(--ln); margin: 14px 0; }
 
 /* Empty layout */
@@ -2531,11 +2639,12 @@ button.sgo-hero-chip:hover:not(:disabled) { transform: translateY(-1px); }
 .sgo-command { z-index: 6; padding: 14px; }
 .sgo-command-field {
   position: relative; display: flex; align-items: center; gap: 10px;
-  height: 54px; padding: 0 8px 0 16px; border-radius: 16px;
+  height: 56px; padding: 0 8px 0 18px; border-radius: 18px;
   background: var(--g-strong); border: 1px solid var(--ln);
-  transition: border-color 180ms ease;
+  box-shadow: inset 0 1px 0 var(--inset);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
 }
-.sgo-command-field:focus-within { border-color: var(--ln2); }
+.sgo-command-field:focus-within { border-color: var(--ln2); box-shadow: inset 0 1px 0 var(--inset), 0 0 0 4px color-mix(in srgb, var(--acc) 22%, transparent); }
 .sgo-command-field input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; color: var(--t); font-size: 13px; }
 .sgo-command-field input::placeholder { color: var(--t3); }
 .sgo-kbd {
@@ -2687,8 +2796,8 @@ button.sgo-hero-chip:hover:not(:disabled) { transform: translateY(-1px); }
 .sgp {
   position: fixed; top: 12px; right: 12px; bottom: 12px; z-index: 100;
   display: flex; flex-direction: column; width: min(440px, calc(100vw - 24px)); overflow: hidden;
-  border: 1px solid rgba(255,255,255,0.7); border-radius: 28px;
-  background: rgba(248, 250, 249, 0.9); color: #18262D;
+  border: 1px solid rgba(255,255,255,0.7); border-radius: 30px;
+  background: rgba(248, 250, 249, 0.88); color: #18262D;
   backdrop-filter: blur(30px) saturate(170%); -webkit-backdrop-filter: blur(30px) saturate(170%);
   box-shadow: 0 40px 100px rgba(8, 16, 22, 0.28), inset 0 1px 0 rgba(255,255,255,0.9);
   animation: sgp-in 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -2701,8 +2810,9 @@ button.sgo-hero-chip:hover:not(:disabled) { transform: translateY(-1px); }
   display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; flex-shrink: 0;
   border: 1px solid rgba(24,38,45,0.08); border-radius: 11px; background: #FFFFFF; color: #3B4A44; cursor: pointer;
 }
-.sgp-preview { position: relative; margin: 0 18px; height: 140px; overflow: hidden; border-radius: 20px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06), 0 10px 30px rgba(8,16,22,0.12); }
-.sgp-preview-wall { position: absolute; inset: -8px; background-size: cover; background-position: center; }
+.sgp-preview { position: relative; margin: 0 18px; height: 156px; overflow: hidden; border-radius: 20px; background: #0F1720; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06), 0 10px 30px rgba(8,16,22,0.12); }
+.sgp-preview-wall { position: absolute; inset: 0; background-size: cover; background-position: center; background-repeat: no-repeat; }
+.sgp-preview-ambient { position: absolute; inset: -8%; background-size: cover; background-position: center; filter: blur(22px) saturate(125%) brightness(0.9); }
 .sgp-preview-shade { position: absolute; inset: 0; }
 .sgp-preview-grid { position: absolute; inset: 14px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 5px; align-content: start; overflow: hidden; }
 .sgp-preview-grid span { display: block; box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.3); transition: all 300ms ease; }
@@ -2713,7 +2823,9 @@ button.sgo-hero-chip:hover:not(:disabled) { transform: translateY(-1px); }
   background: transparent; color: #66746D; font-size: 11.5px; font-weight: 650; cursor: pointer; transition: background 160ms ease, color 160ms ease;
 }
 .sgp-tabs button[data-active="true"] { background: #FFFFFF; color: #18262D; box-shadow: 0 2px 10px rgba(0,0,0,0.07); }
-.sgp-body { flex: 1; overflow-y: auto; padding: 18px 22px 22px; overscroll-behavior: contain; }
+.sgp-body { flex: 1; overflow-y: auto; padding: 18px 22px 22px; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(24,38,45,0.18) transparent; }
+.sgp-body::-webkit-scrollbar { width: 8px; }
+.sgp-body::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(24,38,45,0.18); border: 2px solid transparent; background-clip: padding-box; }
 .sgp-section { margin-bottom: 26px; }
 .sgp-label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; color: #22332B; font-size: 12px; font-weight: 700; }
 .sgp-label small { color: #8A968F; font-size: 11px; font-weight: 600; }
@@ -2773,9 +2885,39 @@ button.sgo-hero-chip:hover:not(:disabled) { transform: translateY(-1px); }
   font-size: 12px; font-weight: 650; cursor: pointer;
 }
 .sgp-upload:disabled { opacity: 0.6; cursor: progress; }
+.sgp-upload[data-over="true"] { background: rgba(47,91,67,0.12); border-color: #2F5B43; border-style: solid; }
 .sgp-upload small { color: #84918A; font-size: 10.5px; font-weight: 500; }
-.sgp-photo { position: relative; height: 140px; margin-top: 12px; overflow: hidden; border-radius: 16px; background-size: cover; background-position: center; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08); }
-.sgp-photo-actions { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; gap: 6px; }
+.sgp-upload.is-compact { flex-direction: row; justify-content: flex-start; padding: 12px 14px; text-align: left; }
+.sgp-upload.is-compact small { margin-left: auto; }
+
+/* Photo framing: the same crop the wallpaper uses, with a focal point you can drag. */
+.sgp-frame {
+  position: relative; margin-top: 12px; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 16px; background: #0F1720;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08), 0 10px 26px rgba(8,16,22,0.14); cursor: crosshair; touch-action: none; user-select: none;
+}
+.sgp-frame-img { position: absolute; inset: 0; background-repeat: no-repeat; background-size: cover; background-position: center; transition: transform 160ms ease, background-position 120ms ease; }
+.sgp-frame-ambient { position: absolute; inset: -8%; background-size: cover; background-position: center; filter: blur(22px) saturate(125%) brightness(0.9); }
+.sgp-frame-grid {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 160ms ease;
+  background-image: linear-gradient(rgba(255,255,255,0.28) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.28) 1px, transparent 1px);
+  background-size: 33.34% 33.34%;
+}
+.sgp-frame:hover .sgp-frame-grid, .sgp-frame[data-dragging="true"] .sgp-frame-grid { opacity: 1; }
+.sgp-focus {
+  position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%; pointer-events: none;
+  border: 2px solid #FFFFFF; background: rgba(255,255,255,0.16);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.28), 0 8px 20px rgba(0,0,0,0.32); transition: transform 160ms ease;
+}
+.sgp-frame[data-dragging="true"] .sgp-focus { transform: scale(1.12); }
+.sgp-focus::after { content: ""; position: absolute; inset: 9px; border-radius: 50%; background: #FFFFFF; }
+.sgp-frame-tag {
+  position: absolute; left: 10px; top: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 999px;
+  background: rgba(8,14,18,0.5); color: #FFFFFF; font-size: 9.5px; font-weight: 650; pointer-events: none;
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.sgp-frame-tag.is-right { left: auto; right: 10px; }
+.sgp-photo-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sgp-photo-actions .sgp-btn { flex: 1; }
 .sgp-range { width: 100%; accent-color: #2F5B43; cursor: pointer; }
 .sgp-toggle {
   display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0;
@@ -3117,16 +3259,15 @@ export default function OverviewTab({ admin, identity, onNavigate, onOpenMessage
     setPreferences((current) => ({ ...current, layout: updater(current.layout) }));
   }, []);
 
-  const handleWallpaperUpload = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const uploadWallpaperFile = useCallback(async (file: File | null | undefined) => {
     if (!file) return;
 
     setSavingWallpaper(true);
     setWallpaperError(null);
 
     try {
-      const resized = await processWallpaper(file);
-      const blob = await (await fetch(resized)).blob();
+      const processed = await processWallpaper(file);
+      const blob = await (await fetch(processed.dataUrl)).blob();
 
       const body = new FormData();
       body.append("file", blob, "wallpaper.jpg");
@@ -3143,7 +3284,16 @@ export default function OverviewTab({ admin, identity, onNavigate, onOpenMessage
         throw new Error(payload?.error || "Unable to upload wallpaper.");
       }
 
-      setPreferences((current) => ({ ...current, wallpaperType: "custom", customWallpaper: payload.url }));
+      // A new photo starts centred with no zoom; the old framing belonged to the old photo.
+      setPreferences((current) => ({
+        ...current,
+        wallpaperType: "custom",
+        customWallpaper: payload.url,
+        wallpaperFit: "fill",
+        wallpaperFocus: { x: 50, y: 50 },
+        wallpaperZoom: 100,
+        photoToneDetected: processed.tone,
+      }));
     } catch (error) {
       setWallpaperError(error instanceof Error ? error.message : "Unable to upload wallpaper.");
     } finally {
@@ -3151,6 +3301,11 @@ export default function OverviewTab({ admin, identity, onNavigate, onOpenMessage
       if (uploadRef.current) uploadRef.current.value = "";
     }
   }, []);
+
+  const handleWallpaperUpload = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => uploadWallpaperFile(event.target.files?.[0]),
+    [uploadWallpaperFile],
+  );
 
   const resetPreferences = useCallback(() => {
     setPreferences(freshDefaults());
@@ -3199,15 +3354,49 @@ export default function OverviewTab({ admin, identity, onNavigate, onOpenMessage
     preferences.widgetTheme === "auto" ? wallpaper.tone : preferences.widgetTheme === "light" ? "light" : "dark";
   const accent = ACCENTS.find((item) => item.id === preferences.accentId) ?? ACCENTS[0];
 
+  const isPhoto = preferences.wallpaperType === "custom" && !!preferences.customWallpaper;
   const wallpaperStyle = useMemo(
-    () => wallpaperStyleFor(wallpaper.background, preferences.blur),
-    [wallpaper.background, preferences.blur],
+    () =>
+      wallpaperStyleFor(wallpaper.background, {
+        blur: preferences.blur,
+        photo: isPhoto,
+        fit: preferences.wallpaperFit,
+        focus: preferences.wallpaperFocus,
+        zoom: preferences.wallpaperZoom,
+      }),
+    [wallpaper.background, preferences.blur, isPhoto, preferences.wallpaperFit, preferences.wallpaperFocus, preferences.wallpaperZoom],
   );
+
+  // The wallpaper is a sticky layer the height of the scroll area, so a
+  // photo is sized to the screen rather than to the full height of a long
+  // dashboard, and it stays put while the widgets scroll over it. Sticky,
+  // not fixed, so a transformed or filtered app shell cannot knock it out
+  // of place.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [wallHeight, setWallHeight] = useState<number | null>(null);
+  useIsoLayoutEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const scroller = getScrollParent(node);
+    const measure = () => {
+      const next = Math.round(scroller instanceof Window ? window.innerHeight : scroller.clientHeight);
+      setWallHeight((current) => (current === next ? current : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller instanceof Window ? document.documentElement : scroller);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
 
   const rootStyle = {
     "--r": `${clamp(preferences.radius, 12, 34)}px`,
     "--ga": clamp(preferences.glassOpacity, 25, 96) / 100,
     "--acc": glassTheme === "dark" ? accent.dark : accent.light,
+    "--wall-h": wallHeight ? `${wallHeight}px` : "100dvh",
   } as CSSProperties;
 
   /* ---------- Notifications ---------- */
@@ -3874,9 +4063,11 @@ export default function OverviewTab({ admin, identity, onNavigate, onOpenMessage
 
   return (
     <div
+      ref={rootRef}
       className="sgo"
       data-theme={glassTheme}
       data-hero={heroTone}
+      data-photo={isPhoto}
       data-compact={preferences.compact}
       data-editing={editing}
       style={rootStyle}
@@ -3889,8 +4080,15 @@ export default function OverviewTab({ admin, identity, onNavigate, onOpenMessage
     >
       <style>{OVERVIEW_CSS}</style>
 
-      <div className="sgo-wall" style={wallpaperStyle} aria-hidden="true" />
-      {preferences.motion ? <div className="sgo-glow" aria-hidden="true" /> : null}
+      <div className="sgo-wall-frame" aria-hidden="true">
+        <div className="sgo-wall-view">
+          {isPhoto && preferences.wallpaperFit === "fit" ? (
+            <div className="sgo-wall-ambient" style={{ backgroundImage: wallpaper.background }} />
+          ) : null}
+          <div className="sgo-wall" style={wallpaperStyle} />
+          {preferences.motion ? <div className="sgo-glow" /> : null}
+        </div>
+      </div>
       <div className="sgo-shade" style={{ ["--shade" as string]: preferences.overlay / 100 } as CSSProperties} aria-hidden="true" />
       {preferences.grain ? <div className="sgo-grain" style={{ backgroundImage: GRAIN_IMAGE }} aria-hidden="true" /> : null}
 
@@ -4134,6 +4332,7 @@ export default function OverviewTab({ admin, identity, onNavigate, onOpenMessage
           savingWallpaper={savingWallpaper}
           wallpaperError={wallpaperError}
           onPickUpload={() => uploadRef.current?.click()}
+          onDropFile={uploadWallpaperFile}
           onClose={() => setCustomiseOpen(false)}
           onUpdate={updatePreference}
           onReset={resetPreferences}
@@ -6336,6 +6535,7 @@ function CustomisePanel({
   savingWallpaper,
   wallpaperError,
   onPickUpload,
+  onDropFile,
   onClose,
   onUpdate,
   onReset,
@@ -6355,6 +6555,7 @@ function CustomisePanel({
   savingWallpaper: boolean;
   wallpaperError: string | null;
   onPickUpload: () => void;
+  onDropFile: (file: File | null | undefined) => void;
   onClose: () => void;
   onUpdate: <K extends keyof DashboardPreferences>(key: K, value: DashboardPreferences[K]) => void;
   onReset: () => void;
@@ -6391,6 +6592,20 @@ function CustomisePanel({
   };
 
   const visibleCount = rows.filter((row) => row.visible).length;
+  const photoInUse = preferences.wallpaperType === "custom" && !!preferences.customWallpaper;
+  const [dragOver, setDragOver] = useState(false);
+  const dropHandlers = {
+    onDragOver: (event: ReactDragEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      if (!dragOver) setDragOver(true);
+    },
+    onDragLeave: () => setDragOver(false),
+    onDrop: (event: ReactDragEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      setDragOver(false);
+      onDropFile(event.dataTransfer.files?.[0]);
+    },
+  };
 
   return (
     <>
@@ -6414,6 +6629,9 @@ function CustomisePanel({
 
         {/* Live preview */}
         <div className="sgp-preview" aria-hidden="true">
+          {photoInUse && preferences.wallpaperFit === "fit" ? (
+            <div className="sgp-preview-ambient" style={{ backgroundImage: `url("${preferences.customWallpaper}")` }} />
+          ) : null}
           <div className="sgp-preview-wall" style={preview.style} />
           <div className="sgp-preview-shade" style={{ background: `rgba(0, 0, 0, ${preview.overlay / 100})` }} />
           <div className="sgp-preview-grid">
@@ -6659,23 +6877,55 @@ function CustomisePanel({
 
               {source === "photo" ? (
                 <section className="sgp-section">
-                  <button type="button" className="sgp-upload" onClick={onPickUpload} disabled={savingWallpaper}>
+                  <button
+                    type="button"
+                    className={`sgp-upload${preferences.customWallpaper ? " is-compact" : ""}`}
+                    data-over={dragOver}
+                    onClick={onPickUpload}
+                    disabled={savingWallpaper}
+                    {...dropHandlers}
+                  >
                     {savingWallpaper ? <Loader2 size={18} className="sgo-spin" /> : <Upload size={18} />}
-                    {savingWallpaper ? "Processing your photo…" : "Upload a photo"}
-                    <small>JPG or PNG, up to 12 MB. Resized to fit.</small>
+                    {savingWallpaper ? "Preparing your photo…" : preferences.customWallpaper ? "Replace photo" : "Drop a photo here or browse"}
+                    <small>{preferences.customWallpaper ? "JPG or PNG, up to 12 MB" : "JPG or PNG, up to 12 MB. Landscape, at least 1920 px wide, looks best."}</small>
                   </button>
 
                   {preferences.customWallpaper ? (
-                    <div className="sgp-photo" style={{ backgroundImage: `url("${preferences.customWallpaper}")` }}>
+                    <PhotoFraming
+                      src={preferences.customWallpaper}
+                      fit={preferences.wallpaperFit}
+                      focus={preferences.wallpaperFocus}
+                      zoom={preferences.wallpaperZoom}
+                      blur={preferences.blur}
+                      inUse={photoInUse}
+                      onFocus={(focus) => onUpdate("wallpaperFocus", focus)}
+                    />
+                  ) : null}
+
+                  {preferences.customWallpaper ? (
+                    <>
                       <div className="sgp-photo-actions">
                         <button
                           type="button"
                           className="sgp-btn sgp-btn-sm"
                           onClick={() => onUpdate("wallpaperType", "custom")}
-                          disabled={preferences.wallpaperType === "custom"}
+                          disabled={photoInUse}
                         >
                           <Check size={13} />
-                          {preferences.wallpaperType === "custom" ? "In use" : "Use photo"}
+                          {photoInUse ? "In use" : "Use this photo"}
+                        </button>
+                        <button
+                          type="button"
+                          className="sgp-btn sgp-btn-sm"
+                          onClick={() => {
+                            onUpdate("wallpaperFocus", { x: 50, y: 50 });
+                            onUpdate("wallpaperZoom", 100);
+                            onUpdate("wallpaperFit", "fill");
+                          }}
+                          disabled={preferences.wallpaperFocus.x === 50 && preferences.wallpaperFocus.y === 50 && preferences.wallpaperZoom === 100 && preferences.wallpaperFit === "fill"}
+                        >
+                          <RotateCcw size={13} />
+                          Recentre
                         </button>
                         <button
                           type="button"
@@ -6689,7 +6939,77 @@ function CustomisePanel({
                           Remove
                         </button>
                       </div>
-                    </div>
+
+                      <div className="sgp-card" style={{ marginTop: 12 }}>
+                        <p className="sgp-label" style={{ marginBottom: 8 }}>
+                          Framing
+                          <small>{preferences.wallpaperFit === "fill" ? "Fills the screen" : "Whole photo"}</small>
+                        </p>
+                        <div className="sgp-seg" role="radiogroup" aria-label="How the photo fits">
+                          {(
+                            [
+                              { id: "fill", label: "Fill the screen", icon: Maximize2 },
+                              { id: "fit", label: "Show it all", icon: Minimize2 },
+                            ] as const
+                          ).map((item) => {
+                            const Icon = item.icon;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                role="radio"
+                                aria-checked={preferences.wallpaperFit === item.id}
+                                data-active={preferences.wallpaperFit === item.id}
+                                onClick={() => onUpdate("wallpaperFit", item.id)}
+                              >
+                                <Icon size={13} />
+                                {item.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="sgp-hint" style={{ marginTop: 8 }}>
+                          {preferences.wallpaperFit === "fill"
+                            ? "Drag the dot to the part of the photo that must stay in view. Screens of every shape crop around it."
+                            : "The whole photo stays visible, floating on a soft blurred copy of itself."}
+                        </p>
+                        {preferences.wallpaperFit === "fill" ? (
+                          <div style={{ marginTop: 14 }}>
+                            <RangeRow label="Zoom" value={preferences.wallpaperZoom} unit="%" min={100} max={180} onChange={(value) => onUpdate("wallpaperZoom", value)} />
+                          </div>
+                        ) : null}
+
+                        <p className="sgp-label" style={{ margin: "16px 0 8px" }}>
+                          Text over the photo
+                          <small>{preferences.photoTone === "auto" ? (preferences.photoToneDetected === "light" ? "Reads as a bright photo" : "Reads as a dark photo") : ""}</small>
+                        </p>
+                        <div className="sgp-seg" role="radiogroup" aria-label="Text colour over the photo">
+                          {(
+                            [
+                              { id: "auto", label: "Auto", icon: SunMoon },
+                              { id: "light", label: "Bright photo", icon: Sun },
+                              { id: "dark", label: "Dark photo", icon: Moon },
+                            ] as const
+                          ).map((item) => {
+                            const Icon = item.icon;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                role="radio"
+                                aria-checked={preferences.photoTone === item.id}
+                                data-active={preferences.photoTone === item.id}
+                                onClick={() => onUpdate("photoTone", item.id)}
+                              >
+                                <Icon size={13} />
+                                {item.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="sgp-hint" style={{ marginTop: 8 }}>Bright photo puts dark text on it, dark photo puts white text on it.</p>
+                      </div>
+                    </>
                   ) : null}
 
                   {wallpaperError ? <p style={{ margin: "10px 0 0", fontSize: 11, color: "#DC2626" }}>{wallpaperError}</p> : null}
@@ -6907,6 +7227,94 @@ function CustomisePanel({
         </div>
       </aside>
     </>
+  );
+}
+
+/** The photo exactly as the wallpaper crops it, with a draggable focal point. */
+function PhotoFraming({
+  src,
+  fit,
+  focus,
+  zoom,
+  blur,
+  inUse,
+  onFocus,
+}: {
+  src: string;
+  fit: WallpaperFit;
+  focus: WallpaperFocus;
+  zoom: number;
+  blur: number;
+  inUse: boolean;
+  onFocus: (focus: WallpaperFocus) => void;
+}) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const background = `url("${src}")`;
+  const style = wallpaperStyleFor(background, { blur: 0, photo: true, fit, focus, zoom });
+
+  const place = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const node = frameRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const x = Math.round(clamp(((event.clientX - rect.left) / rect.width) * 100, 0, 100));
+    const y = Math.round(clamp(((event.clientY - rect.top) / rect.height) * 100, 0, 100));
+    if (x !== focus.x || y !== focus.y) onFocus({ x, y });
+  };
+
+  const nudge = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 10 : 2;
+    const delta: Record<string, WallpaperFocus> = {
+      ArrowLeft: { x: focus.x - step, y: focus.y },
+      ArrowRight: { x: focus.x + step, y: focus.y },
+      ArrowUp: { x: focus.x, y: focus.y - step },
+      ArrowDown: { x: focus.x, y: focus.y + step },
+    };
+    const next = delta[event.key];
+    if (!next) return;
+    event.preventDefault();
+    onFocus({ x: clamp(next.x, 0, 100), y: clamp(next.y, 0, 100) });
+  };
+
+  return (
+    <div
+      ref={frameRef}
+      className="sgp-frame"
+      data-dragging={dragging}
+      role="slider"
+      tabIndex={0}
+      aria-label="Focal point of the photo"
+      aria-valuetext={`${focus.x}% across, ${focus.y}% down`}
+      aria-valuenow={focus.x}
+      onKeyDown={nudge}
+      onPointerDown={(event) => {
+        if (fit !== "fill") return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setDragging(true);
+        place(event);
+      }}
+      onPointerMove={(event) => {
+        if (dragging) place(event);
+      }}
+      onPointerUp={() => setDragging(false)}
+      onPointerCancel={() => setDragging(false)}
+      style={{ cursor: fit === "fill" ? (dragging ? "grabbing" : "crosshair") : "default" }}
+    >
+      {fit === "fit" ? <div className="sgp-frame-ambient" style={{ backgroundImage: background }} /> : null}
+      <div className="sgp-frame-img" style={style} />
+      {fit === "fill" ? <div className="sgp-frame-grid" aria-hidden="true" /> : null}
+      {fit === "fill" ? <span className="sgp-focus" style={{ left: `${focus.x}%`, top: `${focus.y}%` }} aria-hidden="true" /> : null}
+      <span className="sgp-frame-tag">
+        <Move size={10} />
+        {fit === "fill" ? "Drag to set the focal point" : "Whole photo"}
+      </span>
+      {inUse ? (
+        <span className="sgp-frame-tag is-right">
+          <Check size={10} />
+          In use
+        </span>
+      ) : null}
+    </div>
   );
 }
 

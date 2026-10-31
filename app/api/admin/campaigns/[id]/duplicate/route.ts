@@ -14,7 +14,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     const existing = await getCampaignOrThrow(id);
     // Duplicating reads the source campaign, so VIEW-level row access on it
     // is what actually matters here — the new copy is owned by the caller.
-    assertCampaignRowAccess(identity, AccessAction.VIEW, { createdById: existing.createdById, departmentId: existing.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.VIEW, { createdById: existing.createdById, departmentId: existing.departmentId, clientId: existing.clientId });
     const campaign = await duplicateCampaign(identity, id);
     return NextResponse.json({ ok: true, campaign }, { status: 201 });
   } catch (error) {

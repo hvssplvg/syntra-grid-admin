@@ -13,7 +13,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     const identity = await requireCampaignsPermission(AccessAction.VIEW);
     const { id, contentId } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.VIEW, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.VIEW, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     const content = await syncContentPublishStatusFromSocialPost(contentId);
     return NextResponse.json({ ok: true, content });

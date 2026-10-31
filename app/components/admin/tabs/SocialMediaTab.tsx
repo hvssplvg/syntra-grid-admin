@@ -10,9 +10,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type DragEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -26,17 +24,13 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Clock3,
-  Copy,
   Edit3,
-  FileText,
   Globe,
   Heart,
   ImagePlus,
   Inbox,
   Info,
   LayoutGrid,
-  List,
   Loader2,
   MessageCircle,
   MoreHorizontal,
@@ -44,108 +38,92 @@ import {
   Plus,
   RefreshCw,
   Repeat2,
-  Search,
   Send,
   Share2,
   ShieldCheck,
   Sparkles,
   ThumbsUp,
   Trash2,
+  TrendingUp,
   Undo2,
   X,
 } from "lucide-react";
 
-import { SocialPlatformIcon, type SocialPlatformId } from "../common/SocialPlatformIcon";
+import { useFullWorkspace } from "@/app/components/admin/FullWorkspaceContext";
+import { ContentStudio } from "./social-media/content-studio/ContentStudio";
+import { AiWritingAssistant } from "./social-media/content-studio/panels/AiWritingAssistant";
+import { getContentProjectApi } from "./social-media/content-studio/api";
+import { GraphicWorkspace } from "./social-media/content-studio/wizard/GraphicWorkspace";
+import { BLANK_CANVAS_DATA, type CanvasData } from "./social-media/content-studio/wizard/canvas";
+import { VideoWorkspace } from "./social-media/content-studio/wizard/VideoWorkspace";
+import { blankVideoCanvasDataForPlatform, type VideoCanvasData } from "./social-media/content-studio/wizard/videoCanvas";
+import { TrendIntelligenceHome } from "./social-media/trend-intelligence/TrendIntelligenceHome";
+import { promoteTrendApi } from "./social-media/trend-intelligence/api";
+import {
+  PLATFORMS,
+  REAL_STATUS_META,
+  STATUS_META,
+  STATUS_ORDER,
+} from "./social-media/shared/constants";
+import {
+  editedLabel,
+  formatDateTime,
+  isValidDate,
+  nowMs,
+  platformDefinition,
+  relativeTime,
+} from "./social-media/shared/format";
+import {
+  Dot,
+  EmptyState,
+  IconButton,
+  Kbd,
+  MediaThumb,
+  PlatformMark,
+  PlatformStack,
+  Segmented,
+  SegmentButton,
+  Skeleton,
+  StatusPill,
+} from "./social-media/shared/primitives";
+import {
+  ACCENT_SOFT,
+  BTN_PRIMARY,
+  BTN_SECONDARY,
+  CARD,
+  cx,
+  FOCUS,
+  FOCUS_INSET,
+  INPUT,
+  mix,
+} from "./social-media/shared/styles";
+import type {
+  ApiAccountRef,
+  ContentFilter,
+  ContentStatus,
+  Counts,
+  IconType,
+  InstagramPlacement,
+  LibraryLayout,
+  PlatformDefinition,
+  PlatformFilter,
+  PostTarget,
+  RealPostStatus,
+  SocialPlatform,
+  SocialPost,
+  TargetStatus,
+  TikTokPostMode,
+  TikTokTargetMetadata,
+} from "./social-media/shared/types";
 
 /* =============================================================================
    TYPES
 ============================================================================= */
 
-type SocialPlatform = SocialPlatformId;
-
-/** The real backend status (SocialPostStatus in prisma/schema.prisma). */
-type RealPostStatus =
-  | "DRAFT"
-  | "PENDING_REVIEW"
-  | "CHANGES_REQUESTED"
-  | "APPROVED"
-  | "SCHEDULED"
-  | "PUBLISHING"
-  | "PUBLISHED"
-  | "DELIVERED_TO_INBOX"
-  | "PARTIALLY_PUBLISHED"
-  | "FAILED"
-  | "CANCELLED";
-
-/** The UI's 3-stage pipeline bucket. realStatus always carries the true
- *  backend status; this bucket only decides which pipeline column a post
- *  sits in. */
-type ContentStatus = "DRAFT" | "READY" | "SCHEDULED";
-
-type WorkspaceView = "content" | "publishing" | "accounts" | "engagement" | "analytics";
-
-type ContentFilter = "ALL" | ContentStatus;
-
-type PlatformFilter = "ALL" | SocialPlatform;
-
-type LibraryLayout = "list" | "grid";
-
-type InstagramPlacement = "FEED" | "STORY";
+type WorkspaceView =
+  "content" | "trends" | "publishing" | "accounts" | "engagement" | "analytics";
 
 type LoadStatus = "loading" | "ready" | "error";
-
-type TargetStatus = "PENDING" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "DELIVERED_TO_INBOX" | "FAILED" | "CANCELLED";
-
-type TikTokPostMode = "DIRECT_POST" | "UPLOAD_TO_TIKTOK";
-
-type TikTokTargetMetadata = {
-  tiktokPostMode?: TikTokPostMode;
-  tiktokPrivacyLevel?: string;
-  tiktokDisableComment?: boolean;
-  tiktokDisableDuet?: boolean;
-  tiktokDisableStitch?: boolean;
-  tiktokBrandedContent?: boolean;
-  tiktokYourBrand?: boolean;
-};
-
-type PostTarget = {
-  accountId: string;
-  platform: SocialPlatform;
-  caption: string | null;
-  placement: InstagramPlacement;
-  /** Only meaningful for TikTok today; every other platform ignores it. */
-  metadata: TikTokTargetMetadata | null;
-  status: TargetStatus;
-  remotePostUrl: string | null;
-  lastError: string | null;
-  publishedAt: string | null;
-  lastAttemptAt: string | null;
-  /** Set only by TikTok's status poller — when its async publish status
-   *  was last checked. Drives the "still processing, last checked…" /
-   *  "taking longer than expected" label; never implies a status change
-   *  on its own. */
-  lastPolledAt: string | null;
-  account: ApiAccountRef;
-};
-
-type SocialPost = {
-  id: string;
-  title: string | null;
-  caption: string;
-  category: string | null;
-  campaignId: string | null;
-  platforms: SocialPlatform[];
-  targets: PostTarget[];
-  status: ContentStatus;
-  realStatus: RealPostStatus;
-  reviewNotes: string | null;
-  scheduledAt: string | null;
-  image: string | null;
-  imageType: "IMAGE" | "VIDEO" | null;
-  assetIds: string[];
-  createdAt: string;
-  updatedAt: string;
-};
 
 type PostForm = {
   title: string;
@@ -173,15 +151,34 @@ type PostForm = {
   tiktokDisableStitch: boolean;
   tiktokBrandedContent: boolean;
   tiktokYourBrand: boolean;
+  /** Which connected LinkedIn account to publish to, when more than one
+   *  is connected (personal profile vs a company page). null means "use
+   *  the default" — the first connected account, same fallback every
+   *  other platform already has when there's nothing to choose between.
+   *  LinkedIn-specific rather than a generic per-platform map: no other
+   *  platform in this app can have more than one connected destination
+   *  a single post targets. */
+  linkedinAccountId: string | null;
 };
+
+type PresetAsset = { id: string; url: string; type: "IMAGE" | "VIDEO" };
 
 type ComposerState = {
   open: boolean;
   editingId: string | null;
   presetDate: string | null;
+  /** Set only by Content Home's creation input ("What would you like to
+   *  create today?") — a plain pre-fill of the new post's caption, never
+   *  AI-interpreted (that's a later phase). Ignored once editing an
+   *  existing post (formFromPost only applies it when post is null). */
+  presetCaption: string | null;
+  /** Set only by Content Studio's Graphic editor ("Continue to
+   *  publishing") — the already-uploaded, already-flattened graphic,
+   *  attached automatically so the admin doesn't have to find it in the
+   *  Library themselves. Ignored once editing an existing post, same as
+   *  presetCaption. */
+  presetAsset: PresetAsset | null;
 };
-
-type Counts = Record<ContentStatus, number> & { total: number };
 
 type Notice = {
   id: number;
@@ -189,8 +186,6 @@ type Notice = {
   tone: "success" | "error";
   action?: { label: string; run: () => void };
 };
-
-type IconType = typeof FileText;
 
 type DropProps = {
   onDragOver: (event: DragEvent<HTMLElement>) => void;
@@ -206,14 +201,6 @@ type PreviewMedia = {
   onAdd: () => void;
   onRemove: () => void;
   dropProps: DropProps;
-};
-
-type PlatformDefinition = {
-  id: SocialPlatform;
-  name: string;
-  description: string;
-  color: string;
-  limit: number;
 };
 
 /** A request for the shared confirm / prompt dialog. onConfirm may throw
@@ -249,88 +236,15 @@ const LAYOUT_KEY = "syntragrid.social-media.layout.v1";
 /** Must match the longest exit animation in SG_STYLES. */
 const EXIT_MS = 190;
 
-const PLATFORMS: PlatformDefinition[] = [
-  {
-    id: "INSTAGRAM",
-    name: "Instagram",
-    description: "Feed posts, reels and stories",
-    color: "#D6246E",
-    limit: 2200,
-  },
-  {
-    id: "FACEBOOK",
-    name: "Facebook",
-    description: "Page posts and updates",
-    color: "#1877F2",
-    limit: 63206,
-  },
-  {
-    id: "LINKEDIN",
-    name: "LinkedIn",
-    description: "Company page updates",
-    color: "#0A66C2",
-    limit: 3000,
-  },
-  {
-    id: "X",
-    name: "X",
-    description: "Short updates and replies",
-    color: "var(--text)",
-    limit: 280,
-  },
-  {
-    id: "TIKTOK",
-    name: "TikTok",
-    description: "Short-form video",
-    // Monochrome and theme-adaptive, like X.
-    color: "var(--text)",
-    limit: 2200,
-  },
-  {
-    id: "YOUTUBE",
-    name: "YouTube",
-    description: "Video uploads and shorts",
-    color: "#FF0000",
-    limit: 5000,
-  },
-];
-
-const NAVIGATION: Array<{ id: WorkspaceView; label: string; icon: IconType }> = [
-  { id: "content", label: "Content", icon: Edit3 },
-  { id: "publishing", label: "Publishing", icon: CalendarDays },
-  { id: "accounts", label: "Accounts", icon: LayoutGrid },
-  { id: "engagement", label: "Engagement", icon: MessageCircle },
-  { id: "analytics", label: "Analytics", icon: Activity },
-];
-
-const STATUS_ORDER: ContentStatus[] = ["DRAFT", "READY", "SCHEDULED"];
-
-const STATUS_META: Record<
-  ContentStatus,
-  { label: string; short: string; description: string; hue: string; icon: IconType }
-> = {
-  DRAFT: {
-    label: "Draft",
-    short: "Drafts",
-    description: "Still being written",
-    hue: "var(--text-muted)",
-    icon: FileText,
-  },
-  READY: {
-    label: "Ready for review",
-    short: "In review",
-    description: "Waiting for sign-off",
-    hue: "#D97706",
-    icon: ShieldCheck,
-  },
-  SCHEDULED: {
-    label: "Scheduled",
-    short: "Scheduled",
-    description: "Has a planned time",
-    hue: "var(--accent)",
-    icon: CalendarDays,
-  },
-};
+const NAVIGATION: Array<{ id: WorkspaceView; label: string; icon: IconType }> =
+  [
+    { id: "content", label: "Content", icon: Edit3 },
+    { id: "trends", label: "Trends", icon: TrendingUp },
+    { id: "publishing", label: "Publishing", icon: CalendarDays },
+    { id: "accounts", label: "Accounts", icon: LayoutGrid },
+    { id: "engagement", label: "Engagement", icon: MessageCircle },
+    { id: "analytics", label: "Analytics", icon: Activity },
+  ];
 
 const STATUS_HINT: Record<ContentStatus, string> = {
   DRAFT: "Saved for later. Nobody is asked to review it yet.",
@@ -343,6 +257,8 @@ const CLOSED_COMPOSER: ComposerState = {
   open: false,
   editingId: null,
   presetDate: null,
+  presetCaption: null,
+  presetAsset: null,
 };
 
 function statusBucket(status: RealPostStatus): ContentStatus {
@@ -351,35 +267,19 @@ function statusBucket(status: RealPostStatus): ContentStatus {
   return "SCHEDULED";
 }
 
-const REAL_STATUS_META: Record<RealPostStatus, { label: string; hue: string }> = {
-  DRAFT: { label: "Draft", hue: "var(--text-muted)" },
-  PENDING_REVIEW: { label: "Pending review", hue: "#D97706" },
-  CHANGES_REQUESTED: { label: "Changes requested", hue: "#DC2626" },
-  APPROVED: { label: "Approved", hue: "#059669" },
-  SCHEDULED: { label: "Scheduled", hue: "var(--accent)" },
-  PUBLISHING: { label: "Publishing…", hue: "var(--accent)" },
-  PUBLISHED: { label: "Published", hue: "#059669" },
-  // TikTok's Upload-to-TikTok workflow only ever delivers a video as a
-  // draft to the creator's TikTok inbox — genuinely distinct from
-  // PUBLISHED, never shown the same way.
-  DELIVERED_TO_INBOX: { label: "Delivered to TikTok inbox", hue: "#7C3AED" },
-  PARTIALLY_PUBLISHED: { label: "Partially published", hue: "#D97706" },
-  FAILED: { label: "Failed", hue: "#DC2626" },
-  CANCELLED: { label: "Cancelled", hue: "var(--text-subtle)" },
-};
-
 /** Per-destination status, independent of the post's own overall
  *  status — a multi-platform post can have one PUBLISHED target and one
  *  FAILED target at the same time (see reconcilePostStatus server-side). */
-const TARGET_STATUS_META: Record<TargetStatus, { label: string; hue: string }> = {
-  PENDING: { label: "Not yet scheduled", hue: "var(--text-subtle)" },
-  SCHEDULED: { label: "Scheduled", hue: "var(--accent)" },
-  PUBLISHING: { label: "Publishing…", hue: "var(--accent)" },
-  PUBLISHED: { label: "Published", hue: "#059669" },
-  DELIVERED_TO_INBOX: { label: "Delivered to TikTok inbox", hue: "#7C3AED" },
-  FAILED: { label: "Failed", hue: "#DC2626" },
-  CANCELLED: { label: "Cancelled", hue: "var(--text-subtle)" },
-};
+const TARGET_STATUS_META: Record<TargetStatus, { label: string; hue: string }> =
+  {
+    PENDING: { label: "Not yet scheduled", hue: "var(--text-subtle)" },
+    SCHEDULED: { label: "Scheduled", hue: "var(--accent)" },
+    PUBLISHING: { label: "Publishing…", hue: "var(--accent)" },
+    PUBLISHED: { label: "Published", hue: "#059669" },
+    DELIVERED_TO_INBOX: { label: "Delivered to TikTok inbox", hue: "#7C3AED" },
+    FAILED: { label: "Failed", hue: "#DC2626" },
+    CANCELLED: { label: "Cancelled", hue: "var(--text-subtle)" },
+  };
 
 /**
  * Table-driven platform + status → display label, covering the four
@@ -398,7 +298,12 @@ const TARGET_STATUS_META: Record<TargetStatus, { label: string; hue: string }> =
  * server-side, so the existing "only render a link when remotePostUrl
  * is set" check already covers this.
  */
-function targetDisplayMeta(target: Pick<PostTarget, "platform" | "status" | "lastPolledAt" | "lastAttemptAt">): {
+function targetDisplayMeta(
+  target: Pick<
+    PostTarget,
+    "platform" | "status" | "lastPolledAt" | "lastAttemptAt"
+  >,
+): {
   label: string;
   hue: string;
   detail: string | null;
@@ -442,29 +347,8 @@ const POST_SCHEDULE_STATES: RealPostStatus[] = [
 
 /* Shared class strings -------------------------------------------------------- */
 
-const FOCUS =
-  "outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]";
-
-const FOCUS_INSET =
-  "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent)]";
-
-const CARD =
-  "rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_1px_2px_rgba(0,0,0,0.04)]";
-
-const BTN_PRIMARY =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[11.5px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_8px_18px_-10px_var(--accent)] transition-[filter,transform,opacity] duration-150 hover:brightness-110 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
-
-const BTN_SECONDARY =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] px-4 text-[11.5px] font-semibold text-[var(--text)] transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--surface-muted)] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
-
 const BTN_DANGER =
   "inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 text-[11.5px] font-semibold text-white transition-[background-color,transform,opacity] duration-150 hover:bg-red-700 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
-
-const ACCENT_SOFT =
-  "bg-[color-mix(in_srgb,var(--accent)_12%,transparent)] text-[var(--accent)]";
-
-const INPUT =
-  "w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] text-[12px] text-[var(--text)] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[var(--text-subtle)] focus:border-[var(--accent)] focus:ring-4 focus:ring-[color-mix(in_srgb,var(--accent)_14%,transparent)]";
 
 const LABEL = "mb-1.5 block text-[11px] font-semibold text-[var(--text)]";
 
@@ -530,45 +414,8 @@ const SG_STYLES = `
    HELPERS
 ============================================================================= */
 
-const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
-
-function cx(...values: Array<string | false | null | undefined>) {
-  return values.filter(Boolean).join(" ");
-}
-
-function mix(color: string, percent: number, base = "transparent") {
-  return `color-mix(in srgb, ${color} ${percent}%, ${base})`;
-}
-
-function nowMs() {
-  return Date.now();
-}
-
-function isValidDate(date: Date) {
-  return !Number.isNaN(date.getTime());
-}
-
-function formatDate(value: string) {
-  const date = new Date(value);
-  if (!isValidDate(date)) return "Unknown date";
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-}
-
-function formatDateTime(value: string) {
-  const date = new Date(value);
-  if (!isValidDate(date)) return "Unknown date";
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
+const useIsoLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 function formatTime(value: string) {
   const date = new Date(value);
@@ -594,29 +441,6 @@ function monthLabel(date: Date) {
   }).format(date);
 }
 
-const RELATIVE = new Intl.RelativeTimeFormat("en-GB", { numeric: "auto" });
-
-function relativeTime(value: string) {
-  const diff = new Date(value).getTime() - nowMs();
-  const abs = Math.abs(diff);
-  const minute = 60_000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-
-  if (abs < minute) return "just now";
-  if (abs < hour) return RELATIVE.format(Math.round(diff / minute), "minute");
-  if (abs < day) return RELATIVE.format(Math.round(diff / hour), "hour");
-  if (abs < 7 * day) return RELATIVE.format(Math.round(diff / day), "day");
-  return RELATIVE.format(Math.round(diff / (7 * day)), "week");
-}
-
-function editedLabel(value: string) {
-  const diff = Math.abs(new Date(value).getTime() - nowMs());
-  return diff < 7 * 24 * 60 * 60_000
-    ? `Edited ${relativeTime(value)}`
-    : `Edited ${formatDate(value)}`;
-}
-
 function startOfDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
@@ -627,7 +451,8 @@ function startOfMonth(date: Date) {
 
 function dayLabel(date: Date) {
   const diff = Math.round(
-    (startOfDay(date).getTime() - startOfDay(new Date()).getTime()) / 86_400_000,
+    (startOfDay(date).getTime() - startOfDay(new Date()).getTime()) /
+      86_400_000,
   );
   if (diff === 0) return "Today";
   if (diff === 1) return "Tomorrow";
@@ -671,9 +496,18 @@ function quickSlots() {
   const inOneHour = nextFullHour();
 
   return [
-    { label: `${dayLabel(inOneHour)}, ${formatTime(inOneHour.toISOString())}`, value: localDateTimeValue(inOneHour) },
-    { label: "Tomorrow, 09:00", value: localDateTimeValue(new Date(y, m, d + 1, 9, 0)) },
-    { label: "Tomorrow, 18:00", value: localDateTimeValue(new Date(y, m, d + 1, 18, 0)) },
+    {
+      label: `${dayLabel(inOneHour)}, ${formatTime(inOneHour.toISOString())}`,
+      value: localDateTimeValue(inOneHour),
+    },
+    {
+      label: "Tomorrow, 09:00",
+      value: localDateTimeValue(new Date(y, m, d + 1, 9, 0)),
+    },
+    {
+      label: "Tomorrow, 18:00",
+      value: localDateTimeValue(new Date(y, m, d + 1, 18, 0)),
+    },
     {
       label: `${new Intl.DateTimeFormat("en-GB", {
         weekday: "short",
@@ -688,16 +522,13 @@ function quickSlots() {
 function futureTimeError(value: string) {
   if (!value) return "Choose a date and time.";
   const date = new Date(value);
-  if (!isValidDate(date) || date.getTime() <= nowMs()) return "Choose a time in the future.";
+  if (!isValidDate(date) || date.getTime() <= nowMs())
+    return "Choose a time in the future.";
   return null;
 }
 
 function truncate(text: string, length: number) {
   return text.length > length ? `${text.slice(0, length).trimEnd()}…` : text;
-}
-
-function platformDefinition(platform: SocialPlatform) {
-  return PLATFORMS.find((item) => item.id === platform)!;
 }
 
 function readFlag(key: string) {
@@ -728,7 +559,10 @@ function useScrollLock(active: boolean) {
     if (!active) return;
     const body = document.body;
     const scrollbar = window.innerWidth - document.documentElement.clientWidth;
-    const previous = { overflow: body.style.overflow, paddingRight: body.style.paddingRight };
+    const previous = {
+      overflow: body.style.overflow,
+      paddingRight: body.style.paddingRight,
+    };
 
     body.style.overflow = "hidden";
     if (scrollbar > 0) body.style.paddingRight = `${scrollbar}px`;
@@ -753,8 +587,12 @@ function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean) {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
-      const items = Array.from(node.querySelectorAll<HTMLElement>(selector)).filter(
-        (element) => element.offsetParent !== null && !element.closest("[data-collapsed='true']"),
+      const items = Array.from(
+        node.querySelectorAll<HTMLElement>(selector),
+      ).filter(
+        (element) =>
+          element.offsetParent !== null &&
+          !element.closest("[data-collapsed='true']"),
       );
       if (items.length === 0) return;
       const first = items[0];
@@ -772,7 +610,8 @@ function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean) {
     node.addEventListener("keydown", onKeyDown);
     return () => {
       node.removeEventListener("keydown", onKeyDown);
-      if (previous && document.contains(previous)) previous.focus({ preventScroll: true });
+      if (previous && document.contains(previous))
+        previous.focus({ preventScroll: true });
     };
   }, [ref, active]);
 }
@@ -803,19 +642,22 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: "include",
     cache: "no-store",
     ...init,
-    headers: isFormData ? init?.headers : { "Content-Type": "application/json", ...init?.headers },
+    headers: isFormData
+      ? init?.headers
+      : { "Content-Type": "application/json", ...init?.headers },
   });
 
   const payload = await response.json().catch(() => null);
 
   if (!response.ok || !payload?.ok) {
-    throw new ApiRequestError(payload?.error || `Request failed (${response.status}).`, payload?.code);
+    throw new ApiRequestError(
+      payload?.error || `Request failed (${response.status}).`,
+      payload?.code,
+    );
   }
 
   return payload as T;
 }
-
-type ApiAccountRef = { id: string; platform: SocialPlatform; accountName: string; username: string | null; status: string };
 
 type ApiAsset = {
   id: string;
@@ -900,7 +742,12 @@ type CreatePostPayload = {
   caption: string;
   category: string | null;
   campaignId: string | null;
-  targets: { accountId: string; caption: string | null; placement?: InstagramPlacement; metadata?: TikTokTargetMetadata }[];
+  targets: {
+    accountId: string;
+    caption: string | null;
+    placement?: InstagramPlacement;
+    metadata?: TikTokTargetMetadata;
+  }[];
   assetIds: string[];
 };
 
@@ -910,46 +757,76 @@ async function fetchPostsApi(): Promise<SocialPost[]> {
 }
 
 async function createPostApi(input: CreatePostPayload): Promise<SocialPost> {
-  const payload = await apiRequest<{ post: ApiPost }>("/posts", { method: "POST", body: JSON.stringify(input) });
+  const payload = await apiRequest<{ post: ApiPost }>("/posts", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
   return fromApiPost(payload.post);
 }
 
-async function updatePostApi(id: string, input: Partial<CreatePostPayload>): Promise<SocialPost> {
-  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+async function updatePostApi(
+  id: string,
+  input: Partial<CreatePostPayload>,
+): Promise<SocialPost> {
+  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
   return fromApiPost(payload.post);
 }
 
-async function deletePostApi(id: string, options?: { confirmPublishedRemoval?: boolean }): Promise<void> {
+async function deletePostApi(
+  id: string,
+  options?: { confirmPublishedRemoval?: boolean },
+): Promise<void> {
   await apiRequest(`/posts/${id}`, {
     method: "DELETE",
-    body: JSON.stringify({ confirmPublishedRemoval: options?.confirmPublishedRemoval ?? false }),
+    body: JSON.stringify({
+      confirmPublishedRemoval: options?.confirmPublishedRemoval ?? false,
+    }),
   });
 }
 
 async function duplicatePostApi(id: string): Promise<SocialPost> {
-  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}/duplicate`, { method: "POST" });
+  const payload = await apiRequest<{ post: ApiPost }>(
+    `/posts/${id}/duplicate`,
+    { method: "POST" },
+  );
   return fromApiPost(payload.post);
 }
 
 async function submitPostApi(id: string): Promise<SocialPost> {
-  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}/submit`, { method: "POST" });
-  return fromApiPost(payload.post);
-}
-
-async function approvePostApi(id: string): Promise<SocialPost> {
-  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}/approve`, { method: "POST" });
-  return fromApiPost(payload.post);
-}
-
-async function requestChangesApi(id: string, notes: string): Promise<SocialPost> {
-  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}/request-changes`, {
+  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}/submit`, {
     method: "POST",
-    body: JSON.stringify({ notes }),
   });
   return fromApiPost(payload.post);
 }
 
-async function schedulePostApi(id: string, scheduledAtIso: string): Promise<SocialPost> {
+async function approvePostApi(id: string): Promise<SocialPost> {
+  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}/approve`, {
+    method: "POST",
+  });
+  return fromApiPost(payload.post);
+}
+
+async function requestChangesApi(
+  id: string,
+  notes: string,
+): Promise<SocialPost> {
+  const payload = await apiRequest<{ post: ApiPost }>(
+    `/posts/${id}/request-changes`,
+    {
+      method: "POST",
+      body: JSON.stringify({ notes }),
+    },
+  );
+  return fromApiPost(payload.post);
+}
+
+async function schedulePostApi(
+  id: string,
+  scheduledAtIso: string,
+): Promise<SocialPost> {
   const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}/schedule`, {
     method: "POST",
     body: JSON.stringify({ scheduledAt: scheduledAtIso }),
@@ -958,14 +835,26 @@ async function schedulePostApi(id: string, scheduledAtIso: string): Promise<Soci
 }
 
 async function cancelPostApi(id: string): Promise<SocialPost> {
-  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}/cancel`, { method: "POST" });
+  const payload = await apiRequest<{ post: ApiPost }>(`/posts/${id}/cancel`, {
+    method: "POST",
+  });
   return fromApiPost(payload.post);
 }
 
-type PublishNowResult = { id: string; ok: boolean; skipped?: boolean; error?: string };
+type PublishNowResult = {
+  id: string;
+  ok: boolean;
+  skipped?: boolean;
+  error?: string;
+};
 
-async function publishNowApi(id: string): Promise<{ post: SocialPost; results: PublishNowResult[] }> {
-  const payload = await apiRequest<{ post: ApiPost; results: PublishNowResult[] }>(`/posts/${id}/publish-now`, {
+async function publishNowApi(
+  id: string,
+): Promise<{ post: SocialPost; results: PublishNowResult[] }> {
+  const payload = await apiRequest<{
+    post: ApiPost;
+    results: PublishNowResult[];
+  }>(`/posts/${id}/publish-now`, {
     method: "POST",
   });
   return { post: fromApiPost(payload.post), results: payload.results };
@@ -978,6 +867,11 @@ type ApiAccount = {
   username: string | null;
   profileImageUrl: string | null;
   status: "CONNECTED" | "DISCONNECTED" | "EXPIRED" | "ERROR";
+  /** PERSONAL for every account on every platform except a LinkedIn
+   *  company page, which is ORGANIZATION and shares its personal
+   *  counterpart's OAuth grant (see sharesAuthWithId). */
+  accountType: "PERSONAL" | "ORGANIZATION";
+  sharesAuthWithId: string | null;
   connectedAt: string | null;
   lastSyncedAt: string | null;
   lastError: string | null;
@@ -990,36 +884,105 @@ type ApiPlatformRow = {
   configured: boolean;
   requiredEnvVars: string[];
   accounts: ApiAccount[];
+  /** LINKEDIN only — the separate "Company Manager" developer app's own
+   *  configuration state, independent of the personal app above. */
+  organizationAppConfigured?: boolean;
+  organizationAppRequiredEnvVars?: string[];
 };
 
-type SocialMediaPermissions = { canCreate: boolean; canEdit: boolean; canApprove: boolean; canManage: boolean };
+type SocialMediaPermissions = {
+  canCreate: boolean;
+  canEdit: boolean;
+  canApprove: boolean;
+  canManage: boolean;
+};
 
-const NO_PERMISSIONS: SocialMediaPermissions = { canCreate: false, canEdit: false, canApprove: false, canManage: false };
+const NO_PERMISSIONS: SocialMediaPermissions = {
+  canCreate: false,
+  canEdit: false,
+  canApprove: false,
+  canManage: false,
+};
 
-async function fetchAccountsApi(): Promise<{ platforms: ApiPlatformRow[]; permissions: SocialMediaPermissions }> {
-  return apiRequest<{ platforms: ApiPlatformRow[]; permissions: SocialMediaPermissions }>("/accounts");
+async function fetchAccountsApi(): Promise<{
+  platforms: ApiPlatformRow[];
+  permissions: SocialMediaPermissions;
+}> {
+  return apiRequest<{
+    platforms: ApiPlatformRow[];
+    permissions: SocialMediaPermissions;
+  }>("/accounts");
 }
 
 async function disconnectAccountApi(id: string): Promise<void> {
   await apiRequest(`/accounts/${id}/disconnect`, { method: "POST" });
 }
 
-async function uploadMediaAsset(blob: Blob, filename: string): Promise<ApiAsset> {
+type LinkedInOrganization = { id: string; urn: string; name: string };
+
+/** Not routed through apiRequest()/ApiRequestError — a missing/expired
+ *  pending connection is an expected, renderable state (not just a
+ *  message), so the full payload is read directly instead of collapsing
+ *  it to an error message. Reads the organisations discovered right
+ *  after the LinkedIn Company Manager OAuth callback (held server-side
+ *  in a short-lived cookie) — never an already-connected account's id,
+ *  since the company connection no longer depends on one. */
+async function fetchPendingLinkedInOrganizationsApi(): Promise<
+  { ok: true; organizations: LinkedInOrganization[] } | { ok: false; error: string }
+> {
+  const response = await fetch(`${API_BASE}/accounts/linkedin/organizations/pending`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  const payload = await response.json().catch(() => null);
+
+  if (!payload?.ok) {
+    return { ok: false, error: payload?.error || `Request failed (${response.status}).` };
+  }
+
+  return { ok: true, organizations: payload.organizations as LinkedInOrganization[] };
+}
+
+async function connectLinkedInOrganizationApi(organizationId: string): Promise<ApiAccount> {
+  const result = await apiRequest<{ account: ApiAccount }>("/accounts/linkedin/organizations", {
+    method: "POST",
+    body: JSON.stringify({ organizationId }),
+  });
+  return result.account;
+}
+
+async function uploadMediaAsset(
+  blob: Blob,
+  filename: string,
+): Promise<ApiAsset> {
   const body = new FormData();
   body.append("file", blob, filename);
-  const payload = await apiRequest<{ asset: ApiAsset }>("/media/upload", { method: "POST", body });
+  const payload = await apiRequest<{ asset: ApiAsset }>("/media/upload", {
+    method: "POST",
+    body,
+  });
   return payload.asset;
 }
 
 async function fetchMediaAssets(): Promise<ApiAsset[]> {
-  const payload = await apiRequest<{ assets: ApiAsset[] }>("/media?pageSize=60");
+  const payload = await apiRequest<{ assets: ApiAsset[] }>(
+    "/media?pageSize=60",
+  );
   return payload.assets;
 }
 
 type ApiBrandAssetOption = {
   id: string;
   name: string;
-  type: "IMAGE" | "VIDEO" | "SVG" | "DOCUMENT" | "PRESENTATION" | "DESIGN_FILE" | "FONT" | "OTHER";
+  type:
+    | "IMAGE"
+    | "VIDEO"
+    | "SVG"
+    | "DOCUMENT"
+    | "PRESENTATION"
+    | "DESIGN_FILE"
+    | "FONT"
+    | "OTHER";
   url: string;
   usageRights: "INTERNAL_ONLY" | "CLIENT_APPROVED" | "PUBLIC" | "UNRESTRICTED";
   brandKit: { id: string; name: string } | null;
@@ -1029,10 +992,13 @@ type ApiBrandAssetOption = {
  *  Media's. This only ever reads (VIEW), so a plain fetch is enough;
  *  the heavier apiRequest helper above is scoped to API_BASE. */
 async function fetchApprovedBrandAssetsApi(): Promise<ApiBrandAssetOption[]> {
-  const response = await fetch("/api/admin/brand-assets/assets?status=ACTIVE&pageSize=60", {
-    credentials: "include",
-    cache: "no-store",
-  });
+  const response = await fetch(
+    "/api/admin/brand-assets/assets?status=ACTIVE&pageSize=60",
+    {
+      credentials: "include",
+      cache: "no-store",
+    },
+  );
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload?.ok) return [];
   const assets: ApiBrandAssetOption[] = payload.assets ?? [];
@@ -1042,7 +1008,9 @@ async function fetchApprovedBrandAssetsApi(): Promise<ApiBrandAssetOption[]> {
   // reuse time regardless, but hiding them here avoids a confusing pick-
   // then-reject round trip. See reuseBrandAssetAsSocialMediaAsset.
   return assets.filter(
-    (asset) => (asset.type === "IMAGE" || asset.type === "VIDEO") && asset.usageRights !== "INTERNAL_ONLY",
+    (asset) =>
+      (asset.type === "IMAGE" || asset.type === "VIDEO") &&
+      asset.usageRights !== "INTERNAL_ONLY",
   );
 }
 
@@ -1050,17 +1018,27 @@ async function fetchApprovedBrandAssetsApi(): Promise<ApiBrandAssetOption[]> {
  *  SocialMediaAsset — never re-uploads it. See
  *  lib/social-media/media.ts#reuseBrandAssetAsSocialMediaAsset. */
 async function reuseBrandAssetApi(brandAssetId: string): Promise<ApiAsset> {
-  const payload = await apiRequest<{ asset: ApiAsset }>("/media/from-brand-asset", {
-    method: "POST",
-    body: JSON.stringify({ brandAssetId }),
-  });
+  const payload = await apiRequest<{ asset: ApiAsset }>(
+    "/media/from-brand-asset",
+    {
+      method: "POST",
+      body: JSON.stringify({ brandAssetId }),
+    },
+  );
   return payload.asset;
 }
 
-type ApiCampaign = { id: string; name: string; status: string; _count?: { posts: number } };
+type ApiCampaign = {
+  id: string;
+  name: string;
+  status: string;
+  _count?: { posts: number };
+};
 
 async function fetchCampaignsApi(): Promise<ApiCampaign[]> {
-  const payload = await apiRequest<{ campaigns: ApiCampaign[] }>("/campaigns?pageSize=100");
+  const payload = await apiRequest<{ campaigns: ApiCampaign[] }>(
+    "/campaigns?pageSize=100",
+  );
   return payload.campaigns;
 }
 
@@ -1089,12 +1067,18 @@ type ApiActivityItem = {
   type: string;
   description: string | null;
   createdAt: string;
-  actor: { id: string; firstName: string | null; lastName: string | null } | null;
+  actor: {
+    id: string;
+    firstName: string | null;
+    lastName: string | null;
+  } | null;
   post: { id: string; title: string | null; caption: string };
 };
 
 async function fetchActivityApi(postId?: string): Promise<ApiActivityItem[]> {
-  const payload = await apiRequest<{ activity: ApiActivityItem[] }>(postId ? `/activity?postId=${postId}` : "/activity");
+  const payload = await apiRequest<{ activity: ApiActivityItem[] }>(
+    postId ? `/activity?postId=${postId}` : "/activity",
+  );
   return payload.activity;
 }
 
@@ -1128,7 +1112,10 @@ async function prepareImage(file: File): Promise<string> {
       throw new Error("That image couldn't be read. Try a JPG or PNG instead.");
     }
 
-    const scale = Math.min(1, IMAGE_MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+    const scale = Math.min(
+      1,
+      IMAGE_MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight),
+    );
     const width = Math.round(img.naturalWidth * scale);
     const height = Math.round(img.naturalHeight * scale);
 
@@ -1160,10 +1147,15 @@ function isTypingTarget(target: EventTarget | null) {
 
 /* Form helpers ----------------------------------------------------------------- */
 
-function formFromPost(post: SocialPost | null, presetDate: string | null): PostForm {
+function formFromPost(
+  post: SocialPost | null,
+  presetDate: string | null,
+  presetCaption: string | null = null,
+  presetAsset: PresetAsset | null = null,
+): PostForm {
   return {
     title: post?.title ?? "",
-    caption: post?.caption ?? "",
+    caption: post?.caption ?? presetCaption ?? "",
     category: post?.category ?? "",
     campaignId: post?.campaignId ?? null,
     platforms: post?.platforms ?? [],
@@ -1175,19 +1167,36 @@ function formFromPost(post: SocialPost | null, presetDate: string | null): PostF
     status: post?.status ?? (presetDate ? "SCHEDULED" : "DRAFT"),
     scheduledAt: post?.scheduledAt
       ? localDateTimeValue(new Date(post.scheduledAt))
-      : presetDate ?? "",
-    image: post?.image ?? null,
-    imageType: post?.imageType ?? null,
-    assetIds: post?.assetIds ?? [],
+      : (presetDate ?? ""),
+    image: post?.image ?? presetAsset?.url ?? null,
+    imageType: post?.imageType ?? presetAsset?.type ?? null,
+    assetIds: post?.assetIds ?? (presetAsset ? [presetAsset.id] : []),
     instagramPlacement:
-      post?.targets.find((target) => target.platform === "INSTAGRAM")?.placement ?? "FEED",
-    tiktokPostMode: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokPostMode ?? null,
-    tiktokPrivacyLevel: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokPrivacyLevel ?? null,
-    tiktokDisableComment: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokDisableComment ?? false,
-    tiktokDisableDuet: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokDisableDuet ?? false,
-    tiktokDisableStitch: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokDisableStitch ?? false,
-    tiktokBrandedContent: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokBrandedContent ?? false,
-    tiktokYourBrand: post?.targets.find((target) => target.platform === "TIKTOK")?.metadata?.tiktokYourBrand ?? false,
+      post?.targets.find((target) => target.platform === "INSTAGRAM")
+        ?.placement ?? "FEED",
+    tiktokPostMode:
+      post?.targets.find((target) => target.platform === "TIKTOK")?.metadata
+        ?.tiktokPostMode ?? null,
+    tiktokPrivacyLevel:
+      post?.targets.find((target) => target.platform === "TIKTOK")?.metadata
+        ?.tiktokPrivacyLevel ?? null,
+    tiktokDisableComment:
+      post?.targets.find((target) => target.platform === "TIKTOK")?.metadata
+        ?.tiktokDisableComment ?? false,
+    tiktokDisableDuet:
+      post?.targets.find((target) => target.platform === "TIKTOK")?.metadata
+        ?.tiktokDisableDuet ?? false,
+    tiktokDisableStitch:
+      post?.targets.find((target) => target.platform === "TIKTOK")?.metadata
+        ?.tiktokDisableStitch ?? false,
+    tiktokBrandedContent:
+      post?.targets.find((target) => target.platform === "TIKTOK")?.metadata
+        ?.tiktokBrandedContent ?? false,
+    tiktokYourBrand:
+      post?.targets.find((target) => target.platform === "TIKTOK")?.metadata
+        ?.tiktokYourBrand ?? false,
+    linkedinAccountId:
+      post?.targets.find((target) => target.platform === "LINKEDIN")?.accountId ?? null,
   };
 }
 
@@ -1208,7 +1217,9 @@ function formSignature(form: PostForm) {
     status: form.status,
     scheduledAt: form.status === "SCHEDULED" ? form.scheduledAt : "",
     assetIds: form.assetIds,
-    instagramPlacement: form.platforms.includes("INSTAGRAM") ? form.instagramPlacement : "",
+    instagramPlacement: form.platforms.includes("INSTAGRAM")
+      ? form.instagramPlacement
+      : "",
     tiktok: form.platforms.includes("TIKTOK")
       ? {
           mode: form.tiktokPostMode,
@@ -1229,7 +1240,9 @@ function hasContent(form: PostForm) {
     form.caption.trim() !== "" ||
     form.title.trim() !== "" ||
     form.assetIds.length > 0 ||
-    Object.values(form.platformCaptions).some((text) => (text ?? "").trim() !== "")
+    Object.values(form.platformCaptions).some(
+      (text) => (text ?? "").trim() !== "",
+    )
   );
 }
 
@@ -1238,12 +1251,172 @@ function hasContent(form: PostForm) {
 ============================================================================= */
 
 export default function SocialMediaTab() {
+  // Set true the instant the Graphic Studio opens — from the very
+  // first interaction, not only once a canvas exists — hiding this
+  // tab's own sub-nav/body so the workspace gets the whole dashboard
+  // content area, per the Content Studio plan.
+  const { full: fullWorkspace, setFull } = useFullWorkspace();
+  const [graphicWizardOpen, setGraphicWizardOpen] = useState(false);
+  const [openGraphicProject, setOpenGraphicProject] =
+    useState<{ id: string; title: string; canvasData: CanvasData } | null>(null);
+  const [videoWizardOpen, setVideoWizardOpen] = useState(false);
+  const [openVideoProject, setOpenVideoProject] =
+    useState<{ id: string; title: string; canvasData: VideoCanvasData } | null>(null);
+  // Set by Trend Intelligence's "Generate content" action to pre-fill
+  // the AI brief when opening a brand-new (not reopened) workspace —
+  // see openGraphicFromTrend/openVideoFromTrend below.
+  const [pendingGraphicBrief, setPendingGraphicBrief] = useState("");
+  const [pendingGraphicReference, setPendingGraphicReference] = useState<{ url: string; analysis: string } | null>(null);
+  // Set only by "Generate Graphic → Animate" in Trend Intelligence — an
+  // explicit, preserved intent flag (never inferred from anything else)
+  // that tells Graphic Studio to nudge toward "Animate with AI" once an
+  // image exists. Ordinary "Generate Graphic" never sets this, so its
+  // behaviour is untouched. pendingGraphicTrendId rides along so that
+  // if the admin does animate, the resulting video can still be linked
+  // back to this trend via the existing promoteTrendApi mechanism.
+  const [pendingGraphicAnimateIntent, setPendingGraphicAnimateIntent] = useState(false);
+  const [pendingGraphicTrendId, setPendingGraphicTrendId] = useState<string | null>(null);
+  const [pendingVideoBrief, setPendingVideoBrief] = useState("");
+  const [pendingVideoPlatform, setPendingVideoPlatform] = useState<SocialPlatform>("TIKTOK");
+  // Set only by openAiVideoFromTrend — "standard" (the default) means
+  // every other entry point, including the plain "Generate Video" trend
+  // action, is completely unaffected by the AI Video hand-off below.
+  const [pendingVideoMode, setPendingVideoMode] = useState<"standard" | "ai">("standard");
+  const [pendingVideoReference, setPendingVideoReference] = useState<{ url: string; analysis: string } | null>(null);
+  // Set only by animateImageFromGraphic (Graphic Studio's "Animate with
+  // AI") — the image Video Studio's Image-to-Video mode should open
+  // with already attached.
+  const [pendingVideoStartFrameImage, setPendingVideoStartFrameImage] = useState<{ url: string; assetId?: string } | null>(null);
+  // Bumped whenever the LinkedIn Company Manager OAuth redirect returns
+  // with ?social=select_organization, so the company-page picker opens
+  // itself instead of requiring an extra click after the admin already
+  // completed LinkedIn's consent screen.
+  const [linkedInOrgPickerSignal, setLinkedInOrgPickerSignal] = useState(0);
+  // The trend this video came from, if any — used only to link the
+  // trend to the resulting ContentProject once it's first saved (see
+  // VideoWorkspace's onProjectSaved), never read for anything else.
+  const [pendingVideoTrendId, setPendingVideoTrendId] = useState<string | null>(null);
+  // Only true when opened via openGraphicFromTrend/openVideoFromTrend —
+  // the plain "new graphic"/"new video" buttons never set these, so
+  // auto-generation only ever fires on the trend hand-off.
+  const [autoGenerateGraphic, setAutoGenerateGraphic] = useState(false);
+  const [autoGenerateVideo, setAutoGenerateVideo] = useState(false);
+  const [projectsRefreshKey, setProjectsRefreshKey] = useState(0);
+
+  // The effect that drives this lives further down, next to the
+  // composer's own state — the composer is a full-bleed workspace too
+  // now, so it has to be part of the same condition, and `composer`
+  // isn't declared until below.
+
+  const closeGraphicWizard = useCallback(() => {
+    setGraphicWizardOpen(false);
+    setOpenGraphicProject(null);
+    setPendingGraphicBrief("");
+    setPendingGraphicReference(null);
+    setPendingGraphicAnimateIntent(false);
+    setPendingGraphicTrendId(null);
+    setAutoGenerateGraphic(false);
+    setProjectsRefreshKey((key) => key + 1); // refresh Content Home's saved-projects list — a save may have happened
+  }, []);
+
+  const closeVideoWizard = useCallback(() => {
+    setVideoWizardOpen(false);
+    setOpenVideoProject(null);
+    setPendingVideoBrief("");
+    setPendingVideoPlatform("TIKTOK");
+    setPendingVideoMode("standard");
+    setPendingVideoReference(null);
+    setPendingVideoStartFrameImage(null);
+    setPendingVideoTrendId(null);
+    setAutoGenerateVideo(false);
+    setProjectsRefreshKey((key) => key + 1);
+  }, []);
+
+  /** Graphic Studio's "Animate with AI" — a different hand-off shape
+   *  from the trend ones above: no brief adaptation, no auto-fired AI
+   *  call (autoGenerateVideo stays false) — just opens Video Studio's
+   *  Image-to-Video mode with this exact image already attached, so
+   *  the admin picks the motion themselves (optionally with Suggest
+   *  Motion). source's headline/supportingText/callToAction aren't
+   *  used here — never silently duplicated into a video caption or
+   *  overlay; the admin re-adds branding as editable video overlays
+   *  themselves if they want it, per the "preserve the final image
+   *  composition" requirement. trendId is only ever non-null when this
+   *  image came from "Generate Graphic → Animate" (see
+   *  pendingGraphicTrendId above) — an ordinary Graphic Studio image
+   *  carries no trend, so the resulting video stays unlinked, exactly
+   *  as before. */
+  const animateImageFromGraphic = useCallback((source: { url: string; assetId?: string; trendId?: string }) => {
+    setOpenVideoProject(null);
+    setPendingVideoBrief("");
+    setPendingVideoMode("ai");
+    setPendingVideoReference(null);
+    setPendingVideoStartFrameImage({ url: source.url, assetId: source.assetId });
+    setPendingVideoTrendId(source.trendId ?? null);
+    setAutoGenerateVideo(false);
+    setVideoWizardOpen(true);
+  }, []);
+
+  const openGraphicFromTrend = useCallback((brief: string, referenceImage?: { url: string; analysis: string }, animateIntent?: boolean, trendId?: string) => {
+    setOpenGraphicProject(null);
+    setPendingGraphicBrief(brief);
+    setPendingGraphicReference(referenceImage ?? null);
+    setPendingGraphicAnimateIntent(Boolean(animateIntent));
+    setPendingGraphicTrendId(animateIntent ? (trendId ?? null) : null);
+    setAutoGenerateGraphic(true);
+    setGraphicWizardOpen(true);
+  }, []);
+
+  const openVideoFromTrend = useCallback((brief: string, platform: SocialPlatform) => {
+    setOpenVideoProject(null);
+    setPendingVideoBrief(brief);
+    setPendingVideoPlatform(platform);
+    setPendingVideoMode("standard");
+    setPendingVideoReference(null);
+    setPendingVideoTrendId(null);
+    setAutoGenerateVideo(true);
+    setVideoWizardOpen(true);
+  }, []);
+
+  /** The "Generate AI Video" trend destination — a separate path from
+   *  openVideoFromTrend above (Standard Video), never a replacement for
+   *  it. Opens VideoWorkspace in AI Video mode with the adapted brief
+   *  pre-filled and, when the admin uploaded one in TrendDetailModal, an
+   *  authorised reference image carried through to inform the AI
+   *  concept prompts. */
+  const openAiVideoFromTrend = useCallback((brief: string, platform: SocialPlatform, trendId: string, referenceImage?: { url: string; analysis: string }) => {
+    setOpenVideoProject(null);
+    setPendingVideoBrief(brief);
+    setPendingVideoPlatform(platform);
+    setPendingVideoMode("ai");
+    setPendingVideoReference(referenceImage ?? null);
+    setPendingVideoTrendId(trendId);
+    setAutoGenerateVideo(true);
+    setVideoWizardOpen(true);
+  }, []);
+
+  /** Dispatches a saved project's "Open" action to the right workspace
+   *  by its real type — a ContentProject is never assumed to be a
+   *  graphic just because that was the first type this feature had. */
+  const openSavedProject = useCallback(async (id: string) => {
+    const project = await getContentProjectApi(id);
+    if (!project) return;
+    if (project.type === "VIDEO") {
+      setOpenVideoProject({ id: project.id, title: project.title, canvasData: project.canvasData as VideoCanvasData });
+      setVideoWizardOpen(true);
+    } else {
+      setOpenGraphicProject({ id: project.id, title: project.title, canvasData: project.canvasData as CanvasData });
+      setGraphicWizardOpen(true);
+    }
+  }, []);
+
   const [view, setView] = useState<WorkspaceView>("content");
   const [posts, setPosts] = useState<SocialPost[]>([]);
   const [postsStatus, setPostsStatus] = useState<LoadStatus>("loading");
   const [postsLoaded, setPostsLoaded] = useState(false);
   const [accounts, setAccounts] = useState<ApiPlatformRow[]>([]);
-  const [permissions, setPermissions] = useState<SocialMediaPermissions>(NO_PERMISSIONS);
+  const [permissions, setPermissions] =
+    useState<SocialMediaPermissions>(NO_PERMISSIONS);
   const [accountsStatus, setAccountsStatus] = useState<LoadStatus>("loading");
   const [campaigns, setCampaigns] = useState<ApiCampaign[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -1266,7 +1439,11 @@ export default function SocialMediaTab() {
   }, []);
 
   const notifyError = useCallback((error: unknown, fallback: string) => {
-    setNotice({ id: nowMs(), message: errorMessage(error, fallback), tone: "error" });
+    setNotice({
+      id: nowMs(),
+      message: errorMessage(error, fallback),
+      tone: "error",
+    });
   }, []);
 
   useEffect(() => {
@@ -1308,7 +1485,9 @@ export default function SocialMediaTab() {
   useEffect(() => {
     refreshPosts();
     refreshAccounts();
-    fetchCampaignsApi().then(setCampaigns).catch(() => undefined);
+    fetchCampaignsApi()
+      .then(setCampaigns)
+      .catch(() => undefined);
 
     setBannerOpen(readFlag(BANNER_KEY) !== "dismissed");
     setLayout(readFlag(LAYOUT_KEY) === "grid" ? "grid" : "list");
@@ -1328,40 +1507,65 @@ export default function SocialMediaTab() {
     const handle = params.get("handle");
 
     const messages: Record<string, string> = {
-      connected: handle ? `@${handle} connected successfully.` : "Account connected.",
+      connected: handle
+        ? `@${handle} connected successfully.`
+        : "Account connected.",
       access_denied: "Connection cancelled.",
       invalid_state: "Connection could not be verified. Please try again.",
-      invalid_session: "Your session changed during connection. Please try again.",
+      invalid_session:
+        "Your session changed during connection. Please try again.",
       connection_failed: "Could not connect that account.",
       not_configured: "That platform is not configured yet on this server.",
       not_authorised: "You are not authorised to manage social accounts.",
       invalid_platform: "Unknown platform.",
+      select_organization: "Choose which LinkedIn company page to connect.",
+      linkedin_org_scope_missing:
+        "LinkedIn didn't grant the company-page permissions this app needs. Check the Community Management API product's status in LinkedIn Developers and try again.",
+      linkedin_no_organizations: "No company pages found where this LinkedIn member is an administrator.",
     };
 
     setNotice({
       id: nowMs(),
       message: messages[socialStatus] ?? "Connection finished.",
-      tone: socialStatus === "connected" ? "success" : "error",
+      tone: socialStatus === "connected" || socialStatus === "select_organization" ? "success" : "error",
     });
+
+    if (socialStatus === "select_organization") {
+      setLinkedInOrgPickerSignal((value) => value + 1);
+    }
 
     const url = new URL(window.location.href);
     url.searchParams.delete("social");
     url.searchParams.delete("platform");
     url.searchParams.delete("missing");
     url.searchParams.delete("handle");
-    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}`);
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}`,
+    );
   }, [loaded, refreshAccounts]);
 
   const connectedAccountsByPlatform = useMemo(() => {
     const map = new Map<SocialPlatform, ApiAccount[]>();
     for (const row of accounts) {
-      map.set(row.platform, row.accounts.filter((account) => account.status === "CONNECTED"));
+      map.set(
+        row.platform,
+        row.accounts.filter((account) => account.status === "CONNECTED"),
+      );
     }
     return map;
   }, [accounts]);
 
   const totalConnectedAccounts = useMemo(
-    () => accounts.reduce((sum, row) => sum + row.accounts.filter((account) => account.status === "CONNECTED").length, 0),
+    () =>
+      accounts.reduce(
+        (sum, row) =>
+          sum +
+          row.accounts.filter((account) => account.status === "CONNECTED")
+            .length,
+        0,
+      ),
     [accounts],
   );
 
@@ -1382,8 +1586,13 @@ export default function SocialMediaTab() {
 
     return posts
       .filter((post) => {
-        if (statusFilter !== "ALL" && post.status !== statusFilter) return false;
-        if (platformFilter !== "ALL" && !post.platforms.includes(platformFilter)) return false;
+        if (statusFilter !== "ALL" && post.status !== statusFilter)
+          return false;
+        if (
+          platformFilter !== "ALL" &&
+          !post.platforms.includes(platformFilter)
+        )
+          return false;
         if (!term) return true;
         return (
           post.caption.toLowerCase().includes(term) ||
@@ -1393,7 +1602,10 @@ export default function SocialMediaTab() {
           )
         );
       })
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+      );
   }, [posts, query, statusFilter, platformFilter]);
 
   const nextScheduled = useMemo(() => {
@@ -1408,7 +1620,8 @@ export default function SocialMediaTab() {
         )
         .sort(
           (a, b) =>
-            new Date(a.scheduledAt!).getTime() - new Date(b.scheduledAt!).getTime(),
+            new Date(a.scheduledAt!).getTime() -
+            new Date(b.scheduledAt!).getTime(),
         )[0] ?? null
     );
   }, [posts]);
@@ -1423,29 +1636,67 @@ export default function SocialMediaTab() {
     );
   }, []);
 
-  const openCreate = useCallback((presetDate: string | null = null) => {
-    setComposer({ open: true, editingId: null, presetDate });
-  }, []);
+  const openCreate = useCallback(
+    (
+      presetDate: string | null = null,
+      presetCaption: string | null = null,
+      presetAsset: PresetAsset | null = null,
+    ) => {
+      setComposer({
+        open: true,
+        editingId: null,
+        presetDate,
+        presetCaption,
+        presetAsset,
+      });
+    },
+    [],
+  );
 
   const openEdit = useCallback((id: string) => {
-    setComposer({ open: true, editingId: id, presetDate: null });
+    setComposer({
+      open: true,
+      editingId: id,
+      presetDate: null,
+      presetCaption: null,
+      presetAsset: null,
+    });
   }, []);
 
   const closeComposer = useCallback(() => setComposer(CLOSED_COMPOSER), []);
+
+  /** Writing a post is a full-bleed workspace, exactly like the Graphic
+   *  and Video studios: the same "it takes over the whole dashboard
+   *  content area" behaviour rather than a dialog floating over the
+   *  tab. All three go through this one condition, so the sub-nav and
+   *  tab body hide for every one of them identically. */
+  useEffect(() => {
+    setFull(graphicWizardOpen || videoWizardOpen || composer.open);
+    return () => setFull(false);
+  }, [graphicWizardOpen, videoWizardOpen, composer.open, setFull]);
 
   /** Saves the post, then runs whatever workflow step the chosen status needs.
    *  Returns an error message to show in the composer, or null on success.
    *  The composer handles its own close animation after a successful save. */
   const savePost = useCallback(
-    async (form: PostForm, editingId: string | null): Promise<string | null> => {
+    async (
+      form: PostForm,
+      editingId: string | null,
+    ): Promise<string | null> => {
       const targets: CreatePostPayload["targets"] = [];
       for (const platform of form.platforms) {
-        const account = connectedAccountsByPlatform.get(platform)?.[0];
+        const platformAccounts = connectedAccountsByPlatform.get(platform);
+        const account =
+          platform === "LINKEDIN" && form.linkedinAccountId
+            ? (platformAccounts?.find((candidate) => candidate.id === form.linkedinAccountId) ?? platformAccounts?.[0])
+            : platformAccounts?.[0];
         if (!account) continue;
         targets.push({
           accountId: account.id,
           caption: form.platformCaptions[platform]?.trim() || null,
-          ...(platform === "INSTAGRAM" ? { placement: form.instagramPlacement } : {}),
+          ...(platform === "INSTAGRAM"
+            ? { placement: form.instagramPlacement }
+            : {}),
           ...(platform === "TIKTOK"
             ? {
                 metadata: {
@@ -1473,7 +1724,9 @@ export default function SocialMediaTab() {
 
       let current: SocialPost;
       try {
-        current = editingId ? await updatePostApi(editingId, payload) : await createPostApi(payload);
+        current = editingId
+          ? await updatePostApi(editingId, payload)
+          : await createPostApi(payload);
       } catch (error) {
         return errorMessage(error, "Unable to save this post.");
       }
@@ -1483,7 +1736,9 @@ export default function SocialMediaTab() {
       let message = savedLabel;
 
       try {
-        const needsSubmit = current.realStatus === "DRAFT" || current.realStatus === "CHANGES_REQUESTED";
+        const needsSubmit =
+          current.realStatus === "DRAFT" ||
+          current.realStatus === "CHANGES_REQUESTED";
 
         if (form.status === "READY" && needsSubmit) {
           current = await submitPostApi(current.id);
@@ -1495,11 +1750,16 @@ export default function SocialMediaTab() {
           const iso = new Date(form.scheduledAt).toISOString();
           const sameTime =
             current.scheduledAt !== null &&
-            localDateTimeValue(new Date(current.scheduledAt)) === form.scheduledAt;
-          const alreadyHandled = POST_SCHEDULE_STATES.includes(current.realStatus) && sameTime;
+            localDateTimeValue(new Date(current.scheduledAt)) ===
+              form.scheduledAt;
+          const alreadyHandled =
+            POST_SCHEDULE_STATES.includes(current.realStatus) && sameTime;
 
           if (!alreadyHandled) {
-            if (current.realStatus === "DRAFT" || current.realStatus === "CHANGES_REQUESTED") {
+            if (
+              current.realStatus === "DRAFT" ||
+              current.realStatus === "CHANGES_REQUESTED"
+            ) {
               current = await submitPostApi(current.id);
               upsertPost(current);
             }
@@ -1511,13 +1771,18 @@ export default function SocialMediaTab() {
                 current = await approvePostApi(current.id);
                 upsertPost(current);
               } catch {
-                notify("Submitted for review. It can be scheduled once it's approved.");
+                notify(
+                  "Submitted for review. It can be scheduled once it's approved.",
+                );
                 setHighlightId(current.id);
                 return null;
               }
             }
 
-            if (current.realStatus === "APPROVED" || current.realStatus === "SCHEDULED") {
+            if (
+              current.realStatus === "APPROVED" ||
+              current.realStatus === "SCHEDULED"
+            ) {
               current = await schedulePostApi(current.id, iso);
               upsertPost(current);
               message = `Scheduled for ${formatDateTime(iso)}`;
@@ -1545,11 +1810,16 @@ export default function SocialMediaTab() {
   const deletePost = useCallback(
     (id: string) => {
       const target = posts.find((post) => post.id === id);
-      const isPublished = target?.realStatus === "PUBLISHED" || target?.realStatus === "PARTIALLY_PUBLISHED";
+      const isPublished =
+        target?.realStatus === "PUBLISHED" ||
+        target?.realStatus === "PARTIALLY_PUBLISHED";
       const isScheduled = target?.realStatus === "SCHEDULED";
 
       if (target?.realStatus === "PUBLISHING") {
-        notifyError(null, "This post is currently publishing and can't be deleted yet. Try again in a moment.");
+        notifyError(
+          null,
+          "This post is currently publishing and can't be deleted yet. Try again in a moment.",
+        );
         return;
       }
 
@@ -1568,7 +1838,9 @@ export default function SocialMediaTab() {
               },
             }
           : {
-              title: isScheduled ? "Delete scheduled post?" : "Delete this post?",
+              title: isScheduled
+                ? "Delete scheduled post?"
+                : "Delete this post?",
               description: isScheduled
                 ? "This will remove the post from Syntra Grid and cancel any pending publication."
                 : "It's removed from the pipeline and the calendar. This can't be undone.",
@@ -1591,7 +1863,10 @@ export default function SocialMediaTab() {
         const duplicate = await duplicatePostApi(id);
         upsertPost(duplicate);
         setHighlightId(duplicate.id);
-        notify("Duplicated as a draft", { label: "Open", run: () => openEdit(duplicate.id) });
+        notify("Duplicated as a draft", {
+          label: "Open",
+          run: () => openEdit(duplicate.id),
+        });
       } catch (error) {
         notifyError(error, "Unable to duplicate this post.");
       }
@@ -1600,7 +1875,11 @@ export default function SocialMediaTab() {
   );
 
   const runWorkflowAction = useCallback(
-    async (id: string, action: (id: string) => Promise<SocialPost>, successMessage: string) => {
+    async (
+      id: string,
+      action: (id: string) => Promise<SocialPost>,
+      successMessage: string,
+    ) => {
       try {
         const updated = await action(id);
         upsertPost(updated);
@@ -1614,20 +1893,38 @@ export default function SocialMediaTab() {
     [notify, notifyError, upsertPost],
   );
 
-  const submitForReview = useCallback((id: string) => runWorkflowAction(id, submitPostApi, "Submitted for review"), [runWorkflowAction]);
-  const approvePostAction = useCallback((id: string) => runWorkflowAction(id, approvePostApi, "Approved"), [runWorkflowAction]);
-  const cancelPostAction = useCallback((id: string) => runWorkflowAction(id, cancelPostApi, "Post cancelled"), [runWorkflowAction]);
+  const submitForReview = useCallback(
+    (id: string) =>
+      runWorkflowAction(id, submitPostApi, "Submitted for review"),
+    [runWorkflowAction],
+  );
+  const approvePostAction = useCallback(
+    (id: string) => runWorkflowAction(id, approvePostApi, "Approved"),
+    [runWorkflowAction],
+  );
+  const cancelPostAction = useCallback(
+    (id: string) => runWorkflowAction(id, cancelPostApi, "Post cancelled"),
+    [runWorkflowAction],
+  );
 
   const requestChangesAction = useCallback(
     (id: string, notes: string) =>
-      runWorkflowAction(id, (postId) => requestChangesApi(postId, notes), "Changes requested"),
+      runWorkflowAction(
+        id,
+        (postId) => requestChangesApi(postId, notes),
+        "Changes requested",
+      ),
     [runWorkflowAction],
   );
 
   const schedulePostAction = useCallback(
     (id: string, scheduledAtLocal: string) => {
       const iso = new Date(scheduledAtLocal).toISOString();
-      return runWorkflowAction(id, (postId) => schedulePostApi(postId, iso), `Scheduled for ${formatDateTime(iso)}`);
+      return runWorkflowAction(
+        id,
+        (postId) => schedulePostApi(postId, iso),
+        `Scheduled for ${formatDateTime(iso)}`,
+      );
     },
     [runWorkflowAction],
   );
@@ -1646,13 +1943,26 @@ export default function SocialMediaTab() {
         const failed = attempted.filter((result) => !result.ok).length;
 
         if (attempted.length === 0) {
-          notify("Nothing left to publish — every destination already succeeded.");
+          notify(
+            "Nothing left to publish — every destination already succeeded.",
+          );
         } else if (failed === 0) {
-          notify(succeeded === 1 ? "Published." : `Published to all ${succeeded} destinations.`);
+          notify(
+            succeeded === 1
+              ? "Published."
+              : `Published to all ${succeeded} destinations.`,
+          );
         } else if (succeeded > 0) {
-          notify(`Published to ${succeeded} of ${attempted.length} destinations — ${failed} failed. See below for details.`);
+          notify(
+            `Published to ${succeeded} of ${attempted.length} destinations — ${failed} failed. See below for details.`,
+          );
         } else {
-          notifyError(new Error("Every destination failed to publish — see below for details."), "Publishing failed.");
+          notifyError(
+            new Error(
+              "Every destination failed to publish — see below for details.",
+            ),
+            "Publishing failed.",
+          );
         }
 
         return true;
@@ -1674,7 +1984,8 @@ export default function SocialMediaTab() {
     (account: ApiAccount) => {
       setDialog({
         title: `Disconnect ${account.accountName}?`,
-        description: "Scheduled posts for this account won't publish until it's connected again.",
+        description:
+          "Scheduled posts for this account won't publish until it's connected again.",
         confirmLabel: "Disconnect",
         tone: "danger",
         onConfirm: async () => {
@@ -1707,7 +2018,14 @@ export default function SocialMediaTab() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (composer.open || dialog || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (
+        composer.open ||
+        dialog ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey
+      )
+        return;
       if (isTypingTarget(event.target)) return;
 
       if (event.key === "n" || event.key === "N") {
@@ -1727,14 +2045,20 @@ export default function SocialMediaTab() {
 
   /* Sliding tab indicator ----------------------------------------------------- */
 
-  const tabRefs = useRef<Partial<Record<WorkspaceView, HTMLButtonElement | null>>>({});
-  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null);
+  const tabRefs = useRef<
+    Partial<Record<WorkspaceView, HTMLButtonElement | null>>
+  >({});
+  const [indicator, setIndicator] = useState<{
+    left: number;
+    width: number;
+  } | null>(null);
   const [indicatorReady, setIndicatorReady] = useState(false);
 
   useIsoLayoutEffect(() => {
     const measure = () => {
       const element = tabRefs.current[view];
-      if (element) setIndicator({ left: element.offsetLeft, width: element.offsetWidth });
+      if (element)
+        setIndicator({ left: element.offsetLeft, width: element.offsetWidth });
     };
     measure();
     window.addEventListener("resize", measure);
@@ -1748,210 +2072,266 @@ export default function SocialMediaTab() {
   }, [indicator, indicatorReady]);
 
   const editingPost = composer.editingId
-    ? posts.find((post) => post.id === composer.editingId) ?? null
+    ? (posts.find((post) => post.id === composer.editingId) ?? null)
     : null;
 
   /* Render ------------------------------------------------------------------- */
 
   return (
-    <div className="w-full min-w-0 space-y-6 pb-10">
+    <>
+      {/* Mounted unconditionally: the full-bleed workspaces below use the
+          same sg-* animations, so the stylesheet can't live inside the
+          branch that unmounts when one of them opens. */}
       <style>{SG_STYLES}</style>
 
-      {/* Header */}
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-[var(--text)] sm:text-[30px]">
-            Social media
-          </h1>
-          <p className="mt-1.5 max-w-[560px] text-[12.5px] leading-6 text-[var(--text-muted)]">
-            Plan, write, review and schedule Syntra Grid&apos;s posts across every channel.
-          </p>
-        </div>
+      {!fullWorkspace && (
+        <div className="w-full min-w-0 space-y-6 pb-10">
+          {/* Header */}
+          <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="min-w-0">
+              <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-[var(--text)] sm:text-[30px]">
+                Social media
+              </h1>
+              <p className="mt-1.5 max-w-[560px] text-[12.5px] leading-6 text-[var(--text-muted)]">
+                Plan, write, review and schedule Syntra Grid&apos;s posts across
+                every channel.
+              </p>
+            </div>
 
-        <div className="flex items-center gap-3">
-          <div className="hidden -space-x-1.5 sm:flex" aria-hidden>
-            {PLATFORMS.map((platform) => (
-              <PlatformMark key={platform.id} platform={platform.id} size="md" ring />
-            ))}
-          </div>
+            <div className="flex items-center gap-3">
+              <div className="hidden -space-x-1.5 sm:flex" aria-hidden>
+                {PLATFORMS.map((platform) => (
+                  <PlatformMark
+                    key={platform.id}
+                    platform={platform.id}
+                    size="md"
+                    ring
+                  />
+                ))}
+              </div>
 
-          <button type="button" onClick={() => openCreate()} className={cx(BTN_PRIMARY, FOCUS)}>
-            <Plus size={15} />
-            Create post
-            <Kbd inverse className="hidden sm:inline-flex">
-              N
-            </Kbd>
-          </button>
-        </div>
-      </header>
-
-      {/* Section tabs */}
-      <nav className="flex items-end justify-between gap-4 border-b border-[var(--line)]">
-        <div
-          role="tablist"
-          aria-label="Social media sections"
-          className="sg-noscrollbar relative -mb-px flex min-w-0 gap-1 overflow-x-auto"
-        >
-          {NAVIGATION.map((item) => {
-            const Icon = item.icon;
-            const active = view === item.id;
-            const badge =
-              item.id === "content"
-                ? counts.total
-                : item.id === "publishing"
-                  ? counts.SCHEDULED
-                  : 0;
-
-            return (
               <button
-                key={item.id}
-                ref={(node) => {
-                  tabRefs.current[item.id] = node;
-                }}
                 type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setView(item.id)}
-                className={cx(
-                  "inline-flex h-11 shrink-0 items-center gap-2 rounded-t-lg px-3 text-[12px] font-medium transition-colors duration-150",
-                  FOCUS_INSET,
-                  active ? "text-[var(--text)]" : "text-[var(--text-muted)] hover:text-[var(--text)]",
-                )}
+                onClick={() => openCreate()}
+                className={cx(BTN_PRIMARY, FOCUS)}
               >
-                <Icon
-                  size={15}
-                  className={cx("transition-colors duration-150", active && "text-[var(--accent)]")}
-                />
-                {item.label}
-                {badge > 0 && (
-                  <span
+                <Plus size={15} />
+                Create post
+                <Kbd inverse className="hidden sm:inline-flex">
+                  N
+                </Kbd>
+              </button>
+            </div>
+          </header>
+
+          {/* Section tabs */}
+          <nav className="flex items-end justify-between gap-4 border-b border-[var(--line)]">
+            <div
+              role="tablist"
+              aria-label="Social media sections"
+              className="sg-noscrollbar relative -mb-px flex min-w-0 gap-1 overflow-x-auto"
+            >
+              {NAVIGATION.map((item) => {
+                const Icon = item.icon;
+                const active = view === item.id;
+                const badge =
+                  item.id === "content"
+                    ? counts.total
+                    : item.id === "publishing"
+                      ? counts.SCHEDULED
+                      : 0;
+
+                return (
+                  <button
+                    key={item.id}
+                    ref={(node) => {
+                      tabRefs.current[item.id] = node;
+                    }}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setView(item.id)}
                     className={cx(
-                      "rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums transition-colors duration-150",
-                      active ? ACCENT_SOFT : "bg-[var(--surface-muted)] text-[var(--text-muted)]",
+                      "inline-flex h-11 shrink-0 items-center gap-2 rounded-t-lg px-3 text-[12px] font-medium transition-colors duration-150",
+                      FOCUS_INSET,
+                      active
+                        ? "text-[var(--text)]"
+                        : "text-[var(--text-muted)] hover:text-[var(--text)]",
                     )}
                   >
-                    {badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+                    <Icon
+                      size={15}
+                      className={cx(
+                        "transition-colors duration-150",
+                        active && "text-[var(--accent)]",
+                      )}
+                    />
+                    {item.label}
+                    {badge > 0 && (
+                      <span
+                        className={cx(
+                          "rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums transition-colors duration-150",
+                          active
+                            ? ACCENT_SOFT
+                            : "bg-[var(--surface-muted)] text-[var(--text-muted)]",
+                        )}
+                      >
+                        {badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
 
-          {indicator && (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute bottom-0 left-0 h-[2px] rounded-full bg-[var(--accent)]"
-              style={{
-                width: indicator.width,
-                transform: `translateX(${indicator.left}px)`,
-                transition: indicatorReady
-                  ? "transform .3s cubic-bezier(.2,.8,.2,1), width .3s cubic-bezier(.2,.8,.2,1)"
-                  : "none",
+              {indicator && (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute bottom-0 left-0 h-[2px] rounded-full bg-[var(--accent)]"
+                  style={{
+                    width: indicator.width,
+                    transform: `translateX(${indicator.left}px)`,
+                    transition: indicatorReady
+                      ? "transform .3s cubic-bezier(.2,.8,.2,1), width .3s cubic-bezier(.2,.8,.2,1)"
+                      : "none",
+                  }}
+                />
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                refreshPosts();
+                refreshAccounts();
               }}
-            />
-          )}
-        </div>
+              className={cx(
+                "mb-3.5 hidden shrink-0 items-center gap-1.5 rounded-md text-[10.5px] text-[var(--text-subtle)] transition hover:text-[var(--text)] md:inline-flex",
+                FOCUS,
+              )}
+            >
+              <RefreshCw
+                size={11}
+                className={
+                  postsStatus === "loading" || accountsStatus === "loading"
+                    ? "animate-spin"
+                    : undefined
+                }
+              />
+              Refresh
+            </button>
+          </nav>
 
-        <button
-          type="button"
-          onClick={() => {
-            refreshPosts();
-            refreshAccounts();
-          }}
-          className={cx(
-            "mb-3.5 hidden shrink-0 items-center gap-1.5 rounded-md text-[10.5px] text-[var(--text-subtle)] transition hover:text-[var(--text)] md:inline-flex",
-            FOCUS,
+          {/* Info banner */}
+          {bannerOpen && (
+            <div className="sg-fade flex items-start gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface-muted)] px-4 py-3">
+              <Info
+                size={15}
+                className="mt-0.5 shrink-0 text-[var(--accent)]"
+              />
+              <p className="min-w-0 flex-1 text-[11.5px] leading-5 text-[var(--text-muted)]">
+                <span className="font-semibold text-[var(--text)]">
+                  {totalConnectedAccounts > 0
+                    ? `${totalConnectedAccounts} account${totalConnectedAccounts === 1 ? "" : "s"} connected.`
+                    : "No accounts connected yet."}
+                </span>{" "}
+                Posts, campaigns and media are saved to Syntra Grid&apos;s
+                database. Scheduled posts publish automatically on channels with
+                a connected account.
+              </p>
+              <IconButton label="Dismiss" onClick={dismissBanner} size="sm">
+                <X size={13} />
+              </IconButton>
+            </div>
           )}
-        >
-          <RefreshCw
-            size={11}
-            className={postsStatus === "loading" || accountsStatus === "loading" ? "animate-spin" : undefined}
-          />
-          Refresh
-        </button>
-      </nav>
 
-      {/* Info banner */}
-      {bannerOpen && (
-        <div className="sg-fade flex items-start gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface-muted)] px-4 py-3">
-          <Info size={15} className="mt-0.5 shrink-0 text-[var(--accent)]" />
-          <p className="min-w-0 flex-1 text-[11.5px] leading-5 text-[var(--text-muted)]">
-            <span className="font-semibold text-[var(--text)]">
-              {totalConnectedAccounts > 0
-                ? `${totalConnectedAccounts} account${totalConnectedAccounts === 1 ? "" : "s"} connected.`
-                : "No accounts connected yet."}
-            </span>{" "}
-            Posts, campaigns and media are saved to Syntra Grid&apos;s database. Scheduled posts
-            publish automatically on channels with a connected account.
-          </p>
-          <IconButton label="Dismiss" onClick={dismissBanner} size="sm">
-            <X size={13} />
-          </IconButton>
+          {/* Views */}
+          <div key={view} className="sg-view">
+            {view === "content" && (
+              <ContentStudio
+                posts={filteredPosts}
+                counts={counts}
+                loading={!postsLoaded && postsStatus === "loading"}
+                failed={!postsLoaded && postsStatus === "error"}
+                highlightId={highlightId}
+                nextScheduled={nextScheduled}
+                query={query}
+                statusFilter={statusFilter}
+                platformFilter={platformFilter}
+                layout={layout}
+                searchRef={searchRef}
+                onRetry={refreshPosts}
+                onQueryChange={setQuery}
+                onStatusFilterChange={setStatusFilter}
+                onPlatformFilterChange={setPlatformFilter}
+                onLayoutChange={changeLayout}
+                onClearFilters={clearFilters}
+                onCreate={() => openCreate()}
+                onCreateWithBrief={(brief) => openCreate(null, brief)}
+                onEdit={openEdit}
+                onDuplicate={duplicatePost}
+                onDelete={deletePost}
+                onOpenGraphicWizard={() => setGraphicWizardOpen(true)}
+                onOpenVideoWizard={() => setVideoWizardOpen(true)}
+                onOpenSavedProject={openSavedProject}
+                projectsRefreshKey={projectsRefreshKey}
+              />
+            )}
+
+            {view === "trends" && (
+              <TrendIntelligenceHome
+                onGenerateGraphic={openGraphicFromTrend}
+                onGenerateVideo={openVideoFromTrend}
+                onGenerateAiVideo={openAiVideoFromTrend}
+                onAddToCalendar={(caption) => openCreate(null, caption)}
+              />
+            )}
+
+            {view === "publishing" && (
+              <PublishingWorkspace
+                posts={posts}
+                connectedAccounts={totalConnectedAccounts}
+                onCreate={openCreate}
+                onEdit={openEdit}
+              />
+            )}
+
+            {view === "accounts" && (
+              <AccountsWorkspace
+                platforms={accounts}
+                status={accountsStatus}
+                onRefresh={refreshAccounts}
+                onDisconnect={disconnectAccount}
+                linkedInOrgPickerSignal={linkedInOrgPickerSignal}
+              />
+            )}
+
+            {view === "engagement" && (
+              <EngagementWorkspace
+                connectedAccounts={totalConnectedAccounts}
+                onGoToAccounts={() => setView("accounts")}
+              />
+            )}
+
+            {view === "analytics" && <AnalyticsWorkspace />}
+          </div>
+
+          {dialog && (
+            <ActionDialog request={dialog} onClose={() => setDialog(null)} />
+          )}
         </div>
       )}
 
-      {/* Views */}
-      <div key={view} className="sg-view">
-        {view === "content" && (
-          <ContentStudio
-            posts={filteredPosts}
-            counts={counts}
-            loading={!postsLoaded && postsStatus === "loading"}
-            failed={!postsLoaded && postsStatus === "error"}
-            highlightId={highlightId}
-            nextScheduled={nextScheduled}
-            query={query}
-            statusFilter={statusFilter}
-            platformFilter={platformFilter}
-            layout={layout}
-            searchRef={searchRef}
-            onRetry={refreshPosts}
-            onQueryChange={setQuery}
-            onStatusFilterChange={setStatusFilter}
-            onPlatformFilterChange={setPlatformFilter}
-            onLayoutChange={changeLayout}
-            onClearFilters={clearFilters}
-            onCreate={() => openCreate()}
-            onEdit={openEdit}
-            onDuplicate={duplicatePost}
-            onDelete={deletePost}
-          />
-        )}
-
-        {view === "publishing" && (
-          <PublishingWorkspace
-            posts={posts}
-            connectedAccounts={totalConnectedAccounts}
-            onCreate={openCreate}
-            onEdit={openEdit}
-          />
-        )}
-
-        {view === "accounts" && (
-          <AccountsWorkspace
-            platforms={accounts}
-            status={accountsStatus}
-            onRefresh={refreshAccounts}
-            onDisconnect={disconnectAccount}
-          />
-        )}
-
-        {view === "engagement" && (
-          <EngagementWorkspace
-            connectedAccounts={totalConnectedAccounts}
-            onGoToAccounts={() => setView("accounts")}
-          />
-        )}
-
-        {view === "analytics" && <AnalyticsWorkspace />}
-      </div>
-
-      {/* Composer */}
+      {/* The three full-bleed workspaces. The composer sits out here
+          alongside the two studios rather than inside the branch above,
+          because opening it sets `full` — leaving it inside would unmount
+          it on the very next render. */}
       {composer.open && (
         <PostComposer
           key={composer.editingId ?? `new-${composer.presetDate ?? "blank"}`}
           post={editingPost}
           presetDate={composer.presetDate}
+          presetCaption={composer.presetCaption}
+          presetAsset={composer.presetAsset}
           campaigns={campaigns}
           connectedAccountsByPlatform={connectedAccountsByPlatform}
           onClose={closeComposer}
@@ -1967,10 +2347,62 @@ export default function SocialMediaTab() {
         />
       )}
 
-      {dialog && <ActionDialog request={dialog} onClose={() => setDialog(null)} />}
+      {graphicWizardOpen && (
+        <GraphicWorkspace
+          title={openGraphicProject?.title ?? "Untitled graphic"}
+          initialCanvasData={openGraphicProject?.canvasData ?? BLANK_CANVAS_DATA}
+          projectId={openGraphicProject?.id ?? null}
+          initialPanel={openGraphicProject ? "layers" : "ai"}
+          initialBrief={pendingGraphicBrief}
+          initialReferenceImage={pendingGraphicReference}
+          autoGenerateDesign={autoGenerateGraphic}
+          animateIntent={pendingGraphicAnimateIntent}
+          trendId={pendingGraphicTrendId ?? undefined}
+          onClose={closeGraphicWizard}
+          onCreateWithAsset={(brief, asset) => {
+            closeGraphicWizard();
+            openCreate(null, brief, asset);
+          }}
+          onAnimateWithAi={(source) => {
+            closeGraphicWizard();
+            animateImageFromGraphic(source);
+          }}
+        />
+      )}
 
-      {notice && <Toast key={notice.id} notice={notice} onDismiss={() => setNotice(null)} />}
-    </div>
+      {videoWizardOpen && (
+        <VideoWorkspace
+          title={openVideoProject?.title ?? "Untitled video"}
+          initialCanvasData={openVideoProject?.canvasData ?? blankVideoCanvasDataForPlatform(pendingVideoPlatform)}
+          projectId={openVideoProject?.id ?? null}
+          initialPanel={openVideoProject ? "scenes" : "concepts"}
+          initialBrief={pendingVideoBrief}
+          initialPlatform={pendingVideoPlatform}
+          initialVideoMode={pendingVideoMode}
+          initialReferenceImage={pendingVideoReference}
+          initialStartFrameImage={pendingVideoStartFrameImage}
+          autoGenerateConcepts={autoGenerateVideo}
+          onClose={closeVideoWizard}
+          onCreateWithAsset={(caption, asset) => {
+            closeVideoWizard();
+            openCreate(null, caption, asset);
+          }}
+          onProjectSaved={(projectId) => {
+            if (pendingVideoTrendId) void promoteTrendApi(pendingVideoTrendId, projectId).catch(() => undefined);
+          }}
+        />
+      )}
+
+      {/* Toasts float above whichever surface is showing, so a save made
+          inside a workspace still confirms itself. */}
+      {notice && (
+        <Toast
+          key={notice.id}
+          notice={notice}
+          onDismiss={() => setNotice(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -1978,13 +2410,23 @@ export default function SocialMediaTab() {
    TOAST
 ============================================================================= */
 
-function Toast({ notice, onDismiss }: { notice: Notice; onDismiss: () => void }) {
+function Toast({
+  notice,
+  onDismiss,
+}: {
+  notice: Notice;
+  onDismiss: () => void;
+}) {
   const [leaving, setLeaving] = useState(false);
   const [paused, setPaused] = useState(false);
 
   useEffect(() => {
     if (paused || leaving) return;
-    const duration = notice.action ? 6000 : notice.tone === "error" ? 5200 : 3200;
+    const duration = notice.action
+      ? 6000
+      : notice.tone === "error"
+        ? 5200
+        : 3200;
     const timeout = window.setTimeout(() => setLeaving(true), duration);
     return () => window.clearTimeout(timeout);
   }, [notice, paused, leaving]);
@@ -2047,7 +2489,13 @@ function Toast({ notice, onDismiss }: { notice: Notice; onDismiss: () => void })
    ACTION DIALOG (confirm / prompt)
 ============================================================================= */
 
-function ActionDialog({ request, onClose }: { request: DialogRequest; onClose: () => void }) {
+function ActionDialog({
+  request,
+  onClose,
+}: {
+  request: DialogRequest;
+  onClose: () => void;
+}) {
   const [value, setValue] = useState(request.input?.initial ?? "");
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -2076,7 +2524,9 @@ function ActionDialog({ request, onClose }: { request: DialogRequest; onClose: (
 
   useEffect(() => {
     const target =
-      textareaRef.current ?? inputRef.current ?? (danger ? cancelRef.current : confirmRef.current);
+      textareaRef.current ??
+      inputRef.current ??
+      (danger ? cancelRef.current : confirmRef.current);
     target?.focus({ preventScroll: true });
   }, [danger]);
 
@@ -2141,7 +2591,10 @@ function ActionDialog({ request, onClose }: { request: DialogRequest; onClose: (
           leaving && "is-leaving",
         )}
       >
-        <div className="mx-auto -mt-1 mb-3 h-1 w-10 rounded-full bg-[var(--line)] sm:hidden" aria-hidden />
+        <div
+          className="mx-auto -mt-1 mb-3 h-1 w-10 rounded-full bg-[var(--line)] sm:hidden"
+          aria-hidden
+        />
 
         <div className="flex items-start gap-3">
           {danger && (
@@ -2178,7 +2631,10 @@ function ActionDialog({ request, onClose }: { request: DialogRequest; onClose: (
                   setError(null);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  if (
+                    event.key === "Enter" &&
+                    (event.metaKey || event.ctrlKey)
+                  ) {
                     event.preventDefault();
                     void confirm();
                   }
@@ -2211,7 +2667,11 @@ function ActionDialog({ request, onClose }: { request: DialogRequest; onClose: (
         )}
 
         {error && (
-          <p key={error} role="alert" className="sg-shake mt-3 flex items-start gap-1.5 text-[11px] leading-5 text-red-600">
+          <p
+            key={error}
+            role="alert"
+            className="sg-shake mt-3 flex items-start gap-1.5 text-[11px] leading-5 text-red-600"
+          >
             <AlertCircle size={13} className="mt-0.5 shrink-0" />
             {error}
           </p>
@@ -2257,693 +2717,6 @@ function ActionDialog({ request, onClose }: { request: DialogRequest; onClose: (
 }
 
 /* =============================================================================
-   CONTENT STUDIO
-============================================================================= */
-
-function ContentStudio({
-  posts,
-  counts,
-  loading,
-  failed,
-  highlightId,
-  nextScheduled,
-  query,
-  statusFilter,
-  platformFilter,
-  layout,
-  searchRef,
-  onRetry,
-  onQueryChange,
-  onStatusFilterChange,
-  onPlatformFilterChange,
-  onLayoutChange,
-  onClearFilters,
-  onCreate,
-  onEdit,
-  onDuplicate,
-  onDelete,
-}: {
-  posts: SocialPost[];
-  counts: Counts;
-  loading: boolean;
-  failed: boolean;
-  highlightId: string | null;
-  nextScheduled: SocialPost | null;
-  query: string;
-  statusFilter: ContentFilter;
-  platformFilter: PlatformFilter;
-  layout: LibraryLayout;
-  searchRef: RefObject<HTMLInputElement | null>;
-  onRetry: () => void;
-  onQueryChange: (value: string) => void;
-  onStatusFilterChange: (value: ContentFilter) => void;
-  onPlatformFilterChange: (value: PlatformFilter) => void;
-  onLayoutChange: (value: LibraryLayout) => void;
-  onClearFilters: () => void;
-  onCreate: () => void;
-  onEdit: (id: string) => void;
-  onDuplicate: (id: string) => void;
-  onDelete: (id: string) => void;
-}) {
-  const filtering =
-    query.trim() !== "" || statusFilter !== "ALL" || platformFilter !== "ALL";
-
-  let body: ReactNode;
-  if (loading) {
-    body = <PostSkeleton layout={layout} />;
-  } else if (failed) {
-    body = (
-      <EmptyState
-        icon={AlertCircle}
-        title="Posts couldn't be loaded"
-        description="Check your connection, then try again."
-        action={
-          <button type="button" onClick={onRetry} className={cx(BTN_SECONDARY, FOCUS)}>
-            <RefreshCw size={14} />
-            Try again
-          </button>
-        }
-      />
-    );
-  } else if (posts.length === 0) {
-    body = (
-      <EmptyState
-        icon={filtering ? Search : Edit3}
-        title={filtering ? "No posts match" : "Write your first post"}
-        description={
-          filtering
-            ? "Try another search term, or clear the filters to see everything."
-            : "Drafts, posts waiting for review and scheduled posts all collect here."
-        }
-        action={
-          filtering ? (
-            <button type="button" onClick={onClearFilters} className={cx(BTN_SECONDARY, FOCUS)}>
-              Clear filters
-            </button>
-          ) : (
-            <button type="button" onClick={onCreate} className={cx(BTN_PRIMARY, FOCUS)}>
-              <Plus size={15} />
-              Create post
-            </button>
-          )
-        }
-      />
-    );
-  } else if (layout === "list") {
-    body = (
-      <div className="divide-y divide-[var(--line)] [&>*:last-child]:rounded-b-[22px]">
-        {posts.map((post) => (
-          <PostRow
-            key={post.id}
-            post={post}
-            highlighted={post.id === highlightId}
-            onEdit={() => onEdit(post.id)}
-            onDuplicate={() => onDuplicate(post.id)}
-            onDelete={() => onDelete(post.id)}
-          />
-        ))}
-      </div>
-    );
-  } else {
-    body = (
-      <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-3">
-        {posts.map((post) => (
-          <PostCard
-            key={post.id}
-            post={post}
-            highlighted={post.id === highlightId}
-            onEdit={() => onEdit(post.id)}
-            onDuplicate={() => onDuplicate(post.id)}
-            onDelete={() => onDelete(post.id)}
-          />
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-5">
-      <Pipeline
-        counts={counts}
-        loading={loading}
-        active={statusFilter}
-        onSelect={onStatusFilterChange}
-        nextScheduled={nextScheduled}
-        onOpen={onEdit}
-        onCreate={onCreate}
-      />
-
-      <section className={CARD}>
-        {/* Toolbar */}
-        <div className="flex flex-col gap-3 border-b border-[var(--line)] px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-baseline gap-2.5">
-            <h2 className="text-[14px] font-semibold tracking-[-0.01em] text-[var(--text)]">
-              Posts
-            </h2>
-            <span className="text-[11px] tabular-nums text-[var(--text-subtle)]">
-              {loading ? "" : filtering ? `${posts.length} of ${counts.total}` : counts.total}
-            </span>
-            {filtering && (
-              <button
-                type="button"
-                onClick={onClearFilters}
-                className={cx(
-                  "sg-fade rounded-md text-[11px] font-medium text-[var(--accent)] hover:underline",
-                  FOCUS,
-                )}
-              >
-                Clear filters
-              </button>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative w-full sm:w-[240px]">
-              <Search
-                size={14}
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]"
-              />
-              <input
-                ref={searchRef}
-                value={query}
-                onChange={(event) => onQueryChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    onQueryChange("");
-                    event.currentTarget.blur();
-                  }
-                }}
-                placeholder="Search posts"
-                aria-label="Search posts"
-                className={cx(INPUT, "h-9 bg-[var(--surface-muted)] pl-9 pr-9 text-[11.5px]")}
-              />
-              {query ? (
-                <button
-                  type="button"
-                  aria-label="Clear search"
-                  onClick={() => onQueryChange("")}
-                  className="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[var(--text-subtle)] hover:text-[var(--text)]"
-                >
-                  <X size={12} />
-                </button>
-              ) : (
-                <Kbd className="absolute right-2 top-1/2 -translate-y-1/2">/</Kbd>
-              )}
-            </div>
-
-            <Segmented label="Filter by channel">
-              <SegmentButton
-                active={platformFilter === "ALL"}
-                onClick={() => onPlatformFilterChange("ALL")}
-              >
-                All
-              </SegmentButton>
-              {PLATFORMS.map((platform) => (
-                <SegmentButton
-                  key={platform.id}
-                  active={platformFilter === platform.id}
-                  onClick={() => onPlatformFilterChange(platform.id)}
-                  title={platform.name}
-                >
-                  <PlatformMark platform={platform.id} size="xs" />
-                  <span className="sr-only">{platform.name}</span>
-                </SegmentButton>
-              ))}
-            </Segmented>
-
-            <Segmented label="Layout">
-              <SegmentButton
-                active={layout === "list"}
-                onClick={() => onLayoutChange("list")}
-                title="List view"
-              >
-                <List size={14} />
-                <span className="sr-only">List view</span>
-              </SegmentButton>
-              <SegmentButton
-                active={layout === "grid"}
-                onClick={() => onLayoutChange("grid")}
-                title="Grid view"
-              >
-                <LayoutGrid size={14} />
-                <span className="sr-only">Grid view</span>
-              </SegmentButton>
-            </Segmented>
-          </div>
-        </div>
-
-        <div key={`${layout}-${loading ? "loading" : "ready"}`} className="sg-fade">
-          {body}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function PostSkeleton({ layout }: { layout: LibraryLayout }) {
-  if (layout === "grid") {
-    return (
-      <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-3" aria-busy="true" aria-label="Loading posts">
-        {[0, 1, 2].map((index) => (
-          <div key={index} className="rounded-[18px] border border-[var(--line)] p-4">
-            <Skeleton className="h-7 w-16 rounded-[9px]" />
-            <Skeleton className="mt-4 h-2.5 w-full" />
-            <Skeleton className="mt-2 h-2.5 w-4/5" />
-            <Skeleton className="mt-2 h-2.5 w-3/5" />
-            <Skeleton className="mt-6 h-4 w-20" />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="divide-y divide-[var(--line)]" aria-busy="true" aria-label="Loading posts">
-      {[78, 62, 70, 54].map((width, index) => (
-        <div key={index} className="flex gap-4 px-4 py-4 sm:px-5">
-          <Skeleton className="h-7 w-7 rounded-[9px]" />
-          <div className="min-w-0 flex-1">
-            <Skeleton className="h-2.5" style={{ width: `${width}%` }} />
-            <Skeleton className="mt-2 h-2.5 w-2/5" />
-            <Skeleton className="mt-3.5 h-4 w-24" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* =============================================================================
-   PIPELINE (draft → review → scheduled)
-============================================================================= */
-
-function Pipeline({
-  counts,
-  loading,
-  active,
-  onSelect,
-  nextScheduled,
-  onOpen,
-  onCreate,
-}: {
-  counts: Counts;
-  loading: boolean;
-  active: ContentFilter;
-  onSelect: (value: ContentFilter) => void;
-  nextScheduled: SocialPost | null;
-  onOpen: (id: string) => void;
-  onCreate: () => void;
-}) {
-  return (
-    <section className={cx(CARD, "grid overflow-hidden lg:grid-cols-[minmax(0,1fr)_300px]")}>
-      <div className="p-4 sm:p-5">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-[13px] font-semibold text-[var(--text)]">Content pipeline</h2>
-          {active !== "ALL" && (
-            <button
-              type="button"
-              onClick={() => onSelect("ALL")}
-              className={cx(
-                "sg-fade rounded-md text-[11px] font-medium text-[var(--accent)] hover:underline",
-                FOCUS,
-              )}
-            >
-              Show all posts
-            </button>
-          )}
-        </div>
-
-        <div className="mt-4 flex items-stretch gap-1.5">
-          {STATUS_ORDER.map((status, index) => {
-            const meta = STATUS_META[status];
-            const selected = active === status;
-            const value = counts[status];
-
-            return (
-              <div key={status} className="flex min-w-0 flex-1 items-stretch gap-1.5">
-                <button
-                  type="button"
-                  aria-pressed={selected}
-                  onClick={() => onSelect(selected ? "ALL" : status)}
-                  className={cx(
-                    "min-w-0 flex-1 rounded-2xl border p-3 text-left transition-[border-color,background-color,box-shadow,transform] duration-200 active:scale-[0.985] sm:p-4",
-                    FOCUS,
-                    selected
-                      ? "border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_6%,var(--surface))] shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_12%,transparent)]"
-                      : "border-[var(--line)] hover:border-[color-mix(in_srgb,var(--text)_22%,var(--line))]",
-                  )}
-                >
-                  <span className="flex items-center gap-2 truncate text-[11px] font-medium text-[var(--text-muted)]">
-                    <Dot color={meta.hue} />
-                    {meta.short}
-                  </span>
-                  {loading ? (
-                    <Skeleton className="mt-2 h-[26px] w-10 rounded-lg sm:h-[30px]" />
-                  ) : (
-                    <span className="mt-2 block text-[26px] font-semibold leading-none tabular-nums tracking-[-0.04em] text-[var(--text)] sm:text-[30px]">
-                      {value}
-                    </span>
-                  )}
-                  <span className="mt-2 hidden truncate text-[10.5px] text-[var(--text-subtle)] sm:block">
-                    {meta.description}
-                  </span>
-                </button>
-
-                {index < STATUS_ORDER.length - 1 && (
-                  <ChevronRight
-                    size={14}
-                    aria-hidden
-                    className="hidden shrink-0 self-center text-[var(--text-subtle)] sm:block"
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div
-          className="mt-4 flex h-1.5 gap-0.5 overflow-hidden rounded-full bg-[var(--surface-muted)]"
-          aria-hidden
-        >
-          {counts.total > 0 &&
-            STATUS_ORDER.map((status) =>
-              counts[status] > 0 ? (
-                <span
-                  key={status}
-                  className="h-full rounded-full transition-[width] duration-500"
-                  style={{
-                    width: `${(counts[status] / counts.total) * 100}%`,
-                    background: STATUS_META[status].hue,
-                    opacity: status === "DRAFT" ? 0.45 : 1,
-                  }}
-                />
-              ) : null,
-            )}
-        </div>
-      </div>
-
-      {/* Next up */}
-      <div className="flex flex-col border-t border-[var(--line)] bg-[var(--surface-muted)] p-4 sm:p-5 lg:border-l lg:border-t-0">
-        <p className="text-[11px] font-medium text-[var(--text-muted)]">Next scheduled</p>
-
-        {loading ? (
-          <div className="mt-2 flex-1">
-            <Skeleton className="h-5 w-28 rounded-md" />
-            <Skeleton className="mt-2 h-2.5 w-36" />
-            <Skeleton className="mt-4 h-2.5 w-full" />
-            <Skeleton className="mt-2 h-2.5 w-3/4" />
-          </div>
-        ) : nextScheduled?.scheduledAt ? (
-          <button
-            type="button"
-            onClick={() => onOpen(nextScheduled.id)}
-            className={cx("group mt-2 flex flex-1 flex-col rounded-xl text-left", FOCUS)}
-          >
-            <span className="text-[18px] font-semibold tracking-[-0.025em] text-[var(--text)]">
-              {relativeTime(nextScheduled.scheduledAt)}
-            </span>
-            <span className="mt-0.5 text-[11px] tabular-nums text-[var(--text-muted)]">
-              {formatDateTime(nextScheduled.scheduledAt)}
-            </span>
-            <span className="mt-3 line-clamp-2 text-[11.5px] leading-5 text-[var(--text)]">
-              {nextScheduled.caption}
-            </span>
-            <span className="mt-auto flex items-center justify-between gap-2 pt-3">
-              <PlatformStack platforms={nextScheduled.platforms} />
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--accent)]">
-                Open
-                <ChevronRight size={13} className="transition-transform duration-200 group-hover:translate-x-0.5" />
-              </span>
-            </span>
-          </button>
-        ) : (
-          <div className="mt-2 flex flex-1 flex-col">
-            <span className="text-[15px] font-semibold tracking-[-0.02em] text-[var(--text)]">
-              Nothing scheduled
-            </span>
-            <span className="mt-1 text-[11px] leading-5 text-[var(--text-muted)]">
-              Give a post a date and time and it will show up here.
-            </span>
-            <button
-              type="button"
-              onClick={onCreate}
-              className={cx(BTN_SECONDARY, FOCUS, "mt-auto h-9 self-start px-3 text-[11px]")}
-            >
-              <CalendarDays size={13} />
-              Plan a post
-            </button>
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-/* =============================================================================
-   POST ROW / CARD
-============================================================================= */
-
-function PostRow({
-  post,
-  highlighted,
-  onEdit,
-  onDuplicate,
-  onDelete,
-}: {
-  post: SocialPost;
-  highlighted: boolean;
-  onEdit: () => void;
-  onDuplicate: () => void;
-  onDelete: () => void;
-}) {
-  return (
-    <div
-      className={cx(
-        "group flex gap-3.5 px-4 py-4 transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--surface-muted)_70%,transparent)] sm:gap-4 sm:px-5",
-        highlighted && "sg-flash",
-      )}
-    >
-      <div className="pt-0.5">
-        <PlatformStack platforms={post.platforms} size="md" />
-      </div>
-
-      <button
-        type="button"
-        onClick={onEdit}
-        className={cx("min-w-0 flex-1 rounded-lg text-left", FOCUS)}
-      >
-        {post.title && (
-          <p className="mb-0.5 truncate text-[11px] font-semibold text-[var(--text-muted)]">{post.title}</p>
-        )}
-        <p className="line-clamp-2 whitespace-pre-wrap text-[12.5px] leading-6 text-[var(--text)]">
-          {post.caption}
-        </p>
-        <span className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[10.5px] text-[var(--text-muted)]">
-          <StatusPill status={post.realStatus} />
-          {post.scheduledAt && (
-            <span className="inline-flex items-center gap-1 tabular-nums">
-              <Clock3 size={11} />
-              {formatDateTime(post.scheduledAt)}
-            </span>
-          )}
-          <span className="text-[var(--text-subtle)]">{editedLabel(post.updatedAt)}</span>
-        </span>
-      </button>
-
-      {post.image && (
-        <button
-          type="button"
-          onClick={onEdit}
-          aria-label="Edit post"
-          className={cx("relative hidden shrink-0 overflow-hidden rounded-xl border border-[var(--line)] sm:block", FOCUS)}
-        >
-          <MediaThumb src={post.image} type={post.imageType} className="h-14 w-14" />
-          {post.assetIds.length > 1 && (
-            <span className="absolute bottom-1 right-1 rounded-md bg-black/60 px-1 text-[9px] font-semibold text-white">
-              +{post.assetIds.length - 1}
-            </span>
-          )}
-        </button>
-      )}
-
-      <div className="flex shrink-0 items-start gap-1 transition-opacity duration-150 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-        <IconButton label="Edit post" onClick={onEdit}>
-          <Edit3 size={14} />
-        </IconButton>
-        <RowMenu onDuplicate={onDuplicate} onDelete={onDelete} deleteDisabled={post.realStatus === "PUBLISHING"} />
-      </div>
-    </div>
-  );
-}
-
-function PostCard({
-  post,
-  highlighted,
-  onEdit,
-  onDuplicate,
-  onDelete,
-}: {
-  post: SocialPost;
-  highlighted: boolean;
-  onEdit: () => void;
-  onDuplicate: () => void;
-  onDelete: () => void;
-}) {
-  return (
-    <article
-      className={cx(
-        "flex flex-col rounded-[18px] border border-[var(--line)] bg-[var(--surface)] p-4 transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-[color-mix(in_srgb,var(--accent)_35%,var(--line))] hover:shadow-[0_14px_30px_-18px_rgba(0,0,0,0.35)]",
-        highlighted && "sg-flash",
-      )}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <PlatformStack platforms={post.platforms} size="md" />
-        <RowMenu onDuplicate={onDuplicate} onDelete={onDelete} deleteDisabled={post.realStatus === "PUBLISHING"} />
-      </div>
-
-      {post.image && (
-        <button
-          type="button"
-          onClick={onEdit}
-          aria-label="Edit post"
-          className={cx("relative mt-3 overflow-hidden rounded-xl border border-[var(--line)]", FOCUS)}
-        >
-          <MediaThumb src={post.image} type={post.imageType} className="aspect-[4/3] w-full" />
-          {post.assetIds.length > 1 && (
-            <span className="absolute bottom-2 right-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-              1 / {post.assetIds.length}
-            </span>
-          )}
-        </button>
-      )}
-
-      <button type="button" onClick={onEdit} className={cx("mt-3 flex-1 rounded-lg text-left", FOCUS)}>
-        {post.title && (
-          <p className="mb-1 truncate text-[11px] font-semibold text-[var(--text-muted)]">{post.title}</p>
-        )}
-        <p className={cx(post.image ? "line-clamp-3" : "line-clamp-5", "whitespace-pre-wrap text-[12.5px] leading-6 text-[var(--text)]")}>
-          {post.caption}
-        </p>
-      </button>
-
-      <div className="mt-4 flex items-center justify-between gap-2 border-t border-[var(--line)] pt-3">
-        <StatusPill status={post.realStatus} />
-        <span className="truncate text-[10.5px] tabular-nums text-[var(--text-subtle)]">
-          {post.scheduledAt ? formatDateTime(post.scheduledAt) : editedLabel(post.updatedAt)}
-        </span>
-      </div>
-    </article>
-  );
-}
-
-function RowMenu({
-  onDuplicate,
-  onDelete,
-  deleteDisabled,
-}: {
-  onDuplicate: () => void;
-  onDelete: () => void;
-  deleteDisabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const onPointerDown = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative">
-      <IconButton label="More actions" onClick={() => setOpen((value) => !value)} expanded={open}>
-        <MoreHorizontal size={15} />
-      </IconButton>
-
-      {open && (
-        <div
-          role="menu"
-          className="sg-pop absolute right-0 top-full z-30 mt-1.5 w-48 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-1 shadow-[0_16px_40px_-16px_rgba(0,0,0,0.35)]"
-        >
-          <MenuItem
-            icon={Copy}
-            onClick={() => {
-              setOpen(false);
-              onDuplicate();
-            }}
-          >
-            Duplicate as draft
-          </MenuItem>
-          <MenuItem
-            icon={Trash2}
-            danger
-            disabled={deleteDisabled}
-            title={deleteDisabled ? "This post is currently publishing and can't be deleted yet." : undefined}
-            onClick={() => {
-              if (deleteDisabled) return;
-              setOpen(false);
-              onDelete();
-            }}
-          >
-            {deleteDisabled ? "Publishing…" : "Delete post"}
-          </MenuItem>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MenuItem({
-  icon: Icon,
-  danger,
-  disabled,
-  title,
-  onClick,
-  children,
-}: {
-  icon: IconType;
-  danger?: boolean;
-  disabled?: boolean;
-  title?: string;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      disabled={disabled}
-      title={title}
-      onClick={onClick}
-      className={cx(
-        "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[11.5px] font-medium transition-colors duration-150",
-        FOCUS_INSET,
-        disabled
-          ? "cursor-not-allowed text-[var(--text-subtle)]"
-          : danger
-            ? "text-red-600 hover:bg-red-500/10"
-            : "text-[var(--text)] hover:bg-[var(--surface-muted)]",
-      )}
-    >
-      <Icon size={14} />
-      {children}
-    </button>
-  );
-}
-
-/* =============================================================================
    PUBLISHING WORKSPACE
 ============================================================================= */
 
@@ -2971,7 +2744,8 @@ function PublishingWorkspace({
         .filter((post) => post.scheduledAt)
         .sort(
           (a, b) =>
-            new Date(a.scheduledAt!).getTime() - new Date(b.scheduledAt!).getTime(),
+            new Date(a.scheduledAt!).getTime() -
+            new Date(b.scheduledAt!).getTime(),
         ),
     [posts],
   );
@@ -2981,7 +2755,8 @@ function PublishingWorkspace({
     return scheduled
       .filter(
         (post) =>
-          (post.realStatus === "SCHEDULED" || post.realStatus === "PUBLISHING") &&
+          (post.realStatus === "SCHEDULED" ||
+            post.realStatus === "PUBLISHING") &&
           new Date(post.scheduledAt!).getTime() >= now,
       )
       .slice(0, 6);
@@ -3001,7 +2776,8 @@ function PublishingWorkspace({
     const offset = (first.getDay() + 6) % 7;
     return Array.from(
       { length: 42 },
-      (_, index) => new Date(first.getFullYear(), first.getMonth(), 1 - offset + index),
+      (_, index) =>
+        new Date(first.getFullYear(), first.getMonth(), 1 - offset + index),
     );
   }, [month]);
 
@@ -3010,7 +2786,8 @@ function PublishingWorkspace({
   const canPlanSelected = selected >= todayKey;
 
   const planFor = (key: string) => {
-    const preset = key === todayKey ? localDateTimeValue(nextFullHour()) : `${key}T09:00`;
+    const preset =
+      key === todayKey ? localDateTimeValue(nextFullHour()) : `${key}T09:00`;
     onCreate(preset);
   };
 
@@ -3020,7 +2797,10 @@ function PublishingWorkspace({
   };
 
   const changeMonth = (offset: number) =>
-    setMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+    setMonth(
+      (current) =>
+        new Date(current.getFullYear(), current.getMonth() + offset, 1),
+    );
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_330px]">
@@ -3028,11 +2808,15 @@ function PublishingWorkspace({
       <section className={cx(CARD, "overflow-hidden")}>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-4 sm:px-5">
           <div>
-            <h2 key={monthLabel(month)} className="sg-fade text-[17px] font-semibold tracking-[-0.025em] text-[var(--text)]">
+            <h2
+              key={monthLabel(month)}
+              className="sg-fade text-[17px] font-semibold tracking-[-0.025em] text-[var(--text)]"
+            >
               {monthLabel(month)}
             </h2>
             <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
-              Select a day to see its posts. Double-click a future day to plan one.
+              Select a day to see its posts. Double-click a future day to plan
+              one.
             </p>
           </div>
 
@@ -3044,10 +2828,18 @@ function PublishingWorkspace({
             >
               Today
             </button>
-            <IconButton label="Previous month" onClick={() => changeMonth(-1)} bordered>
+            <IconButton
+              label="Previous month"
+              onClick={() => changeMonth(-1)}
+              bordered
+            >
               <ChevronLeft size={15} />
             </IconButton>
-            <IconButton label="Next month" onClick={() => changeMonth(1)} bordered>
+            <IconButton
+              label="Next month"
+              onClick={() => changeMonth(1)}
+              bordered
+            >
               <ChevronRight size={15} />
             </IconButton>
           </div>
@@ -3088,7 +2880,8 @@ function PublishingWorkspace({
                   FOCUS_INSET,
                   index % 7 !== 6 && "border-r",
                   index < 35 && "border-b",
-                  !inMonth && "bg-[color-mix(in_srgb,var(--surface-muted)_60%,transparent)]",
+                  !inMonth &&
+                    "bg-[color-mix(in_srgb,var(--surface-muted)_60%,transparent)]",
                   isSelected
                     ? "bg-[color-mix(in_srgb,var(--accent)_7%,var(--surface))]"
                     : "hover:bg-[color-mix(in_srgb,var(--surface-muted)_80%,transparent)]",
@@ -3120,10 +2913,15 @@ function PublishingWorkspace({
                         className="flex min-w-0 items-center gap-1.5 rounded-md border-l-2 px-1.5 py-1 text-[9.5px]"
                         style={{ borderColor: hue, background: mix(hue, 9) }}
                       >
-                        <span className="shrink-0 font-semibold tabular-nums" style={{ color: hue }}>
+                        <span
+                          className="shrink-0 font-semibold tabular-nums"
+                          style={{ color: hue }}
+                        >
                           {formatTime(post.scheduledAt!)}
                         </span>
-                        <span className="truncate text-[var(--text)]">{post.caption}</span>
+                        <span className="truncate text-[var(--text)]">
+                          {post.caption}
+                        </span>
                       </span>
                     );
                   })}
@@ -3135,12 +2933,17 @@ function PublishingWorkspace({
                 </span>
 
                 {items.length > 0 && (
-                  <span className="mt-auto flex gap-0.5 pt-1 sm:hidden" aria-hidden>
+                  <span
+                    className="mt-auto flex gap-0.5 pt-1 sm:hidden"
+                    aria-hidden
+                  >
                     {items.slice(0, 3).map((post) => (
                       <span
                         key={post.id}
                         className="h-1.5 w-1.5 rounded-full"
-                        style={{ background: REAL_STATUS_META[post.realStatus].hue }}
+                        style={{
+                          background: REAL_STATUS_META[post.realStatus].hue,
+                        }}
                       />
                     ))}
                   </span>
@@ -3155,7 +2958,9 @@ function PublishingWorkspace({
       <aside className="space-y-5">
         <section className={cx(CARD, "p-4 sm:p-5")}>
           <div key={selected} className="sg-fade">
-            <p className="text-[11px] font-medium text-[var(--accent)]">{dayLabel(selectedDate)}</p>
+            <p className="text-[11px] font-medium text-[var(--accent)]">
+              {dayLabel(selectedDate)}
+            </p>
             <h3 className="mt-0.5 text-[16px] font-semibold tracking-[-0.02em] text-[var(--text)]">
               {formatLongDate(selectedDate)}
             </h3>
@@ -3212,7 +3017,9 @@ function PublishingWorkspace({
         </section>
 
         <section className={cx(CARD, "p-4 sm:p-5")}>
-          <h3 className="text-[13px] font-semibold text-[var(--text)]">Coming up</h3>
+          <h3 className="text-[13px] font-semibold text-[var(--text)]">
+            Coming up
+          </h3>
           <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
             {connectedAccounts > 0
               ? "These publish automatically at their scheduled time."
@@ -3241,7 +3048,9 @@ function PublishingWorkspace({
                           {date.getDate()}
                         </span>
                         <span className="mt-0.5 text-[9px] font-medium text-[var(--text-muted)]">
-                          {new Intl.DateTimeFormat("en-GB", { month: "short" }).format(date)}
+                          {new Intl.DateTimeFormat("en-GB", {
+                            month: "short",
+                          }).format(date)}
                         </span>
                       </span>
                       <span className="min-w-0 flex-1">
@@ -3249,7 +3058,8 @@ function PublishingWorkspace({
                           {post.caption}
                         </span>
                         <span className="mt-0.5 block text-[10.5px] tabular-nums text-[var(--text-muted)]">
-                          {formatTime(post.scheduledAt!)}, {relativeTime(post.scheduledAt!)}
+                          {formatTime(post.scheduledAt!)},{" "}
+                          {relativeTime(post.scheduledAt!)}
                         </span>
                       </span>
                     </button>
@@ -3277,16 +3087,30 @@ function AccountsWorkspace({
   status,
   onRefresh,
   onDisconnect,
+  linkedInOrgPickerSignal,
 }: {
   platforms: ApiPlatformRow[];
   status: LoadStatus;
   onRefresh: () => void;
   onDisconnect: (account: ApiAccount) => void;
+  linkedInOrgPickerSignal: number;
 }) {
   const benefits: Array<{ icon: IconType; title: string; text: string }> = [
-    { icon: Send, title: "Publish on schedule", text: "Scheduled posts go out at their planned time." },
-    { icon: Inbox, title: "Replies in one place", text: "Comments and mentions arrive in Engagement." },
-    { icon: Activity, title: "Post performance", text: "Reach and engagement for each published post." },
+    {
+      icon: Send,
+      title: "Publish on schedule",
+      text: "Scheduled posts go out at their planned time.",
+    },
+    {
+      icon: Inbox,
+      title: "Replies in one place",
+      text: "Comments and mentions arrive in Engagement.",
+    },
+    {
+      icon: Activity,
+      title: "Post performance",
+      text: "Reach and engagement for each published post.",
+    },
   ];
 
   const rowsByPlatform = new Map(platforms.map((row) => [row.platform, row]));
@@ -3297,20 +3121,29 @@ function AccountsWorkspace({
       <section className={cx(CARD, "p-4 sm:p-5")}>
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-[14px] font-semibold text-[var(--text)]">Connected accounts</h2>
+            <h2 className="text-[14px] font-semibold text-[var(--text)]">
+              Connected accounts
+            </h2>
             <p className="mt-1 text-[11.5px] leading-5 text-[var(--text-muted)]">
-              Link Syntra Grid&apos;s profiles to publish posts and bring replies into this workspace.
+              Link Syntra Grid&apos;s profiles to publish posts and bring
+              replies into this workspace.
             </p>
           </div>
           <IconButton label="Refresh" onClick={onRefresh} bordered>
-            <RefreshCw size={14} className={status === "loading" ? "animate-spin" : undefined} />
+            <RefreshCw
+              size={14}
+              className={status === "loading" ? "animate-spin" : undefined}
+            />
           </IconButton>
         </div>
 
         <div className="mt-5 divide-y divide-[var(--line)] rounded-2xl border border-[var(--line)]">
           {PLATFORMS.map((platform) => {
             const row = rowsByPlatform.get(platform.id);
-            const connectedAccounts = row?.accounts.filter((account) => account.status === "CONNECTED") ?? [];
+            const connectedAccounts =
+              row?.accounts.filter(
+                (account) => account.status === "CONNECTED",
+              ) ?? [];
             const configured = row?.configured ?? false;
 
             return (
@@ -3320,7 +3153,9 @@ function AccountsWorkspace({
 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-[13px] font-semibold text-[var(--text)]">{platform.name}</h3>
+                      <h3 className="text-[13px] font-semibold text-[var(--text)]">
+                        {platform.name}
+                      </h3>
                       {firstLoad ? (
                         <Skeleton className="h-4 w-20" />
                       ) : connectedAccounts.length > 0 ? (
@@ -3341,11 +3176,13 @@ function AccountsWorkspace({
                       )}
                     </div>
                     <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
-                      {platform.description}, up to {platform.limit.toLocaleString("en-GB")} characters
+                      {platform.description}, up to{" "}
+                      {platform.limit.toLocaleString("en-GB")} characters
                     </p>
                     {!configured && row && row.requiredEnvVars.length > 0 && (
                       <p className="mt-1 text-[10px] text-[var(--text-subtle)]">
-                        Needs {row.requiredEnvVars.join(", ")} set on the server.
+                        Needs {row.requiredEnvVars.join(", ")} set on the
+                        server.
                       </p>
                     )}
                   </div>
@@ -3353,10 +3190,16 @@ function AccountsWorkspace({
                   {configured ? (
                     <a
                       href={`/api/admin/social-media/accounts/connect?platform=${platform.id}`}
-                      className={cx(BTN_SECONDARY, FOCUS, "h-9 px-3 text-[11px]")}
+                      className={cx(
+                        BTN_SECONDARY,
+                        FOCUS,
+                        "h-9 px-3 text-[11px]",
+                      )}
                     >
                       <Plus size={13} />
-                      {connectedAccounts.length > 0 ? "Connect another" : "Connect"}
+                      {connectedAccounts.length > 0
+                        ? "Connect another"
+                        : "Connect"}
                     </a>
                   ) : (
                     <button
@@ -3379,6 +3222,11 @@ function AccountsWorkspace({
                         className="flex items-center justify-between gap-2 rounded-xl bg-[var(--surface-muted)] px-3 py-2"
                       >
                         <span className="min-w-0 truncate text-[11px] text-[var(--text)]">
+                          {platform.id === "LINKEDIN" && (
+                            <span className="mr-1.5 inline-flex items-center rounded-full bg-[var(--surface)] px-1.5 py-0.5 text-[9.5px] font-semibold text-[var(--text-muted)]">
+                              {account.accountType === "ORGANIZATION" ? "Company Page" : "Personal Profile"}
+                            </span>
+                          )}
                           {account.accountName}
                           {account.username ? ` (@${account.username})` : ""}
                         </span>
@@ -3394,18 +3242,28 @@ function AccountsWorkspace({
                         </button>
                       </div>
                     ))}
-                    {platform.id === "LINKEDIN" && (
-                      <p className="px-1 text-[10px] text-[var(--text-subtle)]">
-                        Personal profile only: posts publish as this member. Company-page publishing
-                        isn&apos;t supported yet.
-                      </p>
-                    )}
                   </div>
                 )}
 
-                {row?.accounts.some((account) => account.status === "EXPIRED" || account.status === "ERROR") && (
+                {platform.id === "LINKEDIN" && (
+                  <div className="ml-0 sm:ml-[52px]">
+                    <LinkedInCompanyPageConnector
+                      configured={row?.organizationAppConfigured ?? false}
+                      requiredEnvVars={row?.organizationAppRequiredEnvVars ?? []}
+                      alreadyConnected={connectedAccounts.some((account) => account.accountType === "ORGANIZATION")}
+                      openSignal={linkedInOrgPickerSignal}
+                      onConnected={onRefresh}
+                    />
+                  </div>
+                )}
+
+                {row?.accounts.some(
+                  (account) =>
+                    account.status === "EXPIRED" || account.status === "ERROR",
+                ) && (
                   <p className="ml-0 text-[10.5px] text-red-600 sm:ml-[52px]">
-                    An account needs reconnecting. Its connection expired or failed.
+                    An account needs reconnecting. Its connection expired or
+                    failed.
                   </p>
                 )}
               </div>
@@ -3415,31 +3273,207 @@ function AccountsWorkspace({
       </section>
 
       <aside className={cx(CARD, "p-4 sm:p-5")}>
-        <h3 className="text-[13px] font-semibold text-[var(--text)]">What connecting adds</h3>
+        <h3 className="text-[13px] font-semibold text-[var(--text)]">
+          What connecting adds
+        </h3>
 
         <ul className="mt-4 space-y-4">
           {benefits.map(({ icon: Icon, title, text }) => (
             <li key={title} className="flex gap-3">
-              <span className={cx("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", ACCENT_SOFT)}>
+              <span
+                className={cx(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+                  ACCENT_SOFT,
+                )}
+              >
                 <Icon size={14} />
               </span>
               <span>
-                <span className="block text-[11.5px] font-semibold text-[var(--text)]">{title}</span>
-                <span className="mt-0.5 block text-[11px] leading-5 text-[var(--text-muted)]">{text}</span>
+                <span className="block text-[11.5px] font-semibold text-[var(--text)]">
+                  {title}
+                </span>
+                <span className="mt-0.5 block text-[11px] leading-5 text-[var(--text-muted)]">
+                  {text}
+                </span>
               </span>
             </li>
           ))}
         </ul>
 
         <div className="mt-5 flex gap-3 border-t border-[var(--line)] pt-4">
-          <ShieldCheck size={16} className="mt-0.5 shrink-0 text-[var(--accent)]" />
+          <ShieldCheck
+            size={16}
+            className="mt-0.5 shrink-0 text-[var(--accent)]"
+          />
           <p className="text-[11px] leading-5 text-[var(--text-muted)]">
-            You sign in on each platform&apos;s own page. Syntra Grid never sees or stores your
-            social media passwords.
+            You sign in on each platform&apos;s own page. Syntra Grid never sees
+            or stores your social media passwords.
           </p>
         </div>
       </aside>
     </div>
+  );
+}
+
+/** "Connect a company page" button + its picker dialog, for the LinkedIn
+ *  row only. Fully independent of the personal-profile connection —
+ *  authorises against the separate Company Manager app. Never shows a
+ *  company page the member doesn't actually administer — the list
+ *  always comes from the fresh discovery the OAuth callback just ran
+ *  (fetchPendingLinkedInOrganizationsApi), nothing here caches or
+ *  trusts a stale/client-remembered result. */
+function LinkedInCompanyPageConnector({
+  configured,
+  requiredEnvVars,
+  alreadyConnected,
+  openSignal,
+  onConnected,
+}: {
+  /** Whether the SEPARATE "Company Manager" LinkedIn app (not the
+   *  personal-profile app above it) has its own env vars set. */
+  configured: boolean;
+  requiredEnvVars: string[];
+  alreadyConnected: boolean;
+  /** Bumped by the parent when the OAuth redirect returns with
+   *  ?social=select_organization — opens the picker automatically. */
+  openSignal: number;
+  onConnected: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState<LoadStatus>("loading");
+  const [organizations, setOrganizations] = useState<LinkedInOrganization[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+
+  useEffect(() => {
+    if (openSignal > 0) setOpen(true);
+  }, [openSignal]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setStatus("loading");
+    setError(null);
+    fetchPendingLinkedInOrganizationsApi().then((result) => {
+      if (cancelled) return;
+      if (!result.ok) {
+        setError(result.error);
+        setStatus("error");
+        return;
+      }
+      setOrganizations(result.organizations);
+      setSelectedId(result.organizations[0]?.id ?? null);
+      setStatus("ready");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const confirm = async () => {
+    if (!selectedId) return;
+    setConnecting(true);
+    setError(null);
+    try {
+      await connectLinkedInOrganizationApi(selectedId);
+      setOpen(false);
+      onConnected();
+    } catch (caught) {
+      setError(errorMessage(caught, "Couldn't connect that company page."));
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  return (
+    <>
+      {configured ? (
+        <a
+          href="/api/admin/social-media/accounts/connect?platform=LINKEDIN&linkedinApp=organization"
+          className={cx(BTN_SECONDARY, FOCUS, "h-9 w-fit px-3 text-[11px]")}
+        >
+          <Plus size={13} />
+          {alreadyConnected ? "Connect another company page" : "Connect a company page"}
+        </a>
+      ) : (
+        <div>
+          <button
+            type="button"
+            disabled
+            title="Set the Company Manager app's environment variables on the server first"
+            className={cx(BTN_SECONDARY, "h-9 px-3 text-[11px]")}
+          >
+            <Plus size={13} />
+            Connect a company page
+          </button>
+          {requiredEnvVars.length > 0 && (
+            <p className="mt-1 text-[10px] text-[var(--text-subtle)]">
+              Needs {requiredEnvVars.join(", ")} set on the server.
+            </p>
+          )}
+        </div>
+      )}
+
+      {open && (
+        <div
+          role="dialog"
+          aria-modal
+          aria-label="Connect a LinkedIn company page"
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 p-4"
+          onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}
+        >
+          <div className="w-full max-w-[420px] rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[var(--shadow-popover)]">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[13px] font-semibold text-[var(--text)]">LinkedIn — Company Page</h3>
+              <button type="button" onClick={() => setOpen(false)} aria-label="Close" className={cx("flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-subtle)] hover:bg-[var(--surface-muted)]", FOCUS)}>
+                <X size={14} />
+              </button>
+            </div>
+
+            {status === "loading" && (
+              <div className="mt-4 flex items-center justify-center py-6">
+                <Loader2 size={18} className="animate-spin text-[var(--text-subtle)]" />
+              </div>
+            )}
+
+            {status === "error" && (
+              <p className="mt-3 text-[11.5px] text-[var(--danger)]">{error}</p>
+            )}
+
+            {status === "ready" && organizations.length === 0 && (
+              <p className="mt-3 text-[11.5px] leading-5 text-[var(--text-muted)]">
+                No company pages found where this LinkedIn member is an administrator.
+              </p>
+            )}
+
+            {status === "ready" && organizations.length > 0 && (
+              <div className="mt-3 space-y-3">
+                <div className="space-y-1.5">
+                  {organizations.map((org) => (
+                    <label
+                      key={org.id}
+                      className={cx(
+                        "flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[11.5px] transition",
+                        selectedId === org.id ? "border-[var(--accent)] bg-[var(--accent-tint)]" : "border-[var(--line)] hover:border-[var(--line-strong)]",
+                      )}
+                    >
+                      <input type="radio" name="linkedin-org" checked={selectedId === org.id} onChange={() => setSelectedId(org.id)} className="shrink-0" />
+                      <span className="min-w-0 truncate text-[var(--text)]">{org.name}</span>
+                    </label>
+                  ))}
+                </div>
+                {error && <p className="text-[11px] text-[var(--danger)]">{error}</p>}
+                <button type="button" disabled={!selectedId || connecting} onClick={() => void confirm()} className={cx(BTN_PRIMARY, "h-9 w-full justify-center text-[11.5px]", "disabled:opacity-50")}>
+                  {connecting ? <Loader2 size={13} className="animate-spin" /> : null}
+                  Connect this page
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -3458,7 +3492,9 @@ function EngagementWorkspace({
     <section className={cx(CARD, "overflow-hidden")}>
       <div className="flex flex-col gap-3 border-b border-[var(--line)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div>
-          <h2 className="text-[14px] font-semibold text-[var(--text)]">Engagement</h2>
+          <h2 className="text-[14px] font-semibold text-[var(--text)]">
+            Engagement
+          </h2>
           <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
             Comments, mentions and messages from connected accounts.
           </p>
@@ -3466,7 +3502,12 @@ function EngagementWorkspace({
 
         <Segmented label="Filter conversations">
           {["All", "Comments", "Mentions", "Messages"].map((label, index) => (
-            <SegmentButton key={label} active={index === 0} disabled onClick={() => undefined}>
+            <SegmentButton
+              key={label}
+              active={index === 0}
+              disabled
+              onClick={() => undefined}
+            >
               {label}
             </SegmentButton>
           ))}
@@ -3483,7 +3524,10 @@ function EngagementWorkspace({
               <span className="h-9 w-9 shrink-0 rounded-full bg-[var(--surface-muted)]" />
               <span className="flex-1 space-y-2">
                 <span className="block h-2.5 w-28 rounded-full bg-[var(--surface-muted)]" />
-                <span className="block h-2.5 rounded-full bg-[var(--surface-muted)]" style={{ width: `${width}%` }} />
+                <span
+                  className="block h-2.5 rounded-full bg-[var(--surface-muted)]"
+                  style={{ width: `${width}%` }}
+                />
               </span>
               <span className="h-2.5 w-10 rounded-full bg-[var(--surface-muted)]" />
             </div>
@@ -3491,7 +3535,12 @@ function EngagementWorkspace({
         </div>
 
         <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center">
-          <span className={cx("flex h-12 w-12 items-center justify-center rounded-2xl", ACCENT_SOFT)}>
+          <span
+            className={cx(
+              "flex h-12 w-12 items-center justify-center rounded-2xl",
+              ACCENT_SOFT,
+            )}
+          >
             <MessageCircle size={20} />
           </span>
           <h3 className="mt-4 text-[15px] font-semibold tracking-[-0.015em] text-[var(--text)]">
@@ -3541,10 +3590,15 @@ function AnalyticsWorkspace() {
   }, [load]);
 
   const statusTiles = STATUS_ORDER.map((bucket) => {
-    const realStatuses = (Object.keys(REAL_STATUS_META) as RealPostStatus[]).filter(
-      (status) => statusBucket(status) === bucket,
-    );
-    const count = data ? realStatuses.reduce((sum, key) => sum + (data.postsByStatus[key] ?? 0), 0) : 0;
+    const realStatuses = (
+      Object.keys(REAL_STATUS_META) as RealPostStatus[]
+    ).filter((status) => statusBucket(status) === bucket);
+    const count = data
+      ? realStatuses.reduce(
+          (sum, key) => sum + (data.postsByStatus[key] ?? 0),
+          0,
+        )
+      : 0;
     return { bucket, count };
   });
 
@@ -3556,7 +3610,11 @@ function AnalyticsWorkspace() {
           title="Analytics couldn't be loaded"
           description="Check your connection, then try again."
           action={
-            <button type="button" onClick={load} className={cx(BTN_SECONDARY, FOCUS)}>
+            <button
+              type="button"
+              onClick={load}
+              className={cx(BTN_SECONDARY, FOCUS)}
+            >
               <RefreshCw size={14} />
               Try again
             </button>
@@ -3569,14 +3627,19 @@ function AnalyticsWorkspace() {
   return (
     <div className="space-y-5">
       <section className={cx(CARD, "p-4 sm:p-5")}>
-        <h2 className="text-[14px] font-semibold text-[var(--text)]">Content pipeline</h2>
+        <h2 className="text-[14px] font-semibold text-[var(--text)]">
+          Content pipeline
+        </h2>
         <p className="mt-1 text-[11.5px] leading-5 text-[var(--text-muted)]">
           Post counts from the database, by stage.
         </p>
 
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
           {statusTiles.map(({ bucket, count }) => (
-            <div key={bucket} className="rounded-2xl border border-[var(--line)] p-3.5">
+            <div
+              key={bucket}
+              className="rounded-2xl border border-[var(--line)] p-3.5"
+            >
               <p className="flex items-center gap-2 text-[10.5px] font-semibold text-[var(--text-muted)]">
                 <Dot color={STATUS_META[bucket].hue} />
                 {STATUS_META[bucket].short}
@@ -3584,7 +3647,9 @@ function AnalyticsWorkspace() {
               {status === "loading" ? (
                 <Skeleton className="mt-2 h-[22px] w-10 rounded-md" />
               ) : (
-                <p className="mt-1.5 text-[22px] font-semibold tabular-nums text-[var(--text)]">{count}</p>
+                <p className="mt-1.5 text-[22px] font-semibold tabular-nums text-[var(--text)]">
+                  {count}
+                </p>
               )}
             </div>
           ))}
@@ -3592,15 +3657,21 @@ function AnalyticsWorkspace() {
       </section>
 
       <section className={cx(CARD, "p-4 sm:p-5")}>
-        <h2 className="text-[14px] font-semibold text-[var(--text)]">Platform performance</h2>
+        <h2 className="text-[14px] font-semibold text-[var(--text)]">
+          Platform performance
+        </h2>
         <p className="mt-1 text-[11.5px] leading-5 text-[var(--text-muted)]">
-          Impressions, reach, likes, comments and shares from each platform&apos;s own API.
+          Impressions, reach, likes, comments and shares from each
+          platform&apos;s own API.
         </p>
 
         {status === "loading" ? (
           <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[0, 1, 2, 3].map((index) => (
-              <div key={index} className="rounded-2xl border border-[var(--line)] p-3.5">
+              <div
+                key={index}
+                className="rounded-2xl border border-[var(--line)] p-3.5"
+              >
                 <Skeleton className="h-2.5 w-16" />
                 <Skeleton className="mt-3 h-[18px] w-12 rounded-md" />
               </div>
@@ -3608,20 +3679,33 @@ function AnalyticsWorkspace() {
           </div>
         ) : !data?.hasMetrics ? (
           <div className="mt-6 flex flex-col items-center py-6 text-center">
-            <span className={cx("flex h-12 w-12 items-center justify-center rounded-2xl", ACCENT_SOFT)}>
+            <span
+              className={cx(
+                "flex h-12 w-12 items-center justify-center rounded-2xl",
+                ACCENT_SOFT,
+              )}
+            >
               <Activity size={20} />
             </span>
-            <h3 className="mt-4 text-[14px] font-semibold text-[var(--text)]">No analytics available yet</h3>
+            <h3 className="mt-4 text-[14px] font-semibold text-[var(--text)]">
+              No analytics available yet
+            </h3>
             <p className="mt-1.5 max-w-[360px] text-[11.5px] leading-5 text-[var(--text-muted)]">
-              Metrics appear once a connected account&apos;s posts have been synchronised with its
-              platform. Nothing is shown until that real data exists.
+              Metrics appear once a connected account&apos;s posts have been
+              synchronised with its platform. Nothing is shown until that real
+              data exists.
             </p>
           </div>
         ) : data.totals ? (
           <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {Object.entries(data.totals).map(([key, value]) => (
-              <div key={key} className="rounded-2xl border border-[var(--line)] p-3.5">
-                <p className="text-[10.5px] font-semibold capitalize text-[var(--text-muted)]">{key}</p>
+              <div
+                key={key}
+                className="rounded-2xl border border-[var(--line)] p-3.5"
+              >
+                <p className="text-[10.5px] font-semibold capitalize text-[var(--text-muted)]">
+                  {key}
+                </p>
                 <p className="mt-1.5 text-[18px] font-semibold tabular-nums text-[var(--text)]">
                   {(value ?? 0).toLocaleString("en-GB")}
                 </p>
@@ -3641,6 +3725,8 @@ function AnalyticsWorkspace() {
 function PostComposer({
   post,
   presetDate,
+  presetCaption,
+  presetAsset,
   campaigns,
   connectedAccountsByPlatform,
   onClose,
@@ -3656,6 +3742,8 @@ function PostComposer({
 }: {
   post: SocialPost | null;
   presetDate: string | null;
+  presetCaption: string | null;
+  presetAsset: PresetAsset | null;
   campaigns: ApiCampaign[];
   connectedAccountsByPlatform: Map<SocialPlatform, ApiAccount[]>;
   onClose: () => void;
@@ -3673,7 +3761,10 @@ function PostComposer({
    *  regardless of what's rendered here. */
   canPublishNow: boolean;
 }) {
-  const initial = useMemo(() => formFromPost(post, presetDate), [post, presetDate]);
+  const initial = useMemo(
+    () => formFromPost(post, presetDate, presetCaption, presetAsset),
+    [post, presetDate, presetCaption, presetAsset],
+  );
 
   const [form, setForm] = useState<PostForm>(initial);
   const [error, setError] = useState<string | null>(null);
@@ -3682,13 +3773,16 @@ function PostComposer({
   const [leaving, setLeaving] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogRequest | null>(null);
-  const [previewChoice, setPreviewChoice] = useState<SocialPlatform | null>(initial.platforms[0] ?? null);
-  const [customiseOpen, setCustomiseOpen] = useState(
-    () => Object.values(initial.platformCaptions).some((text) => (text ?? "").trim() !== ""),
+  const [previewChoice, setPreviewChoice] = useState<SocialPlatform | null>(
+    initial.platforms[0] ?? null,
+  );
+  const [customiseOpen, setCustomiseOpen] = useState(() =>
+    Object.values(initial.platformCaptions).some(
+      (text) => (text ?? "").trim() !== "",
+    ),
   );
   const [imageBusy, setImageBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [dragY, setDragY] = useState(0);
   const [previewOpen, setPreviewOpen] = useState(false);
 
   // Live, per-creator TikTok publish options — never hardcoded (TikTok's
@@ -3697,14 +3791,16 @@ function PostComposer({
   // app's own creator_info is itself restricted). Refetched whenever the
   // selected TikTok account changes; a stale selection from a previous
   // account is never reused.
-  const tiktokAccountId = connectedAccountsByPlatform.get("TIKTOK")?.[0]?.id ?? null;
+  const tiktokAccountId =
+    connectedAccountsByPlatform.get("TIKTOK")?.[0]?.id ?? null;
   const [tiktokCreatorInfo, setTiktokCreatorInfo] = useState<{
     privacyLevelOptions: string[];
     commentDisabled: boolean;
     duetDisabled: boolean;
     stitchDisabled: boolean;
   } | null>(null);
-  const [tiktokCreatorInfoStatus, setTiktokCreatorInfoStatus] = useState<LoadStatus>("loading");
+  const [tiktokCreatorInfoStatus, setTiktokCreatorInfoStatus] =
+    useState<LoadStatus>("loading");
 
   useEffect(() => {
     if (!form.platforms.includes("TIKTOK") || !tiktokAccountId) {
@@ -3716,7 +3812,12 @@ function PostComposer({
     setTiktokCreatorInfoStatus("loading");
 
     apiRequest<{
-      creatorInfo: { privacy_level_options?: string[]; comment_disabled?: boolean; duet_disabled?: boolean; stitch_disabled?: boolean };
+      creatorInfo: {
+        privacy_level_options?: string[];
+        comment_disabled?: boolean;
+        duet_disabled?: boolean;
+        stitch_disabled?: boolean;
+      };
     }>(`/accounts/${tiktokAccountId}/tiktok-creator-info`)
       .then((payload) => {
         if (cancelled) return;
@@ -3743,10 +3844,11 @@ function PostComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fieldRefs = useRef<Partial<Record<FieldKey, HTMLElement | null>>>({});
-  const dragStart = useRef<number | null>(null);
 
+  // Scroll stays locked because this takes over the whole content area,
+  // but there is no focus trap any more: this is a workspace, not a
+  // modal over the tab, so trapping Tab inside it would be wrong.
   useScrollLock(true);
-  useFocusTrap(panelRef, true);
 
   // Keep the status picker in step with workflow actions taken from here.
   const postStatus = post?.realStatus ?? null;
@@ -3756,7 +3858,9 @@ function PostComposer({
     setForm((current) => ({
       ...current,
       status: statusBucket(postStatus),
-      scheduledAt: postScheduledAt ? localDateTimeValue(new Date(postScheduledAt)) : current.scheduledAt,
+      scheduledAt: postScheduledAt
+        ? localDateTimeValue(new Date(postScheduledAt))
+        : current.scheduledAt,
     }));
   }, [postStatus, postScheduledAt]);
 
@@ -3781,18 +3885,28 @@ function PostComposer({
 
   const slots = useMemo(() => quickSlots(), []);
   const isMac = useMemo(
-    () => typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent),
+    () =>
+      typeof navigator !== "undefined" &&
+      /Mac|iPhone|iPad/.test(navigator.userAgent),
     [],
   );
 
-  const dirty = post ? formSignature(form) !== formSignature(initial) : hasContent(form);
+  const dirty = post
+    ? formSignature(form) !== formSignature(initial)
+    : hasContent(form);
   const captionLength = form.caption.trim().length;
   const selectedPlatforms = form.platforms.map(platformDefinition);
-  const customisedCount = form.platforms.filter((platform) => (form.platformCaptions[platform] ?? "").trim() !== "").length;
-  const unconnectedSelected = form.platforms.filter((platform) => !connectedAccountsByPlatform.get(platform)?.length);
+  const customisedCount = form.platforms.filter(
+    (platform) => (form.platformCaptions[platform] ?? "").trim() !== "",
+  ).length;
+  const unconnectedSelected = form.platforms.filter(
+    (platform) => !connectedAccountsByPlatform.get(platform)?.length,
+  );
 
   const activePreview =
-    previewChoice && form.platforms.includes(previewChoice) ? previewChoice : form.platforms[0] ?? null;
+    previewChoice && form.platforms.includes(previewChoice)
+      ? previewChoice
+      : (form.platforms[0] ?? null);
 
   const update = (patch: Partial<PostForm>) => {
     setForm((current) => ({ ...current, ...patch }));
@@ -3804,7 +3918,9 @@ function PostComposer({
     update({
       platforms: selected
         ? form.platforms.filter((item) => item !== platform)
-        : PLATFORMS.map((item) => item.id).filter((id) => id === platform || form.platforms.includes(id)),
+        : PLATFORMS.map((item) => item.id).filter(
+            (id) => id === platform || form.platforms.includes(id),
+          ),
     });
     if (!selected) setPreviewChoice(platform);
   };
@@ -3825,9 +3941,13 @@ function PostComposer({
   const [libraryLoading, setLibraryLoading] = useState(false);
 
   const [brandAssetsOpen, setBrandAssetsOpen] = useState(false);
-  const [brandAssetOptions, setBrandAssetOptions] = useState<ApiBrandAssetOption[] | null>(null);
+  const [brandAssetOptions, setBrandAssetOptions] = useState<
+    ApiBrandAssetOption[] | null
+  >(null);
   const [brandAssetsLoading, setBrandAssetsLoading] = useState(false);
-  const [pickingBrandAssetId, setPickingBrandAssetId] = useState<string | null>(null);
+  const [pickingBrandAssetId, setPickingBrandAssetId] = useState<string | null>(
+    null,
+  );
 
   const handleFile = async (file: File | null | undefined) => {
     if (!file) return;
@@ -3843,16 +3963,24 @@ function PostComposer({
         asset = await uploadMediaAsset(blob, file.name || "image.jpg");
       }
       update({ image: asset.url, imageType: asset.type, assetIds: [asset.id] });
-      setLibraryAssets((current) => (current ? [asset, ...current.filter((item) => item.id !== asset.id)] : current));
+      setLibraryAssets((current) =>
+        current
+          ? [asset, ...current.filter((item) => item.id !== asset.id)]
+          : current,
+      );
     } catch (problem) {
-      showError({ field: "media", message: errorMessage(problem, "That file couldn't be added.") });
+      showError({
+        field: "media",
+        message: errorMessage(problem, "That file couldn't be added."),
+      });
     } finally {
       setImageBusy(false);
     }
   };
 
   const openPicker = () => fileInputRef.current?.click();
-  const removeMedia = () => update({ image: null, imageType: null, assetIds: [] });
+  const removeMedia = () =>
+    update({ image: null, imageType: null, assetIds: [] });
 
   const toggleLibrary = () => {
     setLibraryOpen((open) => !open);
@@ -3869,9 +3997,14 @@ function PostComposer({
   const pickFromLibrary = (asset: ApiAsset) => {
     setForm((current) => {
       const selected = current.assetIds.includes(asset.id);
-      const assetIds = selected ? current.assetIds.filter((id) => id !== asset.id) : [...current.assetIds, asset.id];
+      const assetIds = selected
+        ? current.assetIds.filter((id) => id !== asset.id)
+        : [...current.assetIds, asset.id];
       const firstId = assetIds[0];
-      const firstAsset = firstId === asset.id ? asset : libraryAssets?.find((item) => item.id === firstId);
+      const firstAsset =
+        firstId === asset.id
+          ? asset
+          : libraryAssets?.find((item) => item.id === firstId);
       return {
         ...current,
         assetIds,
@@ -3900,10 +4033,20 @@ function PostComposer({
     setPickingBrandAssetId(option.id);
     try {
       const asset = await reuseBrandAssetApi(option.id);
-      setLibraryAssets((current) => (current ? [asset, ...current.filter((item) => item.id !== asset.id)] : [asset]));
+      setLibraryAssets((current) =>
+        current
+          ? [asset, ...current.filter((item) => item.id !== asset.id)]
+          : [asset],
+      );
       pickFromLibrary(asset);
     } catch (problem) {
-      showError({ field: "media", message: errorMessage(problem, "That brand asset couldn't be attached.") });
+      showError({
+        field: "media",
+        message: errorMessage(
+          problem,
+          "That brand asset couldn't be attached.",
+        ),
+      });
     } finally {
       setPickingBrandAssetId(null);
     }
@@ -3917,7 +4060,8 @@ function PostComposer({
       setDragging(true);
     },
     onDragLeave: (event) => {
-      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+        setDragging(false);
     },
     onDrop: (event) => {
       event.preventDefault();
@@ -3928,12 +4072,18 @@ function PostComposer({
 
   /* Validation -------------------------------------------------------------------- */
 
-  const validate = (next: PostForm): { field: FieldKey; message: string } | null => {
-    if (next.platforms.length === 0) return { field: "channels", message: "Choose at least one channel." };
-    if (!next.caption.trim()) return { field: "caption", message: "Write a caption before saving." };
+  const validate = (
+    next: PostForm,
+  ): { field: FieldKey; message: string } | null => {
+    if (next.platforms.length === 0)
+      return { field: "channels", message: "Choose at least one channel." };
+    if (!next.caption.trim())
+      return { field: "caption", message: "Write a caption before saving." };
 
     if (next.status !== "DRAFT") {
-      const disconnected = next.platforms.find((platform) => !connectedAccountsByPlatform.get(platform)?.length);
+      const disconnected = next.platforms.find(
+        (platform) => !connectedAccountsByPlatform.get(platform)?.length,
+      );
       if (disconnected) {
         return {
           field: "channels",
@@ -3943,31 +4093,49 @@ function PostComposer({
 
       if (next.platforms.includes("INSTAGRAM")) {
         if (next.assetIds.length === 0) {
-          return { field: "media", message: "Instagram posts need an image or video. Add one, or save this as a draft." };
+          return {
+            field: "media",
+            message:
+              "Instagram posts need an image or video. Add one, or save this as a draft.",
+          };
         }
         if (next.instagramPlacement === "STORY" && next.assetIds.length > 1) {
           return {
             field: "media",
-            message: "An Instagram Story takes a single image or video. Remove the extra ones, or switch placement to Feed.",
+            message:
+              "An Instagram Story takes a single image or video. Remove the extra ones, or switch placement to Feed.",
           };
         }
       }
 
       if (next.platforms.includes("TIKTOK")) {
         if (next.imageType !== "VIDEO") {
-          return { field: "media", message: "TikTok requires an attached video. Add one, or save this as a draft." };
+          return {
+            field: "media",
+            message:
+              "TikTok requires an attached video. Add one, or save this as a draft.",
+          };
         }
         if (!next.tiktokPostMode) {
-          return { field: "media", message: "Choose how to publish to TikTok: Direct Post or Upload to TikTok." };
+          return {
+            field: "media",
+            message:
+              "Choose how to publish to TikTok: Direct Post or Upload to TikTok.",
+          };
         }
         if (next.tiktokPostMode === "DIRECT_POST" && !next.tiktokPrivacyLevel) {
-          return { field: "media", message: "Choose a privacy setting for this TikTok post." };
+          return {
+            field: "media",
+            message: "Choose a privacy setting for this TikTok post.",
+          };
         }
       }
 
       for (const platform of next.platforms) {
         const definition = platformDefinition(platform);
-        const length = ((next.platformCaptions[platform] ?? "").trim() || next.caption.trim()).length;
+        const length = (
+          (next.platformCaptions[platform] ?? "").trim() || next.caption.trim()
+        ).length;
         if (length > definition.limit) {
           return {
             field: "caption",
@@ -3978,9 +4146,15 @@ function PostComposer({
     }
 
     if (next.status === "SCHEDULED") {
-      if (!next.scheduledAt) return { field: "schedule", message: "Choose a date and time for this post." };
+      if (!next.scheduledAt)
+        return {
+          field: "schedule",
+          message: "Choose a date and time for this post.",
+        };
       const savedAt = post?.scheduledAt ?? null;
-      const unchanged = savedAt !== null && localDateTimeValue(new Date(savedAt)) === next.scheduledAt;
+      const unchanged =
+        savedAt !== null &&
+        localDateTimeValue(new Date(savedAt)) === next.scheduledAt;
       if (!unchanged) {
         const problem = futureTimeError(next.scheduledAt);
         if (problem) return { field: "schedule", message: problem };
@@ -3995,7 +4169,8 @@ function PostComposer({
     setErrorKey((key) => key + 1);
     const target = fieldRefs.current[problem.field];
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
-    if (problem.field === "caption") textareaRef.current?.focus({ preventScroll: true });
+    if (problem.field === "caption")
+      textareaRef.current?.focus({ preventScroll: true });
   }
 
   /* Close / save ------------------------------------------------------------------ */
@@ -4044,7 +4219,10 @@ function PostComposer({
       tone: "danger",
       secondary:
         !post && canQuickDraft
-          ? { label: "Save as draft", run: () => void submit({ status: "DRAFT" }) }
+          ? {
+              label: "Save as draft",
+              run: () => void submit({ status: "DRAFT" }),
+            }
           : undefined,
       onConfirm: () => {
         closeNow();
@@ -4080,30 +4258,9 @@ function PostComposer({
     return () => window.clearTimeout(timeout);
   }, []);
 
-  /* Swipe down on the sheet header to close (touch only). */
-  const headerPointer = {
-    onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.pointerType !== "touch") return;
-      if ((event.target as HTMLElement).closest("button")) return;
-      dragStart.current = event.clientY;
-      event.currentTarget.setPointerCapture(event.pointerId);
-    },
-    onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (dragStart.current === null) return;
-      setDragY(Math.max(0, event.clientY - dragStart.current));
-    },
-    onPointerUp: () => {
-      if (dragStart.current === null) return;
-      dragStart.current = null;
-      const shouldClose = dragY > 110;
-      setDragY(0);
-      if (shouldClose) requestClose();
-    },
-    onPointerCancel: () => {
-      dragStart.current = null;
-      setDragY(0);
-    },
-  };
+  /* Swipe-down-to-close went with the bottom sheet. A workspace that
+     fills the dashboard is left by its back button, not by flicking it
+     off the bottom of the screen. */
 
   /* Workflow actions ------------------------------------------------------------ */
 
@@ -4126,7 +4283,8 @@ function PostComposer({
       input: {
         label: "What needs changing",
         type: "textarea",
-        placeholder: "e.g. Shorten the caption for X and swap the image for the new product shot.",
+        placeholder:
+          "e.g. Shorten the caption for X and swap the image for the new product shot.",
         required: true,
       },
       onConfirm: async (notes) => {
@@ -4140,12 +4298,16 @@ function PostComposer({
     if (!post) return;
     setDialog({
       title: "Schedule this post",
-      description: "It publishes automatically on every connected channel at this time.",
+      description:
+        "It publishes automatically on every connected channel at this time.",
       confirmLabel: "Schedule",
       input: {
         label: "Publishing time",
         type: "datetime-local",
-        initial: form.scheduledAt && !futureTimeError(form.scheduledAt) ? form.scheduledAt : localDateTimeValue(nextFullHour()),
+        initial:
+          form.scheduledAt && !futureTimeError(form.scheduledAt)
+            ? form.scheduledAt
+            : localDateTimeValue(nextFullHour()),
         min: localDateTimeValue(new Date()),
         required: true,
         validate: futureTimeError,
@@ -4159,8 +4321,12 @@ function PostComposer({
 
   const openPublishNow = () => {
     if (!post) return;
-    const pending = post.targets.filter((target) => target.status !== "PUBLISHED" && target.status !== "CANCELLED");
-    const retrying = post.realStatus === "PARTIALLY_PUBLISHED" || post.realStatus === "FAILED";
+    const pending = post.targets.filter(
+      (target) =>
+        target.status !== "PUBLISHED" && target.status !== "CANCELLED",
+    );
+    const retrying =
+      post.realStatus === "PARTIALLY_PUBLISHED" || post.realStatus === "FAILED";
     setDialog({
       title: retrying ? "Retry publishing?" : "Publish now?",
       description: retrying
@@ -4178,7 +4344,8 @@ function PostComposer({
     if (!post) return;
     setDialog({
       title: "Cancel this post?",
-      description: "It leaves the queue and won't publish. You can duplicate it later to start again.",
+      description:
+        "It leaves the queue and won't publish. You can duplicate it later to start again.",
       confirmLabel: "Cancel post",
       tone: "danger",
       onConfirm: async () => {
@@ -4191,9 +4358,14 @@ function PostComposer({
   const openNewCampaign = () => {
     setDialog({
       title: "New campaign",
-      description: "Group related posts so they're easy to find and report on together.",
+      description:
+        "Group related posts so they're easy to find and report on together.",
       confirmLabel: "Create campaign",
-      input: { label: "Campaign name", placeholder: "e.g. Autumn launch", required: true },
+      input: {
+        label: "Campaign name",
+        placeholder: "e.g. Autumn launch",
+        required: true,
+      },
       onConfirm: async (name) => {
         const campaign = await onCreateCampaign(name);
         update({ campaignId: campaign.id });
@@ -4203,7 +4375,9 @@ function PostComposer({
 
   /* Labels -------------------------------------------------------------------------- */
 
-  const statusChanged = post ? statusBucket(post.realStatus) !== form.status : false;
+  const statusChanged = post
+    ? statusBucket(post.realStatus) !== form.status
+    : false;
 
   const primaryLabel = post
     ? statusChanged && form.status === "READY"
@@ -4224,10 +4398,17 @@ function PostComposer({
         ? "Submitting…"
         : "Saving…";
 
-  const PrimaryIcon = form.status === "SCHEDULED" ? CalendarDays : form.status === "READY" ? Send : Check;
+  const PrimaryIcon =
+    form.status === "SCHEDULED"
+      ? CalendarDays
+      : form.status === "READY"
+        ? Send
+        : Check;
 
   const previewWhen =
-    form.status === "SCHEDULED" && form.scheduledAt && isValidDate(new Date(form.scheduledAt))
+    form.status === "SCHEDULED" &&
+    form.scheduledAt &&
+    isValidDate(new Date(form.scheduledAt))
       ? formatDateTime(new Date(form.scheduledAt).toISOString())
       : "Just now";
 
@@ -4245,36 +4426,23 @@ function PostComposer({
     ? (form.platformCaptions[activePreview] ?? "").trim() || form.caption
     : form.caption;
 
-  const libraryUrl = (id: string) => libraryAssets?.find((asset) => asset.id === id);
+  const libraryUrl = (id: string) =>
+    libraryAssets?.find((asset) => asset.id === id);
   const workflowLocked = dirty && Boolean(post);
 
   return (
     <>
+      {/* A full-bleed workspace, the same shape as the Graphic and Video
+          studios: no backdrop, no sheet, no max width. It fills the
+          dashboard content area and is left by the back button. */}
       <div
-        role="presentation"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) requestClose();
-        }}
+        ref={panelRef}
+        aria-labelledby="social-composer-title"
         className={cx(
-          "fixed inset-0 z-[150] flex items-end justify-center bg-black/50 sm:items-center sm:p-6",
-          leaving ? "sg-backdrop-out" : "sg-fade",
+          "relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[var(--surface)]",
+          leaving ? "sg-backdrop-out" : "sg-view",
         )}
       >
-        <div
-          ref={panelRef}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="social-composer-title"
-          style={
-            dragY > 0
-              ? { transform: `translateY(${dragY}px)`, transition: "none" }
-              : { transition: "transform .28s cubic-bezier(.32,.72,0,1)" }
-          }
-          className={cx(
-            "sg-dialog flex h-[94dvh] w-full max-w-[1120px] flex-col overflow-hidden rounded-t-[26px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_40px_90px_-24px_rgba(0,0,0,0.5)] sm:h-[min(820px,92dvh)] sm:rounded-[26px]",
-            leaving && "is-leaving",
-          )}
-        >
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -4287,7 +4455,9 @@ function PostComposer({
               }
             }}
             onPaste={(event) => {
-              const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith("image/"));
+              const file = Array.from(event.clipboardData.files).find((item) =>
+                item.type.startsWith("image/"),
+              );
               if (file) {
                 event.preventDefault();
                 void handleFile(file);
@@ -4308,37 +4478,73 @@ function PostComposer({
               }}
             />
 
-            {/* Header (drag handle on phones) */}
-            <div
-              {...headerPointer}
-              className="shrink-0 touch-none border-b border-[var(--line)] px-5 pb-3 pt-2.5 sm:touch-auto sm:px-6 sm:py-3"
-            >
-              <div className="mx-auto mb-2.5 h-1 w-10 rounded-full bg-[var(--line)] sm:hidden" aria-hidden />
-              <div className="flex items-center justify-between gap-4">
+            {/* Toolbar — same anatomy as the Graphic and Video studios:
+                back, what you are working on, then the actions that
+                finish it. The primary moved up here from a footer so it
+                sits in the same place in all three workspaces. */}
+            <header className="flex shrink-0 items-center gap-2 border-b border-[var(--line)] px-3 py-2 sm:px-4">
+              <IconButton label="Back to Content Studio" onClick={requestClose}>
+                <ChevronLeft size={16} />
+              </IconButton>
+
+              <div className="flex min-w-0 items-center gap-2">
                 <div className="min-w-0">
                   <h2
                     id="social-composer-title"
-                    className="text-[17px] font-semibold tracking-[-0.025em] text-[var(--text)]"
+                    className="truncate text-[14px] font-semibold tracking-[-0.02em] text-[var(--text)]"
                   >
                     {post ? "Edit post" : "New post"}
                   </h2>
-                  <p className="mt-0.5 truncate text-[11px] text-[var(--text-muted)]">
-                    {post ? editedLabel(post.updatedAt) : "Write once, then tailor it for each channel."}
+                  <p className="truncate text-[10.5px] text-[var(--text-muted)]">
+                    {post
+                      ? editedLabel(post.updatedAt)
+                      : "Write once, then tailor it for each channel."}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  {dirty && (
-                    <span className="sg-fade hidden items-center gap-1.5 text-[10.5px] text-[var(--text-subtle)] sm:inline-flex">
-                      <Dot color="#D97706" />
-                      Unsaved
-                    </span>
-                  )}
-                  <IconButton label="Close" onClick={requestClose} bordered>
-                    <X size={16} />
-                  </IconButton>
-                </div>
+                {dirty && (
+                  <span
+                    title="Unsaved changes"
+                    className="sg-fade ml-1 hidden shrink-0 items-center gap-1.5 text-[10.5px] text-[var(--text-subtle)] sm:inline-flex"
+                  >
+                    <Dot color="#D97706" />
+                    Unsaved
+                  </span>
+                )}
               </div>
-            </div>
+
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                <p className="hidden items-center gap-1.5 text-[10.5px] text-[var(--text-subtle)] xl:flex">
+                  <Kbd>{isMac ? "⌘" : "Ctrl"}</Kbd>
+                  <Kbd>Enter</Kbd>
+                  to save
+                </p>
+                <button
+                  type="button"
+                  onClick={requestClose}
+                  disabled={saving}
+                  className={cx(BTN_SECONDARY, FOCUS, BTN_COMPACT)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving || imageBusy}
+                  className={cx(BTN_PRIMARY, FOCUS, "h-8 min-w-[132px] rounded-lg px-3 text-[11px]")}
+                >
+                  {saving ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <PrimaryIcon size={13} />
+                  )}
+                  <span
+                    key={saving ? "saving" : primaryLabel}
+                    className="sg-fade"
+                  >
+                    {saving ? savingLabel : primaryLabel}
+                  </span>
+                </button>
+              </div>
+            </header>
 
             {/* Workflow bar: real, server-enforced transitions */}
             {post && (
@@ -4346,20 +4552,27 @@ function PostComposer({
                 <span key={post.realStatus} className="sg-pop">
                   <StatusPill status={post.realStatus} large />
                 </span>
-                {post.reviewNotes && post.realStatus === "CHANGES_REQUESTED" && (
-                  <span className="min-w-0 max-w-full truncate text-[11px] text-[var(--text-muted)]" title={post.reviewNotes}>
-                    &ldquo;{post.reviewNotes}&rdquo;
-                  </span>
-                )}
-
-                <div className="ml-auto flex flex-wrap items-center gap-1.5">
-                  {workflowLocked && post.realStatus !== "DRAFT" && post.realStatus !== "CHANGES_REQUESTED" && (
-                    <span className="sg-fade mr-1 text-[10.5px] text-[var(--text-subtle)]">
-                      Save or discard your edits first
+                {post.reviewNotes &&
+                  post.realStatus === "CHANGES_REQUESTED" && (
+                    <span
+                      className="min-w-0 max-w-full truncate text-[11px] text-[var(--text-muted)]"
+                      title={post.reviewNotes}
+                    >
+                      &ldquo;{post.reviewNotes}&rdquo;
                     </span>
                   )}
 
-                  {(post.realStatus === "DRAFT" || post.realStatus === "CHANGES_REQUESTED") && (
+                <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                  {workflowLocked &&
+                    post.realStatus !== "DRAFT" &&
+                    post.realStatus !== "CHANGES_REQUESTED" && (
+                      <span className="sg-fade mr-1 text-[10.5px] text-[var(--text-subtle)]">
+                        Save or discard your edits first
+                      </span>
+                    )}
+
+                  {(post.realStatus === "DRAFT" ||
+                    post.realStatus === "CHANGES_REQUESTED") && (
                     <WorkflowButton
                       icon={Send}
                       busy={busyAction === "submit"}
@@ -4367,7 +4580,9 @@ function PostComposer({
                       onClick={() =>
                         dirty
                           ? void submit({ status: "READY" })
-                          : void runAction("submit", () => onSubmitForReview(post.id))
+                          : void runAction("submit", () =>
+                              onSubmitForReview(post.id),
+                            )
                       }
                     >
                       {dirty ? "Save and submit" : "Submit for review"}
@@ -4376,7 +4591,10 @@ function PostComposer({
 
                   {post.realStatus === "PENDING_REVIEW" && (
                     <>
-                      <WorkflowButton disabled={workflowLocked || Boolean(busyAction)} onClick={openRequestChanges}>
+                      <WorkflowButton
+                        disabled={workflowLocked || Boolean(busyAction)}
+                        onClick={openRequestChanges}
+                      >
                         Request changes
                       </WorkflowButton>
                       <WorkflowButton
@@ -4384,7 +4602,9 @@ function PostComposer({
                         icon={Check}
                         busy={busyAction === "approve"}
                         disabled={workflowLocked || Boolean(busyAction)}
-                        onClick={() => void runAction("approve", () => onApprove(post.id))}
+                        onClick={() =>
+                          void runAction("approve", () => onApprove(post.id))
+                        }
                       >
                         Approve
                       </WorkflowButton>
@@ -4416,7 +4636,10 @@ function PostComposer({
                         disabled={workflowLocked || Boolean(busyAction)}
                         onClick={openPublishNow}
                       >
-                        {post.realStatus === "PARTIALLY_PUBLISHED" || post.realStatus === "FAILED" ? "Retry" : "Publish now"}
+                        {post.realStatus === "PARTIALLY_PUBLISHED" ||
+                        post.realStatus === "FAILED"
+                          ? "Retry"
+                          : "Publish now"}
                       </WorkflowButton>
                     )}
 
@@ -4441,65 +4664,104 @@ function PostComposer({
 
             {/* Per-destination publishing status — tracked independently;
                 one platform failing never hides another's success. */}
-            {post && post.targets.length > 0 && post.realStatus !== "DRAFT" && post.realStatus !== "CHANGES_REQUESTED" && (
-              <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-[var(--line)] px-5 py-2 text-[10.5px] sm:px-6">
-                {post.targets.map((target) => {
-                  const meta = targetDisplayMeta(target);
-                  return (
-                    <span key={target.accountId} className="inline-flex items-center gap-1.5">
-                      <PlatformMark platform={target.platform} size="xs" label={platformDefinition(target.platform).name} />
-                      <span className="font-medium text-[var(--text)]">{target.account.accountName}</span>
-                      <span style={{ color: meta.hue }}>{meta.label}</span>
-                      {(target.status === "PUBLISHED" || target.status === "DELIVERED_TO_INBOX") && target.publishedAt && (
-                        <span className="text-[var(--text-subtle)]">{formatDateTime(target.publishedAt)}</span>
-                      )}
-                      {meta.detail && <span className="text-[var(--text-subtle)]">{meta.detail}</span>}
-                      {target.status === "FAILED" && target.lastError && (
-                        <span className="max-w-[260px] truncate text-[var(--text-subtle)]" title={target.lastError}>
-                          — {target.lastError}
+            {post &&
+              post.targets.length > 0 &&
+              post.realStatus !== "DRAFT" &&
+              post.realStatus !== "CHANGES_REQUESTED" && (
+                <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-[var(--line)] px-5 py-2 text-[10.5px] sm:px-6">
+                  {post.targets.map((target) => {
+                    const meta = targetDisplayMeta(target);
+                    return (
+                      <span
+                        key={target.accountId}
+                        className="inline-flex items-center gap-1.5"
+                      >
+                        <PlatformMark
+                          platform={target.platform}
+                          size="xs"
+                          label={platformDefinition(target.platform).name}
+                        />
+                        <span className="font-medium text-[var(--text)]">
+                          {target.account.accountName}
                         </span>
-                      )}
-                      {/* remotePostUrl is always null for DELIVERED_TO_INBOX
+                        <span style={{ color: meta.hue }}>{meta.label}</span>
+                        {(target.status === "PUBLISHED" ||
+                          target.status === "DELIVERED_TO_INBOX") &&
+                          target.publishedAt && (
+                            <span className="text-[var(--text-subtle)]">
+                              {formatDateTime(target.publishedAt)}
+                            </span>
+                          )}
+                        {meta.detail && (
+                          <span className="text-[var(--text-subtle)]">
+                            {meta.detail}
+                          </span>
+                        )}
+                        {target.status === "FAILED" && target.lastError && (
+                          <span
+                            className="max-w-[260px] truncate text-[var(--text-subtle)]"
+                            title={target.lastError}
+                          >
+                            — {target.lastError}
+                          </span>
+                        )}
+                        {/* remotePostUrl is always null for DELIVERED_TO_INBOX
                           server-side (TikTok never hands back a URL for an
                           inbox draft) — so this link never renders for it,
                           by construction, not a special case here. */}
-                      {target.remotePostUrl && (
-                        <a
-                          href={target.remotePostUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[var(--accent)] hover:underline"
-                        >
-                          View on {platformDefinition(target.platform).name}
-                        </a>
-                      )}
-                      {target.status === "DELIVERED_TO_INBOX" && (
-                        <span className="text-[var(--text-subtle)]">Open the TikTok app to finish posting.</span>
-                      )}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
+                        {target.remotePostUrl && (
+                          <a
+                            href={target.remotePostUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[var(--accent)] hover:underline"
+                          >
+                            View on {platformDefinition(target.platform).name}
+                          </a>
+                        )}
+                        {target.status === "DELIVERED_TO_INBOX" && (
+                          <span className="text-[var(--text-subtle)]">
+                            Open the TikTok app to finish posting.
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
 
             {/* Body: each column scrolls on its own on desktop; one scroll on mobile */}
             <div className="sg-scroll grid min-h-0 flex-1 overflow-y-auto overscroll-contain lg:grid-cols-[minmax(0,1fr)_380px] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden">
-              {/* Editor: sized to fit without scrolling on a normal laptop screen */}
-              <div className="sg-scroll space-y-4 px-5 py-4 sm:px-6 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">
+              {/* Editor. Full-bleed gives this column far more room than
+                  the old dialog did, so the fields are capped at a
+                  readable measure and centred rather than stretched to
+                  a caption box the width of the screen. */}
+              <div className="sg-scroll mx-auto w-full max-w-[820px] space-y-4 px-5 py-4 sm:px-6 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">
                 {/* Channels */}
-                <fieldset ref={(node) => { fieldRefs.current.channels = node; }} className="scroll-mt-4">
+                <fieldset
+                  ref={(node) => {
+                    fieldRefs.current.channels = node;
+                  }}
+                  className="scroll-mt-4"
+                >
                   <legend className={LABEL}>Channels</legend>
                   <div className="flex flex-wrap gap-1.5">
                     {PLATFORMS.map((platform) => {
                       const selected = form.platforms.includes(platform.id);
-                      const connected = Boolean(connectedAccountsByPlatform.get(platform.id)?.length);
+                      const connected = Boolean(
+                        connectedAccountsByPlatform.get(platform.id)?.length,
+                      );
                       return (
                         <button
                           key={platform.id}
                           type="button"
                           aria-pressed={selected}
                           onClick={() => togglePlatform(platform.id)}
-                          title={connected ? platform.name : `${platform.name}: no account connected yet`}
+                          title={
+                            connected
+                              ? platform.name
+                              : `${platform.name}: no account connected yet`
+                          }
                           className={cx(
                             "inline-flex h-9 items-center gap-2 rounded-xl border pl-1 pr-2.5 text-[11px] font-semibold transition-[border-color,background-color,color,transform] duration-150 active:scale-[0.97]",
                             FOCUS,
@@ -4519,7 +4781,10 @@ function PostComposer({
                           {platform.name}
                           {!connected && (
                             <>
-                              <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--text-subtle)] opacity-60" />
+                              <span
+                                aria-hidden
+                                className="h-1.5 w-1.5 rounded-full bg-[var(--text-subtle)] opacity-60"
+                              />
                               <span className="sr-only">(not connected)</span>
                             </>
                           )}
@@ -4529,29 +4794,120 @@ function PostComposer({
                   </div>
                   {unconnectedSelected.length > 0 && (
                     <p className="sg-fade mt-1.5 text-[10.5px] leading-5 text-[var(--text-subtle)]">
-                      {unconnectedSelected.map((platform) => platformDefinition(platform).name).join(", ")}{" "}
-                      {unconnectedSelected.length === 1 ? "isn't" : "aren't"} connected, so{" "}
-                      {unconnectedSelected.length === 1 ? "it" : "they"} won&apos;t be saved with this post yet.
+                      {unconnectedSelected
+                        .map((platform) => platformDefinition(platform).name)
+                        .join(", ")}{" "}
+                      {unconnectedSelected.length === 1 ? "isn't" : "aren't"}{" "}
+                      connected, so{" "}
+                      {unconnectedSelected.length === 1 ? "it" : "they"}{" "}
+                      won&apos;t be saved with this post yet.
                     </p>
                   )}
                 </fieldset>
 
+                {/* LinkedIn destination — only shown once more than one
+                    LinkedIn account is connected (personal + a company
+                    page); every other platform has at most one connected
+                    account, so there's never anything to choose there. */}
+                {form.platforms.includes("LINKEDIN") &&
+                  (connectedAccountsByPlatform.get("LINKEDIN")?.length ?? 0) > 1 && (
+                    <fieldset>
+                      <legend className={LABEL}>LinkedIn destination</legend>
+                      <div className="flex flex-wrap gap-1.5">
+                        {connectedAccountsByPlatform.get("LINKEDIN")!.map((account) => {
+                          const chosen =
+                            form.linkedinAccountId === account.id ||
+                            (!form.linkedinAccountId && account === connectedAccountsByPlatform.get("LINKEDIN")![0]);
+                          return (
+                            <button
+                              key={account.id}
+                              type="button"
+                              aria-pressed={chosen}
+                              onClick={() => update({ linkedinAccountId: account.id })}
+                              className={cx(
+                                "inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-[11px] font-semibold transition",
+                                FOCUS,
+                                chosen
+                                  ? "border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_6%,var(--surface))] text-[var(--text)]"
+                                  : "border-[var(--line)] text-[var(--text-muted)] hover:border-[color-mix(in_srgb,var(--text)_22%,var(--line))] hover:text-[var(--text)]",
+                              )}
+                            >
+                              {account.accountType === "ORGANIZATION" ? account.accountName : "Personal Profile"}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+                  )}
+
                 {/* Caption */}
-                <div ref={(node) => { fieldRefs.current.caption = node; }} className="scroll-mt-4">
+                <div
+                  ref={(node) => {
+                    fieldRefs.current.caption = node;
+                  }}
+                  className="scroll-mt-4"
+                >
                   <div className="mb-1.5 flex items-center justify-between gap-3">
-                    <label htmlFor="social-caption" className="text-[11px] font-semibold text-[var(--text)]">
+                    <label
+                      htmlFor="social-caption"
+                      className="text-[11px] font-semibold text-[var(--text)]"
+                    >
                       Caption
                     </label>
                     <div className="flex items-center gap-3">
+                      <AiWritingAssistant
+                        text={form.caption}
+                        platform={selectedPlatforms[0]?.id ?? null}
+                        otherPlatforms={selectedPlatforms.slice(1)}
+                        onApply={(text, targetPlatform) => {
+                          if (!targetPlatform) {
+                            update({ caption: text });
+                            return;
+                          }
+                          const existing =
+                            form.platformCaptions[targetPlatform];
+                          const apply = () =>
+                            update({
+                              platformCaptions: {
+                                ...form.platformCaptions,
+                                [targetPlatform]: text,
+                              },
+                            });
+                          if (existing && existing.trim()) {
+                            setDialog({
+                              title: `Replace the ${platformDefinition(targetPlatform).name} caption?`,
+                              description:
+                                "This channel already has its own customised caption. The AI-adapted version will replace it.",
+                              confirmLabel: "Replace",
+                              onConfirm: () => {
+                                apply();
+                              },
+                            });
+                          } else {
+                            apply();
+                          }
+                        }}
+                      />
                       {selectedPlatforms.length > 1 && (
                         <button
                           type="button"
                           onClick={() => setCustomiseOpen((open) => !open)}
                           aria-expanded={customiseOpen}
-                          className={cx("sg-fade inline-flex items-center gap-1 rounded-md text-[10.5px] font-semibold text-[var(--accent)] hover:underline", FOCUS)}
+                          className={cx(
+                            "sg-fade inline-flex items-center gap-1 rounded-md text-[10.5px] font-semibold text-[var(--accent)] hover:underline",
+                            FOCUS,
+                          )}
                         >
-                          {customisedCount > 0 ? `Per-channel captions (${customisedCount})` : "Customise per channel"}
-                          <ChevronDown size={11} className={cx("transition-transform duration-200", customiseOpen && "rotate-180")} />
+                          {customisedCount > 0
+                            ? `Per-channel captions (${customisedCount})`
+                            : "Customise per channel"}
+                          <ChevronDown
+                            size={11}
+                            className={cx(
+                              "transition-transform duration-200",
+                              customiseOpen && "rotate-180",
+                            )}
+                          />
                         </button>
                       )}
                       <span className="text-[10.5px] tabular-nums text-[var(--text-subtle)]">
@@ -4564,10 +4920,15 @@ function PostComposer({
                     ref={textareaRef}
                     id="social-caption"
                     value={form.caption}
-                    onChange={(event) => update({ caption: event.target.value })}
+                    onChange={(event) =>
+                      update({ caption: event.target.value })
+                    }
                     placeholder="What would you like to share?"
                     rows={4}
-                    className={cx(INPUT, "sg-scroll resize-none bg-[var(--surface-muted)] px-3.5 py-3 text-[12.5px] leading-6")}
+                    className={cx(
+                      INPUT,
+                      "sg-scroll resize-none bg-[var(--surface-muted)] px-3.5 py-3 text-[12.5px] leading-6",
+                    )}
                   />
 
                   <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1.5">
@@ -4576,11 +4937,19 @@ function PostComposer({
                         <CharMeter
                           key={platform.id}
                           platform={platform}
-                          count={((form.platformCaptions[platform.id] ?? "").trim() || form.caption.trim()).length}
+                          count={
+                            (
+                              (
+                                form.platformCaptions[platform.id] ?? ""
+                              ).trim() || form.caption.trim()
+                            ).length
+                          }
                         />
                       ))
                     ) : (
-                      <p className="text-[10.5px] text-[var(--text-subtle)]">Choose a channel to see its character limit.</p>
+                      <p className="text-[10.5px] text-[var(--text-subtle)]">
+                        Choose a channel to see its character limit.
+                      </p>
                     )}
                   </div>
 
@@ -4596,11 +4965,19 @@ function PostComposer({
                             <textarea
                               value={form.platformCaptions[platform.id] ?? ""}
                               onChange={(event) =>
-                                update({ platformCaptions: { ...form.platformCaptions, [platform.id]: event.target.value } })
+                                update({
+                                  platformCaptions: {
+                                    ...form.platformCaptions,
+                                    [platform.id]: event.target.value,
+                                  },
+                                })
                               }
                               placeholder="Blank uses the shared caption"
                               rows={2}
-                              className={cx(INPUT, "resize-none p-2.5 text-[11.5px] leading-5")}
+                              className={cx(
+                                INPUT,
+                                "resize-none p-2.5 text-[11.5px] leading-5",
+                              )}
                             />
                           </div>
                         ))}
@@ -4610,27 +4987,41 @@ function PostComposer({
                 </div>
 
                 {/* Media (with Instagram placement inline) */}
-                <div ref={(node) => { fieldRefs.current.media = node; }} className="scroll-mt-4">
+                <div
+                  ref={(node) => {
+                    fieldRefs.current.media = node;
+                  }}
+                  className="scroll-mt-4"
+                >
                   <div className="mb-1.5 flex min-h-7 items-center justify-between gap-3">
                     <span className="text-[11px] font-semibold text-[var(--text)]">
                       Media
-                      {form.platforms.includes("INSTAGRAM") && form.assetIds.length === 0 && (
-                        <span className="ml-2 font-normal text-[var(--text-subtle)]">Needed for Instagram</span>
-                      )}
+                      {form.platforms.includes("INSTAGRAM") &&
+                        form.assetIds.length === 0 && (
+                          <span className="ml-2 font-normal text-[var(--text-subtle)]">
+                            Needed for Instagram
+                          </span>
+                        )}
                     </span>
                     {form.platforms.includes("INSTAGRAM") && (
                       <div className="sg-fade flex items-center gap-2">
-                        <span className="hidden text-[10.5px] text-[var(--text-subtle)] sm:inline">Instagram</span>
+                        <span className="hidden text-[10.5px] text-[var(--text-subtle)] sm:inline">
+                          Instagram
+                        </span>
                         <Segmented label="Instagram placement" compact>
                           <SegmentButton
                             active={form.instagramPlacement === "FEED"}
-                            onClick={() => update({ instagramPlacement: "FEED" })}
+                            onClick={() =>
+                              update({ instagramPlacement: "FEED" })
+                            }
                           >
                             Feed
                           </SegmentButton>
                           <SegmentButton
                             active={form.instagramPlacement === "STORY"}
-                            onClick={() => update({ instagramPlacement: "STORY" })}
+                            onClick={() =>
+                              update({ instagramPlacement: "STORY" })
+                            }
                           >
                             Story
                           </SegmentButton>
@@ -4655,7 +5046,10 @@ function PostComposer({
                       onClick={openPicker}
                       disabled={imageBusy}
                       aria-label={form.image ? "Replace media" : "Add media"}
-                      className={cx("flex shrink-0 -space-x-2.5 rounded-lg", FOCUS)}
+                      className={cx(
+                        "flex shrink-0 -space-x-2.5 rounded-lg",
+                        FOCUS,
+                      )}
                     >
                       {form.image ? (
                         form.assetIds.slice(0, 3).map((id, index) => {
@@ -4666,14 +5060,27 @@ function PostComposer({
                             <MediaThumb
                               key={id}
                               src={src}
-                              type={index === 0 ? form.imageType : asset?.type ?? "IMAGE"}
+                              type={
+                                index === 0
+                                  ? form.imageType
+                                  : (asset?.type ?? "IMAGE")
+                              }
                               className="h-11 w-11 rounded-lg ring-2 ring-[var(--surface)]"
                             />
                           );
                         })
                       ) : (
-                        <span className={cx("flex h-11 w-11 items-center justify-center rounded-lg", ACCENT_SOFT)}>
-                          {imageBusy ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={16} />}
+                        <span
+                          className={cx(
+                            "flex h-11 w-11 items-center justify-center rounded-lg",
+                            ACCENT_SOFT,
+                          )}
+                        >
+                          {imageBusy ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : (
+                            <ImagePlus size={16} />
+                          )}
                         </span>
                       )}
                     </button>
@@ -4724,13 +5131,20 @@ function PostComposer({
                       ) : (
                         <ImagePlus size={12} />
                       )}
-                      <span className="hidden sm:inline">{form.image ? "Replace" : "Upload"}</span>
+                      <span className="hidden sm:inline">
+                        {form.image ? "Replace" : "Upload"}
+                      </span>
                     </button>
                     <button
                       type="button"
                       onClick={toggleLibrary}
                       aria-expanded={libraryOpen}
-                      className={cx(BTN_SECONDARY, FOCUS, BTN_COMPACT, libraryOpen && "bg-[var(--surface-muted)]")}
+                      className={cx(
+                        BTN_SECONDARY,
+                        FOCUS,
+                        BTN_COMPACT,
+                        libraryOpen && "bg-[var(--surface-muted)]",
+                      )}
                     >
                       <LayoutGrid size={12} />
                       Library
@@ -4739,13 +5153,22 @@ function PostComposer({
                       type="button"
                       onClick={toggleBrandAssets}
                       aria-expanded={brandAssetsOpen}
-                      className={cx(BTN_SECONDARY, FOCUS, BTN_COMPACT, brandAssetsOpen && "bg-[var(--surface-muted)]")}
+                      className={cx(
+                        BTN_SECONDARY,
+                        FOCUS,
+                        BTN_COMPACT,
+                        brandAssetsOpen && "bg-[var(--surface-muted)]",
+                      )}
                     >
                       <Sparkles size={12} />
                       Brand Assets
                     </button>
                     {form.image && (
-                      <IconButton label="Remove media" onClick={removeMedia} size="sm">
+                      <IconButton
+                        label="Remove media"
+                        onClick={removeMedia}
+                        size="sm"
+                      >
                         <Trash2 size={13} />
                       </IconButton>
                     )}
@@ -4754,18 +5177,24 @@ function PostComposer({
                   {form.platforms.includes("TIKTOK") && (
                     <div className="sg-fade mt-3 space-y-3 rounded-xl border border-[var(--line)] p-3">
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-[10.5px] font-semibold text-[var(--text)]">TikTok</span>
+                        <span className="text-[10.5px] font-semibold text-[var(--text)]">
+                          TikTok
+                        </span>
                         <Segmented label="TikTok publishing mode" compact>
                           <SegmentButton
                             active={form.tiktokPostMode === "DIRECT_POST"}
-                            onClick={() => update({ tiktokPostMode: "DIRECT_POST" })}
+                            onClick={() =>
+                              update({ tiktokPostMode: "DIRECT_POST" })
+                            }
                             title="Publishes directly to TikTok as a post, subject to this account's privacy setting."
                           >
                             Direct Post
                           </SegmentButton>
                           <SegmentButton
                             active={form.tiktokPostMode === "UPLOAD_TO_TIKTOK"}
-                            onClick={() => update({ tiktokPostMode: "UPLOAD_TO_TIKTOK" })}
+                            onClick={() =>
+                              update({ tiktokPostMode: "UPLOAD_TO_TIKTOK" })
+                            }
                             title="Delivers the video as a draft to the creator's TikTok inbox — they finish posting it inside the TikTok app."
                           >
                             Upload to TikTok
@@ -4775,15 +5204,19 @@ function PostComposer({
 
                       {!form.tiktokPostMode && (
                         <p className="text-[10.5px] text-[var(--text-subtle)]">
-                          Direct Post publishes immediately (subject to this account&apos;s privacy setting). Upload to TikTok delivers
-                          the video as a draft the creator finishes posting themselves inside the TikTok app — these are genuinely
-                          different outcomes, so a mode must be chosen.
+                          Direct Post publishes immediately (subject to this
+                          account&apos;s privacy setting). Upload to TikTok
+                          delivers the video as a draft the creator finishes
+                          posting themselves inside the TikTok app — these are
+                          genuinely different outcomes, so a mode must be
+                          chosen.
                         </p>
                       )}
 
                       {form.tiktokPostMode === "UPLOAD_TO_TIKTOK" && (
                         <p className="text-[10.5px] text-[var(--text-subtle)]">
-                          Privacy and interaction settings aren&apos;t sent for this mode — the creator sets them inside the TikTok
+                          Privacy and interaction settings aren&apos;t sent for
+                          this mode — the creator sets them inside the TikTok
                           app when they open the draft notification.
                         </p>
                       )}
@@ -4792,100 +5225,140 @@ function PostComposer({
                         <>
                           {tiktokCreatorInfoStatus === "loading" && (
                             <p className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-subtle)]">
-                              <Loader2 size={11} className="animate-spin" /> Checking this account&apos;s current TikTok settings…
+                              <Loader2 size={11} className="animate-spin" />{" "}
+                              Checking this account&apos;s current TikTok
+                              settings…
                             </p>
                           )}
 
                           {tiktokCreatorInfoStatus === "error" && (
                             <p className="text-[10.5px] text-red-600">
-                              Couldn&apos;t load this TikTok account&apos;s current publish settings. Reopen this panel to try again.
+                              Couldn&apos;t load this TikTok account&apos;s
+                              current publish settings. Reopen this panel to try
+                              again.
                             </p>
                           )}
 
-                          {tiktokCreatorInfoStatus === "ready" && tiktokCreatorInfo && (
-                            <>
-                              <div>
-                                <span className="mb-1 block text-[10.5px] font-medium text-[var(--text)]">Who can see this post</span>
-                                {tiktokCreatorInfo.privacyLevelOptions.length === 0 ? (
-                                  <p className="text-[10.5px] text-[var(--text-subtle)]">
-                                    TikTok did not return any allowed privacy settings for this account — it may need to be
-                                    reconnected.
-                                  </p>
-                                ) : (
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {tiktokCreatorInfo.privacyLevelOptions.map((option) => (
-                                      <button
-                                        key={option}
-                                        type="button"
-                                        onClick={() => update({ tiktokPrivacyLevel: option })}
-                                        className={cx(
-                                          "rounded-lg border px-2.5 py-1 text-[10.5px] font-medium transition-colors",
-                                          FOCUS,
-                                          form.tiktokPrivacyLevel === option
-                                            ? "border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_10%,var(--surface))] text-[var(--accent)]"
-                                            : "border-[var(--line)] text-[var(--text-muted)] hover:text-[var(--text)]",
-                                        )}
-                                      >
-                                        {TIKTOK_PRIVACY_LABELS[option] ?? option}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
+                          {tiktokCreatorInfoStatus === "ready" &&
+                            tiktokCreatorInfo && (
+                              <>
+                                <div>
+                                  <span className="mb-1 block text-[10.5px] font-medium text-[var(--text)]">
+                                    Who can see this post
+                                  </span>
+                                  {tiktokCreatorInfo.privacyLevelOptions
+                                    .length === 0 ? (
+                                    <p className="text-[10.5px] text-[var(--text-subtle)]">
+                                      TikTok did not return any allowed privacy
+                                      settings for this account — it may need to
+                                      be reconnected.
+                                    </p>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {tiktokCreatorInfo.privacyLevelOptions.map(
+                                        (option) => (
+                                          <button
+                                            key={option}
+                                            type="button"
+                                            onClick={() =>
+                                              update({
+                                                tiktokPrivacyLevel: option,
+                                              })
+                                            }
+                                            className={cx(
+                                              "rounded-lg border px-2.5 py-1 text-[10.5px] font-medium transition-colors",
+                                              FOCUS,
+                                              form.tiktokPrivacyLevel === option
+                                                ? "border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_10%,var(--surface))] text-[var(--accent)]"
+                                                : "border-[var(--line)] text-[var(--text-muted)] hover:text-[var(--text)]",
+                                            )}
+                                          >
+                                            {TIKTOK_PRIVACY_LABELS[option] ??
+                                              option}
+                                          </button>
+                                        ),
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
 
-                              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                                {!tiktokCreatorInfo.commentDisabled && (
-                                  <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
-                                    <input
-                                      type="checkbox"
-                                      checked={form.tiktokDisableComment}
-                                      onChange={(event) => update({ tiktokDisableComment: event.target.checked })}
-                                    />
-                                    Disable comments
-                                  </label>
-                                )}
-                                {!tiktokCreatorInfo.duetDisabled && (
-                                  <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
-                                    <input
-                                      type="checkbox"
-                                      checked={form.tiktokDisableDuet}
-                                      onChange={(event) => update({ tiktokDisableDuet: event.target.checked })}
-                                    />
-                                    Disable duet
-                                  </label>
-                                )}
-                                {!tiktokCreatorInfo.stitchDisabled && (
-                                  <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
-                                    <input
-                                      type="checkbox"
-                                      checked={form.tiktokDisableStitch}
-                                      onChange={(event) => update({ tiktokDisableStitch: event.target.checked })}
-                                    />
-                                    Disable stitch
-                                  </label>
-                                )}
-                              </div>
+                                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                                  {!tiktokCreatorInfo.commentDisabled && (
+                                    <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                      <input
+                                        type="checkbox"
+                                        checked={form.tiktokDisableComment}
+                                        onChange={(event) =>
+                                          update({
+                                            tiktokDisableComment:
+                                              event.target.checked,
+                                          })
+                                        }
+                                      />
+                                      Disable comments
+                                    </label>
+                                  )}
+                                  {!tiktokCreatorInfo.duetDisabled && (
+                                    <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                      <input
+                                        type="checkbox"
+                                        checked={form.tiktokDisableDuet}
+                                        onChange={(event) =>
+                                          update({
+                                            tiktokDisableDuet:
+                                              event.target.checked,
+                                          })
+                                        }
+                                      />
+                                      Disable duet
+                                    </label>
+                                  )}
+                                  {!tiktokCreatorInfo.stitchDisabled && (
+                                    <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                      <input
+                                        type="checkbox"
+                                        checked={form.tiktokDisableStitch}
+                                        onChange={(event) =>
+                                          update({
+                                            tiktokDisableStitch:
+                                              event.target.checked,
+                                          })
+                                        }
+                                      />
+                                      Disable stitch
+                                    </label>
+                                  )}
+                                </div>
 
-                              <div className="flex flex-wrap gap-x-4 gap-y-1.5 border-t border-[var(--line)] pt-2">
-                                <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
-                                  <input
-                                    type="checkbox"
-                                    checked={form.tiktokYourBrand}
-                                    onChange={(event) => update({ tiktokYourBrand: event.target.checked })}
-                                  />
-                                  Promoting your own business
-                                </label>
-                                <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
-                                  <input
-                                    type="checkbox"
-                                    checked={form.tiktokBrandedContent}
-                                    onChange={(event) => update({ tiktokBrandedContent: event.target.checked })}
-                                  />
-                                  Paid partnership (third-party brand)
-                                </label>
-                              </div>
-                            </>
-                          )}
+                                <div className="flex flex-wrap gap-x-4 gap-y-1.5 border-t border-[var(--line)] pt-2">
+                                  <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                    <input
+                                      type="checkbox"
+                                      checked={form.tiktokYourBrand}
+                                      onChange={(event) =>
+                                        update({
+                                          tiktokYourBrand: event.target.checked,
+                                        })
+                                      }
+                                    />
+                                    Promoting your own business
+                                  </label>
+                                  <label className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                                    <input
+                                      type="checkbox"
+                                      checked={form.tiktokBrandedContent}
+                                      onChange={(event) =>
+                                        update({
+                                          tiktokBrandedContent:
+                                            event.target.checked,
+                                        })
+                                      }
+                                    />
+                                    Paid partnership (third-party brand)
+                                  </label>
+                                </div>
+                              </>
+                            )}
                         </>
                       )}
                     </div>
@@ -4896,7 +5369,10 @@ function PostComposer({
                       {libraryLoading ? (
                         <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-8">
                           {Array.from({ length: 8 }).map((_, index) => (
-                            <Skeleton key={index} className="aspect-square w-full rounded-lg" />
+                            <Skeleton
+                              key={index}
+                              className="aspect-square w-full rounded-lg"
+                            />
                           ))}
                         </div>
                       ) : libraryAssets && libraryAssets.length > 0 ? (
@@ -4904,7 +5380,8 @@ function PostComposer({
                           <p className="mb-2 flex items-center justify-between gap-2 text-[10.5px] text-[var(--text-subtle)]">
                             <span>
                               Pick one, or several for a carousel.
-                              {form.assetIds.length > 1 && ` ${form.assetIds.length} selected.`}
+                              {form.assetIds.length > 1 &&
+                                ` ${form.assetIds.length} selected.`}
                             </span>
                             {form.assetIds.length > 0 && (
                               <button
@@ -4929,10 +5406,16 @@ function PostComposer({
                                   className={cx(
                                     "relative aspect-square overflow-hidden rounded-lg border-2 transition-[border-color,transform] duration-150 active:scale-[0.96]",
                                     FOCUS_INSET,
-                                    picked ? "border-[var(--accent)]" : "border-transparent hover:border-[var(--line)]",
+                                    picked
+                                      ? "border-[var(--accent)]"
+                                      : "border-transparent hover:border-[var(--line)]",
                                   )}
                                 >
-                                  <MediaThumb src={asset.url} type={asset.type} className="h-full w-full" />
+                                  <MediaThumb
+                                    src={asset.url}
+                                    type={asset.type}
+                                    className="h-full w-full"
+                                  />
                                   {picked && (
                                     <span className="sg-pop absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--accent)] text-[9px] font-bold text-white">
                                       {order + 1}
@@ -4945,7 +5428,8 @@ function PostComposer({
                         </>
                       ) : (
                         <p className="text-[11px] text-[var(--text-muted)]">
-                          Nothing uploaded yet. Upload a file and it&apos;ll show up here next time.
+                          Nothing uploaded yet. Upload a file and it&apos;ll
+                          show up here next time.
                         </p>
                       )}
                     </div>
@@ -4956,13 +5440,17 @@ function PostComposer({
                       {brandAssetsLoading ? (
                         <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-8">
                           {Array.from({ length: 8 }).map((_, index) => (
-                            <Skeleton key={index} className="aspect-square w-full rounded-lg" />
+                            <Skeleton
+                              key={index}
+                              className="aspect-square w-full rounded-lg"
+                            />
                           ))}
                         </div>
                       ) : brandAssetOptions && brandAssetOptions.length > 0 ? (
                         <>
                           <p className="mb-2 text-[10.5px] text-[var(--text-subtle)]">
-                            Approved, active brand assets — picking one reuses its existing file, never re-uploads it.
+                            Approved, active brand assets — picking one reuses
+                            its existing file, never re-uploads it.
                           </p>
                           <div className="sg-scroll grid max-h-[148px] grid-cols-6 gap-1.5 overflow-y-auto overscroll-contain sm:grid-cols-8">
                             {brandAssetOptions.map((option) => (
@@ -4971,16 +5459,29 @@ function PostComposer({
                                 type="button"
                                 onClick={() => void pickBrandAsset(option)}
                                 disabled={pickingBrandAssetId === option.id}
-                                title={option.brandKit ? `${option.name} · ${option.brandKit.name}` : option.name}
+                                title={
+                                  option.brandKit
+                                    ? `${option.name} · ${option.brandKit.name}`
+                                    : option.name
+                                }
                                 className={cx(
                                   "relative aspect-square overflow-hidden rounded-lg border-2 border-transparent transition-[border-color,transform] duration-150 hover:border-[var(--line)] active:scale-[0.96]",
                                   FOCUS_INSET,
                                 )}
                               >
-                                <MediaThumb src={option.url} type={option.type === "VIDEO" ? "VIDEO" : "IMAGE"} className="h-full w-full" />
+                                <MediaThumb
+                                  src={option.url}
+                                  type={
+                                    option.type === "VIDEO" ? "VIDEO" : "IMAGE"
+                                  }
+                                  className="h-full w-full"
+                                />
                                 {pickingBrandAssetId === option.id && (
                                   <span className="absolute inset-0 flex items-center justify-center bg-black/40">
-                                    <Loader2 size={14} className="animate-spin text-white" />
+                                    <Loader2
+                                      size={14}
+                                      className="animate-spin text-white"
+                                    />
                                   </span>
                                 )}
                               </button>
@@ -4989,7 +5490,8 @@ function PostComposer({
                         </>
                       ) : (
                         <p className="text-[11px] text-[var(--text-muted)]">
-                          No approved brand assets yet — add some from the Brand Assets module.
+                          No approved brand assets yet — add some from the Brand
+                          Assets module.
                         </p>
                       )}
                     </div>
@@ -4997,7 +5499,12 @@ function PostComposer({
                 </div>
 
                 {/* Status + publishing time */}
-                <div ref={(node) => { fieldRefs.current.schedule = node; }} className="scroll-mt-4">
+                <div
+                  ref={(node) => {
+                    fieldRefs.current.schedule = node;
+                  }}
+                  className="scroll-mt-4"
+                >
                   <span className={LABEL}>Status</span>
                   <div
                     role="radiogroup"
@@ -5018,7 +5525,9 @@ function PostComposer({
                             update({
                               status,
                               scheduledAt:
-                                status === "SCHEDULED" && (!form.scheduledAt || futureTimeError(form.scheduledAt))
+                                status === "SCHEDULED" &&
+                                (!form.scheduledAt ||
+                                  futureTimeError(form.scheduledAt))
                                   ? slots[1].value
                                   : form.scheduledAt,
                             })
@@ -5031,13 +5540,20 @@ function PostComposer({
                               : "text-[var(--text-muted)] hover:text-[var(--text)]",
                           )}
                         >
-                          <Icon size={13} className="shrink-0" style={{ color: meta.hue }} />
+                          <Icon
+                            size={13}
+                            className="shrink-0"
+                            style={{ color: meta.hue }}
+                          />
                           <span className="truncate">{meta.label}</span>
                         </button>
                       );
                     })}
                   </div>
-                  <p key={form.status} className="sg-fade mt-1.5 text-[10.5px] leading-5 text-[var(--text-subtle)]">
+                  <p
+                    key={form.status}
+                    className="sg-fade mt-1.5 text-[10.5px] leading-5 text-[var(--text-subtle)]"
+                  >
                     {STATUS_HINT[form.status]}
                   </p>
 
@@ -5049,8 +5565,13 @@ function PostComposer({
                         type="datetime-local"
                         value={form.scheduledAt}
                         min={localDateTimeValue(new Date())}
-                        onChange={(event) => update({ scheduledAt: event.target.value })}
-                        className={cx(INPUT, "h-8 w-full px-2.5 text-[11.5px] sm:w-[210px]")}
+                        onChange={(event) =>
+                          update({ scheduledAt: event.target.value })
+                        }
+                        className={cx(
+                          INPUT,
+                          "h-8 w-full px-2.5 text-[11.5px] sm:w-[210px]",
+                        )}
                       />
                       {slots.map((slot) => {
                         const active = form.scheduledAt === slot.value;
@@ -5079,13 +5600,18 @@ function PostComposer({
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label htmlFor="social-title" className={LABEL}>
-                      Title <span className="font-normal text-[var(--text-subtle)]">Internal only</span>
+                      Title{" "}
+                      <span className="font-normal text-[var(--text-subtle)]">
+                        Internal only
+                      </span>
                     </label>
                     <input
                       id="social-title"
                       type="text"
                       value={form.title}
-                      onChange={(event) => update({ title: event.target.value })}
+                      onChange={(event) =>
+                        update({ title: event.target.value })
+                      }
                       placeholder="e.g. Autumn launch teaser"
                       className={cx(INPUT, "h-9 px-3")}
                     />
@@ -5130,9 +5656,17 @@ function PostComposer({
               >
                 <span className="flex items-center gap-2">
                   {previewOpen ? "Hide preview" : "Show preview"}
-                  {activePreview && <PlatformMark platform={activePreview} size="xs" />}
+                  {activePreview && (
+                    <PlatformMark platform={activePreview} size="xs" />
+                  )}
                 </span>
-                <ChevronDown size={14} className={cx("text-[var(--text-muted)] transition-transform duration-200", previewOpen && "rotate-180")} />
+                <ChevronDown
+                  size={14}
+                  className={cx(
+                    "text-[var(--text-muted)] transition-transform duration-200",
+                    previewOpen && "rotate-180",
+                  )}
+                />
               </button>
 
               {/* Preview + activity */}
@@ -5143,7 +5677,9 @@ function PostComposer({
                 )}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-[11.5px] font-semibold text-[var(--text)]">Preview</p>
+                  <p className="text-[11.5px] font-semibold text-[var(--text)]">
+                    Preview
+                  </p>
 
                   {form.platforms.length > 1 && (
                     <Segmented label="Preview channel">
@@ -5155,7 +5691,9 @@ function PostComposer({
                           title={platformDefinition(platform).name}
                         >
                           <PlatformMark platform={platform} size="xs" />
-                          <span className="sr-only">{platformDefinition(platform).name}</span>
+                          <span className="sr-only">
+                            {platformDefinition(platform).name}
+                          </span>
                         </SegmentButton>
                       ))}
                     </Segmented>
@@ -5183,23 +5721,34 @@ function PostComposer({
                 </div>
 
                 <p className="mx-auto mt-2.5 max-w-[320px] text-[10px] leading-4 text-[var(--text-subtle)]">
-                  Previews are approximate. Each platform crops text and media in its own way.
+                  Previews are approximate. Each platform crops text and media
+                  in its own way.
                 </p>
 
                 {post && activity.length > 0 && (
                   <div className="sg-fade mt-6 border-t border-[var(--line)] pt-5">
-                    <p className="text-[11.5px] font-semibold text-[var(--text)]">Activity</p>
+                    <p className="text-[11.5px] font-semibold text-[var(--text)]">
+                      Activity
+                    </p>
                     <ol className="relative mt-3 space-y-3 border-l border-[var(--line)] pl-4">
                       {activity.map((item) => (
-                        <li key={item.id} className="relative text-[11px] leading-5 text-[var(--text-muted)]">
+                        <li
+                          key={item.id}
+                          className="relative text-[11px] leading-5 text-[var(--text-muted)]"
+                        >
                           <span className="absolute -left-[20.5px] top-[7px] h-2 w-2 rounded-full border-2 border-[var(--surface-muted)] bg-[var(--text-subtle)]" />
                           <span className="font-medium text-[var(--text)]">
                             {item.actor
-                              ? [item.actor.firstName, item.actor.lastName].filter(Boolean).join(" ") || "Someone"
+                              ? [item.actor.firstName, item.actor.lastName]
+                                  .filter(Boolean)
+                                  .join(" ") || "Someone"
                               : "System"}
                           </span>{" "}
-                          {item.description ?? item.type.toLowerCase().replace(/_/g, " ")}
-                          <span className="block text-[10px] text-[var(--text-subtle)]">{formatDateTime(item.createdAt)}</span>
+                          {item.description ??
+                            item.type.toLowerCase().replace(/_/g, " ")}
+                          <span className="block text-[10px] text-[var(--text-subtle)]">
+                            {formatDateTime(item.createdAt)}
+                          </span>
                         </li>
                       ))}
                     </ol>
@@ -5208,63 +5757,62 @@ function PostComposer({
               </div>
             </div>
 
-            {/* Footer: always visible */}
-            <div className="shrink-0 border-t border-[var(--line)] bg-[var(--surface)] px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-6 sm:pb-3">
-              {error && (
-                <div
-                  key={errorKey}
-                  role="alert"
-                  className="sg-shake mb-2.5 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.06] px-3 py-2 text-[11px] leading-5 text-red-600"
+            {/* On phones the toolbar's actions scroll away with the top of
+                the page, so they repeat here where a thumb can reach
+                them. Hidden from sm up, where the toolbar is always in
+                view. */}
+            <div className="shrink-0 border-t border-[var(--line)] bg-[var(--surface)] px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:hidden">
+              <div className="flex w-full items-center gap-2">
+                <button
+                  type="button"
+                  onClick={requestClose}
+                  disabled={saving}
+                  className={cx(BTN_SECONDARY, FOCUS, "flex-1")}
                 >
-                  <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                  <span className="min-w-0 flex-1">{error}</span>
-                  <button
-                    type="button"
-                    aria-label="Dismiss error"
-                    onClick={() => setError(null)}
-                    className="shrink-0 rounded-md opacity-70 transition hover:opacity-100"
-                  >
-                    <X size={13} />
-                  </button>
-                </div>
-              )}
-
-              <div className="flex items-center gap-3">
-                <p className="hidden items-center gap-1.5 text-[10.5px] text-[var(--text-subtle)] md:flex">
-                  <Kbd>{isMac ? "⌘" : "Ctrl"}</Kbd>
-                  <Kbd>Enter</Kbd>
-                  to save
-                  <span className="mx-1.5 h-3 w-px bg-[var(--line)]" />
-                  <Kbd>Esc</Kbd>
-                  to close
-                </p>
-                <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
-                  <button
-                    type="button"
-                    onClick={requestClose}
-                    disabled={saving}
-                    className={cx(BTN_SECONDARY, FOCUS, "flex-1 sm:flex-none")}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={saving || imageBusy}
-                    className={cx(BTN_PRIMARY, FOCUS, "min-w-[150px] flex-[2] sm:flex-none")}
-                  >
-                    {saving ? <Loader2 size={14} className="animate-spin" /> : <PrimaryIcon size={14} />}
-                    <span key={saving ? "saving" : primaryLabel} className="sg-fade">
-                      {saving ? savingLabel : primaryLabel}
-                    </span>
-                  </button>
-                </div>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving || imageBusy}
+                  className={cx(BTN_PRIMARY, FOCUS, "flex-[2]")}
+                >
+                  {saving ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <PrimaryIcon size={14} />
+                  )}
+                  {saving ? savingLabel : primaryLabel}
+                </button>
               </div>
             </div>
           </form>
-        </div>
+
+          {/* The save error floats over the workspace rather than sitting
+              in a footer bar, so showing it never reflows the form you
+              are reading. */}
+          {error && (
+            <div
+              key={errorKey}
+              role="alert"
+              className="sg-shake absolute right-3 top-[60px] z-30 flex w-[min(380px,calc(100%-1.5rem))] items-start gap-2 rounded-xl border border-red-500/30 bg-[var(--surface)] px-3 py-2.5 text-[11.5px] leading-5 text-red-600 shadow-[0_20px_50px_-18px_rgba(0,0,0,0.45)]"
+            >
+              <AlertCircle size={14} className="mt-0.5 shrink-0" />
+              <span className="min-w-0 flex-1">{error}</span>
+              <button
+                type="button"
+                aria-label="Dismiss error"
+                onClick={() => setError(null)}
+                className={cx("shrink-0 rounded-md opacity-70 transition hover:opacity-100", FOCUS)}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          )}
       </div>
 
-      {dialog && <ActionDialog request={dialog} onClose={() => setDialog(null)} />}
+      {dialog && (
+        <ActionDialog request={dialog} onClose={() => setDialog(null)} />
+      )}
     </>
   );
 }
@@ -5289,9 +5837,17 @@ function WorkflowButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={cx(primary ? BTN_PRIMARY : BTN_SECONDARY, FOCUS, "h-8 rounded-lg px-2.5 text-[11px]")}
+      className={cx(
+        primary ? BTN_PRIMARY : BTN_SECONDARY,
+        FOCUS,
+        "h-8 rounded-lg px-2.5 text-[11px]",
+      )}
     >
-      {busy ? <Loader2 size={12} className="animate-spin" /> : Icon ? <Icon size={12} /> : null}
+      {busy ? (
+        <Loader2 size={12} className="animate-spin" />
+      ) : Icon ? (
+        <Icon size={12} />
+      ) : null}
       {children}
     </button>
   );
@@ -5301,9 +5857,16 @@ function WorkflowButton({
    CHARACTER METER
 ============================================================================= */
 
-function CharMeter({ platform, count }: { platform: PlatformDefinition; count: number }) {
+function CharMeter({
+  platform,
+  count,
+}: {
+  platform: PlatformDefinition;
+  count: number;
+}) {
   const ratio = count / platform.limit;
-  const color = ratio > 1 ? "#DC2626" : ratio > 0.9 ? "#D97706" : "var(--accent)";
+  const color =
+    ratio > 1 ? "#DC2626" : ratio > 0.9 ? "#D97706" : "var(--accent)";
 
   return (
     <span className="inline-flex items-center gap-2 text-[10.5px] tabular-nums text-[var(--text-muted)]">
@@ -5356,8 +5919,12 @@ function PostPreview({
           </div>
           <div className="absolute left-3 top-6 flex items-center gap-2">
             <PreviewAvatar small ring />
-            <span className="text-[11px] font-semibold text-white">syntragrid</span>
-            <span className="text-[10px] text-white/70">{when === "Just now" ? "now" : when}</span>
+            <span className="text-[11px] font-semibold text-white">
+              syntragrid
+            </span>
+            <span className="text-[10px] text-white/70">
+              {when === "Just now" ? "now" : when}
+            </span>
           </div>
           <div className="absolute inset-x-3 bottom-3 flex items-center gap-2.5">
             <span className="flex-1 rounded-full border border-white/50 px-3 py-1.5 text-[10.5px] text-white/80">
@@ -5380,7 +5947,9 @@ function PostPreview({
       <div className={shell}>
         <div className="flex items-center gap-2.5 px-3 py-2.5">
           <PreviewAvatar ring />
-          <span className="text-[11.5px] font-semibold text-[var(--text)]">syntragrid</span>
+          <span className="text-[11.5px] font-semibold text-[var(--text)]">
+            syntragrid
+          </span>
           <MoreHorizontal size={15} className={cx("ml-auto", iconTone)} />
         </div>
         <PreviewMediaSlot media={media} variant="square" />
@@ -5390,11 +5959,21 @@ function PostPreview({
           <Send size={17} />
           <Bookmark size={17} className="ml-auto" />
         </div>
-        <p className={cx("whitespace-pre-wrap px-3 pt-2 text-[11.5px] leading-[1.55]", textTone)}>
-          <span className="font-semibold text-[var(--text)]">syntragrid</span> {truncate(text, cut)}
-          {text.length > cut && <span className="text-[var(--text-subtle)]"> more</span>}
+        <p
+          className={cx(
+            "whitespace-pre-wrap px-3 pt-2 text-[11.5px] leading-[1.55]",
+            textTone,
+          )}
+        >
+          <span className="font-semibold text-[var(--text)]">syntragrid</span>{" "}
+          {truncate(text, cut)}
+          {text.length > cut && (
+            <span className="text-[var(--text-subtle)]"> more</span>
+          )}
         </p>
-        <p className="px-3 pb-3 pt-1.5 text-[9.5px] text-[var(--text-subtle)]">{when}</p>
+        <p className="px-3 pb-3 pt-1.5 text-[9.5px] text-[var(--text-subtle)]">
+          {when}
+        </p>
       </div>
     );
   }
@@ -5406,7 +5985,9 @@ function PostPreview({
         <div className="flex items-start gap-2.5 px-3.5 pt-3.5">
           <PreviewAvatar />
           <span className="min-w-0">
-            <span className="block text-[11.5px] font-semibold text-[var(--text)]">Syntra Grid</span>
+            <span className="block text-[11.5px] font-semibold text-[var(--text)]">
+              Syntra Grid
+            </span>
             <span className="flex items-center gap-1 text-[10px] text-[var(--text-subtle)]">
               {when}
               <Globe size={10} />
@@ -5414,19 +5995,41 @@ function PostPreview({
           </span>
           <MoreHorizontal size={15} className={cx("ml-auto", iconTone)} />
         </div>
-        <p className={cx("whitespace-pre-wrap px-3.5 py-3 text-[11.5px] leading-[1.6]", textTone)}>
+        <p
+          className={cx(
+            "whitespace-pre-wrap px-3.5 py-3 text-[11.5px] leading-[1.6]",
+            textTone,
+          )}
+        >
           {truncate(text, cut)}
-          {text.length > cut && <span className="font-medium text-[var(--text-muted)]"> See more</span>}
+          {text.length > cut && (
+            <span className="font-medium text-[var(--text-muted)]">
+              {" "}
+              See more
+            </span>
+          )}
         </p>
-        <PreviewMediaSlot media={media} variant="inline" emptyClassName="px-3.5 pb-3" />
+        <PreviewMediaSlot
+          media={media}
+          variant="inline"
+          emptyClassName="px-3.5 pb-3"
+        />
         <div className="mx-3.5 border-t border-[var(--line)]" />
-        <div className={cx("grid grid-cols-3 px-1.5 py-1.5 text-[10.5px] font-medium", iconTone)}>
+        <div
+          className={cx(
+            "grid grid-cols-3 px-1.5 py-1.5 text-[10.5px] font-medium",
+            iconTone,
+          )}
+        >
           {[
             { icon: ThumbsUp, label: "Like" },
             { icon: MessageCircle, label: "Comment" },
             { icon: Share2, label: "Share" },
           ].map(({ icon: Icon, label }) => (
-            <span key={label} className="flex items-center justify-center gap-1.5 py-1.5">
+            <span
+              key={label}
+              className="flex items-center justify-center gap-1.5 py-1.5"
+            >
               <Icon size={13} />
               {label}
             </span>
@@ -5443,26 +6046,54 @@ function PostPreview({
         <div className="flex items-start gap-2.5 px-3.5 pt-3.5">
           <PreviewAvatar square />
           <span className="min-w-0">
-            <span className="block text-[11.5px] font-semibold text-[var(--text)]">Syntra Grid</span>
-            <span className="block text-[10px] text-[var(--text-muted)]">Software agency</span>
-            <span className="block text-[10px] text-[var(--text-subtle)]">{when}</span>
+            <span className="block text-[11.5px] font-semibold text-[var(--text)]">
+              Syntra Grid
+            </span>
+            <span className="block text-[10px] text-[var(--text-muted)]">
+              Software agency
+            </span>
+            <span className="block text-[10px] text-[var(--text-subtle)]">
+              {when}
+            </span>
           </span>
           <MoreHorizontal size={15} className={cx("ml-auto", iconTone)} />
         </div>
-        <p className={cx("whitespace-pre-wrap px-3.5 py-3 text-[11.5px] leading-[1.6]", textTone)}>
+        <p
+          className={cx(
+            "whitespace-pre-wrap px-3.5 py-3 text-[11.5px] leading-[1.6]",
+            textTone,
+          )}
+        >
           {truncate(text, cut)}
-          {text.length > cut && <span className="font-medium text-[var(--text-muted)]"> see more</span>}
+          {text.length > cut && (
+            <span className="font-medium text-[var(--text-muted)]">
+              {" "}
+              see more
+            </span>
+          )}
         </p>
-        <PreviewMediaSlot media={media} variant="inline" emptyClassName="px-3.5 pb-3" />
+        <PreviewMediaSlot
+          media={media}
+          variant="inline"
+          emptyClassName="px-3.5 pb-3"
+        />
         <div className="mx-3.5 border-t border-[var(--line)]" />
-        <div className={cx("grid grid-cols-4 px-1.5 py-1.5 text-[10px] font-medium", iconTone)}>
+        <div
+          className={cx(
+            "grid grid-cols-4 px-1.5 py-1.5 text-[10px] font-medium",
+            iconTone,
+          )}
+        >
           {[
             { icon: ThumbsUp, label: "Like" },
             { icon: MessageCircle, label: "Comment" },
             { icon: Repeat2, label: "Repost" },
             { icon: Send, label: "Send" },
           ].map(({ icon: Icon, label }) => (
-            <span key={label} className="flex items-center justify-center gap-1.5 py-1.5">
+            <span
+              key={label}
+              className="flex items-center justify-center gap-1.5 py-1.5"
+            >
               <Icon size={13} />
               <span className="hidden sm:inline">{label}</span>
             </span>
@@ -5485,13 +6116,20 @@ function PostPreview({
           </div>
           <div className="absolute bottom-3 left-3 right-14 text-white">
             <p className="text-[11.5px] font-semibold">@syntragrid</p>
-            <p className={cx("mt-1 whitespace-pre-wrap text-[11px] leading-[1.45]", empty ? "text-white/60" : "text-white/90")}>
+            <p
+              className={cx(
+                "mt-1 whitespace-pre-wrap text-[11px] leading-[1.45]",
+                empty ? "text-white/60" : "text-white/90",
+              )}
+            >
               {truncate(text, 150)}
             </p>
           </div>
         </TallFrame>
         {media.type !== "VIDEO" && (
-          <p className="mt-2 text-center text-[10px] text-[var(--text-subtle)]">TikTok posts work best with a vertical video.</p>
+          <p className="mt-2 text-center text-[10px] text-[var(--text-subtle)]">
+            TikTok posts work best with a vertical video.
+          </p>
         )}
       </div>
     );
@@ -5505,13 +6143,24 @@ function PostPreview({
         <div className="flex gap-2.5 p-3">
           <PreviewAvatar />
           <div className="min-w-0 flex-1">
-            <p className={cx("line-clamp-2 text-[12px] font-semibold leading-5", textTone)}>{truncate(firstLine, 100)}</p>
-            <p className="mt-0.5 text-[10px] text-[var(--text-subtle)]">Syntra Grid, {when}</p>
+            <p
+              className={cx(
+                "line-clamp-2 text-[12px] font-semibold leading-5",
+                textTone,
+              )}
+            >
+              {truncate(firstLine, 100)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-[var(--text-subtle)]">
+              Syntra Grid, {when}
+            </p>
           </div>
           <MoreHorizontal size={15} className={cx("shrink-0", iconTone)} />
         </div>
         {media.type !== "VIDEO" && (
-          <p className="px-3 pb-3 text-[10px] text-[var(--text-subtle)]">YouTube needs a video to publish.</p>
+          <p className="px-3 pb-3 text-[10px] text-[var(--text-subtle)]">
+            YouTube needs a video to publish.
+          </p>
         )}
       </div>
     );
@@ -5531,9 +6180,18 @@ function PostPreview({
           <span className="text-[var(--text-subtle)]">@syntragrid</span>
           <span className="text-[10px] text-[var(--text-subtle)]">{when}</span>
         </p>
-        <p className={cx("mt-1 whitespace-pre-wrap break-words text-[12px] leading-[1.5]", textTone)}>
+        <p
+          className={cx(
+            "mt-1 whitespace-pre-wrap break-words text-[12px] leading-[1.5]",
+            textTone,
+          )}
+        >
           {within}
-          {overflow && <span className="rounded-sm bg-red-500/15 text-red-600">{overflow}</span>}
+          {overflow && (
+            <span className="rounded-sm bg-red-500/15 text-red-600">
+              {overflow}
+            </span>
+          )}
         </p>
         <PreviewMediaSlot
           media={media}
@@ -5541,7 +6199,12 @@ function PostPreview({
           imageClassName="mt-2.5 rounded-2xl border border-[var(--line)]"
           emptyClassName="mt-2.5"
         />
-        <div className={cx("mt-3 flex max-w-[260px] items-center justify-between", iconTone)}>
+        <div
+          className={cx(
+            "mt-3 flex max-w-[260px] items-center justify-between",
+            iconTone,
+          )}
+        >
           <MessageCircle size={15} />
           <Repeat2 size={15} />
           <Heart size={15} />
@@ -5553,7 +6216,13 @@ function PostPreview({
 }
 
 /** A 9:16 phone-style frame for Stories and TikTok. Overlays never block clicks. */
-function TallFrame({ media, children }: { media: PreviewMedia; children: ReactNode }) {
+function TallFrame({
+  media,
+  children,
+}: {
+  media: PreviewMedia;
+  children: ReactNode;
+}) {
   const { image, type, busy, dragging, onAdd, onRemove, dropProps } = media;
 
   return (
@@ -5563,9 +6232,20 @@ function TallFrame({ media, children }: { media: PreviewMedia; children: ReactNo
     >
       {image ? (
         type === "VIDEO" ? (
-          <video src={image} muted playsInline loop autoPlay className="absolute inset-0 h-full w-full object-cover" />
+          <video
+            src={image}
+            muted
+            playsInline
+            loop
+            autoPlay
+            className="absolute inset-0 h-full w-full object-cover"
+          />
         ) : (
-          <img src={image} alt="Attached media" className="absolute inset-0 h-full w-full object-cover" />
+          <img
+            src={image}
+            alt="Attached media"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
         )
       ) : (
         <button
@@ -5578,9 +6258,17 @@ function TallFrame({ media, children }: { media: PreviewMedia; children: ReactNo
             dragging ? "text-white" : "text-white/60 hover:text-white",
           )}
         >
-          {busy ? <Loader2 size={24} className="animate-spin" /> : <ImagePlus size={26} />}
+          {busy ? (
+            <Loader2 size={24} className="animate-spin" />
+          ) : (
+            <ImagePlus size={26} />
+          )}
           <span className="mt-1 text-[12px] font-semibold">
-            {busy ? "Uploading…" : dragging ? "Drop to add" : "Add a vertical image or video"}
+            {busy
+              ? "Uploading…"
+              : dragging
+                ? "Drop to add"
+                : "Add a vertical image or video"}
           </span>
         </button>
       )}
@@ -5590,13 +6278,22 @@ function TallFrame({ media, children }: { media: PreviewMedia; children: ReactNo
 
       {(dragging || busy) && image && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11.5px] font-semibold text-white">
-          {busy ? <Loader2 size={20} className="animate-spin" /> : "Drop to replace"}
+          {busy ? (
+            <Loader2 size={20} className="animate-spin" />
+          ) : (
+            "Drop to replace"
+          )}
         </div>
       )}
 
       {image && (
         <div className="absolute right-2 top-10 flex gap-1.5 transition-opacity duration-150 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-          <button type="button" onClick={onAdd} disabled={busy} className={OVERLAY_BTN}>
+          <button
+            type="button"
+            onClick={onAdd}
+            disabled={busy}
+            className={OVERLAY_BTN}
+          >
             <RefreshCw size={12} />
             Replace
           </button>
@@ -5627,14 +6324,27 @@ function PreviewMediaSlot({
   emptyClassName?: string;
 }) {
   const { image, type, busy, dragging, onAdd, onRemove, dropProps } = media;
-  const frame = variant === "square" ? "aspect-square" : variant === "wide" ? "aspect-video" : "max-h-[240px]";
+  const frame =
+    variant === "square"
+      ? "aspect-square"
+      : variant === "wide"
+        ? "aspect-video"
+        : "max-h-[240px]";
 
   if (image) {
     return (
-      <div {...dropProps} className={cx("group relative overflow-hidden", imageClassName)}>
+      <div
+        {...dropProps}
+        className={cx("group relative overflow-hidden", imageClassName)}
+      >
         {type === "VIDEO" ? (
           <>
-            <video src={image} muted playsInline className={cx("block w-full bg-black object-cover", frame)} />
+            <video
+              src={image}
+              muted
+              playsInline
+              className={cx("block w-full bg-black object-cover", frame)}
+            />
             <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white">
                 <Play size={18} className="ml-0.5" fill="currentColor" />
@@ -5642,17 +6352,30 @@ function PreviewMediaSlot({
             </span>
           </>
         ) : (
-          <img src={image} alt="Attached media" className={cx("block w-full object-cover", frame)} />
+          <img
+            src={image}
+            alt="Attached media"
+            className={cx("block w-full object-cover", frame)}
+          />
         )}
 
         {(dragging || busy) && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11.5px] font-semibold text-white">
-            {busy ? <Loader2 size={20} className="animate-spin" /> : "Drop to replace"}
+            {busy ? (
+              <Loader2 size={20} className="animate-spin" />
+            ) : (
+              "Drop to replace"
+            )}
           </div>
         )}
 
         <div className="absolute right-2 top-2 flex gap-1.5 transition-opacity duration-150 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-          <button type="button" onClick={onAdd} disabled={busy} className={OVERLAY_BTN}>
+          <button
+            type="button"
+            onClick={onAdd}
+            disabled={busy}
+            className={OVERLAY_BTN}
+          >
             <RefreshCw size={12} />
             Replace
           </button>
@@ -5686,11 +6409,23 @@ function PreviewMediaSlot({
             : "bg-[color-mix(in_srgb,var(--text)_5%,var(--surface))] text-[var(--text-subtle)] hover:text-[var(--accent)]",
         )}
       >
-        {busy ? <Loader2 size={24} className="animate-spin" /> : <ImagePlus size={26} />}
+        {busy ? (
+          <Loader2 size={24} className="animate-spin" />
+        ) : (
+          <ImagePlus size={26} />
+        )}
         <span className="mt-1 text-[12px] font-semibold">
-          {busy ? "Uploading…" : dragging ? "Drop to add" : variant === "wide" ? "Add a video" : "Add an image"}
+          {busy
+            ? "Uploading…"
+            : dragging
+              ? "Drop to add"
+              : variant === "wide"
+                ? "Add a video"
+                : "Add an image"}
         </span>
-        {!busy && !dragging && <span className="text-[10.5px]">Click, drop or paste</span>}
+        {!busy && !dragging && (
+          <span className="text-[10.5px]">Click, drop or paste</span>
+        )}
       </button>
     );
   }
@@ -5710,21 +6445,34 @@ function PreviewMediaSlot({
             : "border-[var(--line)] text-[var(--text-muted)] hover:border-[color-mix(in_srgb,var(--accent)_45%,var(--line))] hover:text-[var(--accent)]",
         )}
       >
-        {busy ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+        {busy ? (
+          <Loader2 size={14} className="animate-spin" />
+        ) : (
+          <ImagePlus size={14} />
+        )}
         {busy ? "Uploading…" : dragging ? "Drop to add" : "Add an image"}
       </button>
     </div>
   );
 }
 
-function PreviewAvatar({ square, ring, small }: { square?: boolean; ring?: boolean; small?: boolean }) {
+function PreviewAvatar({
+  square,
+  ring,
+  small,
+}: {
+  square?: boolean;
+  ring?: boolean;
+  small?: boolean;
+}) {
   return (
     <span
       className={cx(
         "flex shrink-0 items-center justify-center bg-[var(--accent)] font-bold tracking-tight text-white",
         small ? "h-7 w-7 text-[9px]" : "h-9 w-9 text-[10.5px]",
         square ? "rounded-lg" : "rounded-full",
-        ring && "ring-2 ring-[#D6246E] ring-offset-2 ring-offset-[var(--surface)]",
+        ring &&
+          "ring-2 ring-[#D6246E] ring-offset-2 ring-offset-[var(--surface)]",
       )}
     >
       SG
@@ -5736,99 +6484,6 @@ function PreviewAvatar({ square, ring, small }: { square?: boolean; ring?: boole
    SMALL PRIMITIVES
 ============================================================================= */
 
-const MARK_SIZES = {
-  xs: "h-4 w-4 rounded-[5px]",
-  sm: "h-5 w-5 rounded-md",
-  md: "h-7 w-7 rounded-[9px]",
-  lg: "h-11 w-11 rounded-[14px]",
-} as const;
-
-const MARK_ICON_PIXELS = {
-  xs: 9,
-  sm: 11,
-  md: 15,
-  lg: 22,
-} as const;
-
-function PlatformMark({
-  platform,
-  size = "sm",
-  ring,
-  label,
-}: {
-  platform: SocialPlatform;
-  size?: keyof typeof MARK_SIZES;
-  ring?: boolean;
-  /** Pass the name only when this mark is the sole identifier on screen. */
-  label?: string;
-}) {
-  const definition = platformDefinition(platform);
-  return (
-    <span
-      className={cx(
-        "inline-flex shrink-0 items-center justify-center leading-none",
-        MARK_SIZES[size],
-        ring && "ring-2 ring-[var(--surface)]",
-      )}
-      style={{ background: mix(definition.color, 13, "var(--surface)") }}
-      aria-hidden={label ? undefined : true}
-    >
-      <SocialPlatformIcon platform={platform} size={MARK_ICON_PIXELS[size]} color={definition.color} label={label} />
-    </span>
-  );
-}
-
-function PlatformStack({ platforms, size = "sm" }: { platforms: SocialPlatform[]; size?: "sm" | "md" }) {
-  const names = platforms.map((platform) => platformDefinition(platform).name).join(", ");
-  return (
-    <span className="flex -space-x-1" title={names}>
-      {platforms.map((platform) => (
-        <PlatformMark key={platform} platform={platform} size={size} ring />
-      ))}
-      <span className="sr-only">{names}</span>
-    </span>
-  );
-}
-
-/** Always shows the real backend status, so a failed post never looks scheduled. */
-function StatusPill({ status, large }: { status: RealPostStatus; large?: boolean }) {
-  const meta = REAL_STATUS_META[status];
-  return (
-    <span
-      className={cx(
-        "inline-flex items-center gap-1.5 rounded-full font-semibold",
-        large ? "px-2.5 py-1 text-[10.5px]" : "px-2 py-0.5 text-[10px]",
-      )}
-      style={{ background: mix(meta.hue, 13), color: meta.hue }}
-    >
-      <span className={cx("h-1.5 w-1.5 rounded-full bg-current", status === "PUBLISHING" && "animate-pulse")} />
-      {meta.label}
-    </span>
-  );
-}
-
-function MediaThumb({
-  src,
-  type,
-  className,
-}: {
-  src: string;
-  type: "IMAGE" | "VIDEO" | null;
-  className?: string;
-}) {
-  if (type === "VIDEO") {
-    return (
-      <span className={cx("relative block overflow-hidden bg-black", className)}>
-        <video src={src} muted playsInline preload="metadata" className="h-full w-full object-cover" />
-        <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <Play size={14} className="text-white drop-shadow" fill="currentColor" />
-        </span>
-      </span>
-    );
-  }
-  return <img src={src} alt="" loading="lazy" className={cx("object-cover", className)} />;
-}
-
 /** Smooth height animation without measuring, via the grid-rows 0fr → 1fr trick.
  *  Collapsed content is made invisible so it can't take keyboard focus. */
 function Collapse({ open, children }: { open: boolean; children: ReactNode }) {
@@ -5838,138 +6493,12 @@ function Collapse({ open, children }: { open: boolean; children: ReactNode }) {
       aria-hidden={!open}
       className={cx(
         "grid transition-[grid-template-rows,opacity,visibility] duration-[250ms] ease-[cubic-bezier(.2,.8,.2,1)]",
-        open ? "visible grid-rows-[1fr] opacity-100" : "invisible grid-rows-[0fr] opacity-0",
+        open
+          ? "visible grid-rows-[1fr] opacity-100"
+          : "invisible grid-rows-[0fr] opacity-0",
       )}
     >
       <div className="min-h-0 overflow-hidden">{children}</div>
-    </div>
-  );
-}
-
-function Skeleton({ className, style }: { className?: string; style?: CSSProperties }) {
-  return <span aria-hidden className={cx("sg-skeleton block rounded-full", className)} style={style} />;
-}
-
-function Dot({ color }: { color: string }) {
-  return <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: color }} />;
-}
-
-function Kbd({ children, inverse, className }: { children: ReactNode; inverse?: boolean; className?: string }) {
-  return (
-    <kbd
-      className={cx(
-        "inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1.5 font-sans text-[10px] font-semibold",
-        inverse
-          ? "bg-white/20 text-white"
-          : "border border-[var(--line)] bg-[var(--surface)] text-[var(--text-muted)]",
-        className,
-      )}
-    >
-      {children}
-    </kbd>
-  );
-}
-
-function IconButton({
-  label,
-  onClick,
-  children,
-  bordered,
-  expanded,
-  size = "md",
-}: {
-  label: string;
-  onClick: () => void;
-  children: ReactNode;
-  bordered?: boolean;
-  expanded?: boolean;
-  size?: "sm" | "md";
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      aria-expanded={expanded}
-      onClick={onClick}
-      className={cx(
-        "flex shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--surface-muted)] hover:text-[var(--text)] active:scale-[0.94]",
-        FOCUS,
-        size === "sm" ? "h-7 w-7" : "h-9 w-9",
-        bordered && "rounded-xl border border-[var(--line)] bg-[var(--surface)]",
-        expanded && "bg-[var(--surface-muted)] text-[var(--text)]",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Segmented({ label, children, compact }: { label: string; children: ReactNode; compact?: boolean }) {
-  return (
-    <div
-      role="group"
-      aria-label={label}
-      className={cx(compact ? "h-7" : "h-9", "inline-flex items-center gap-0.5 rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] p-0.5")}
-    >
-      {children}
-    </div>
-  );
-}
-
-function SegmentButton({
-  active,
-  onClick,
-  children,
-  title,
-  disabled,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-  title?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      title={title}
-      disabled={disabled}
-      className={cx(
-        "inline-flex h-full min-w-8 items-center justify-center gap-1.5 rounded-[9px] px-2.5 text-[11px] font-medium transition-[background-color,color,box-shadow] duration-150",
-        FOCUS_INSET,
-        active
-          ? "bg-[var(--surface)] text-[var(--text)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
-          : "text-[var(--text-muted)] hover:text-[var(--text)]",
-        disabled && "cursor-not-allowed opacity-60 hover:text-[var(--text-muted)]",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function EmptyState({
-  icon: Icon,
-  title,
-  description,
-  action,
-}: {
-  icon: IconType;
-  title: string;
-  description: string;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-[320px] flex-col items-center justify-center px-6 py-12 text-center">
-      <span className={cx("flex h-12 w-12 items-center justify-center rounded-2xl", ACCENT_SOFT)}>
-        <Icon size={20} />
-      </span>
-      <h3 className="mt-4 text-[15px] font-semibold tracking-[-0.015em] text-[var(--text)]">{title}</h3>
-      <p className="mt-1.5 max-w-[340px] text-[11.5px] leading-5 text-[var(--text-muted)]">{description}</p>
-      {action && <div className="mt-5">{action}</div>}
     </div>
   );
 }

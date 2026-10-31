@@ -5,8 +5,9 @@
 // same pattern lib/social-media/permissions.ts already established, so
 // every Brand Assets route enforces permissions the same way the rest of
 // the app does. "brand_assets" already exists as a module key in
-// adminNav.ts's SECURED_MODULE_KEYS and the role-template presets
-// (lib/access/role-templates.ts), so nothing new is introduced here.
+// adminNav.ts's SECURED_MODULE_KEYS and the seeded RoleTemplate rows
+// (see prisma/migrations/20261031100000_.../migration.sql), so nothing
+// new is introduced here.
 //
 // Action mapping (matches the capability list the task itself suggested:
 // "Upload Assets" is its own, lower tier than "Manage Assets"/"Manage

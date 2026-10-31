@@ -11,6 +11,8 @@ import {
   generateInviteToken,
   hashInviteToken,
   INVITE_TOKEN_TTL_MS,
+  reconcileClientAssignments,
+  reconcileRoleTemplateAssignments,
 } from '@/lib/access/server';
 import { ADMIN_TABS } from '@/app/components/admin/adminNav';
 import { AccessAction, AccessScope } from '@/app/generated/prisma/enums';
@@ -97,6 +99,43 @@ function parseGrants(
   return { ok: true, grants };
 }
 
+/** Optional string array fields (roleTemplateIds, clientIds) — absent
+ *  means "leave unchanged" (PATCH) or "none" (POST); an empty array
+ *  explicitly clears them. Only the shape is validated here; existence
+ *  in the database is checked by the caller against the actual ids. */
+function parseOptionalIdList(value: unknown, label: string): { ok: true; ids: string[] | undefined } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, ids: undefined };
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    return { ok: false, error: `${label} must be an array of ids.` };
+  }
+
+  return { ok: true, ids: Array.from(new Set(value)) };
+}
+
+function parseOptionalNullableId(value: unknown, label: string): { ok: true; id: string | null | undefined } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, id: undefined };
+  if (value === null) return { ok: true, id: null };
+  if (typeof value !== 'string' || !value.trim()) {
+    return { ok: false, error: `${label} must be a non-empty string or null.` };
+  }
+
+  return { ok: true, id: value.trim() };
+}
+
+async function roleTemplatesExist(roleTemplateIds: string[]): Promise<boolean> {
+  if (roleTemplateIds.length === 0) return true;
+
+  const found = await prisma.roleTemplate.count({ where: { id: { in: roleTemplateIds } } });
+  return found === roleTemplateIds.length;
+}
+
+async function clientsExist(clientIds: string[]): Promise<boolean> {
+  if (clientIds.length === 0) return true;
+
+  const found = await prisma.client.count({ where: { id: { in: clientIds } } });
+  return found === clientIds.length;
+}
+
 /* ============================================================================
    POST /api/admin/team/[id]/access — Grant Dashboard Access
 ============================================================================ */
@@ -120,6 +159,51 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     if (!parsedGrants.ok) {
       return NextResponse.json({ ok: false, error: parsedGrants.error }, { status: 400 });
+    }
+
+    const parsedRoleTemplateIds = parseOptionalIdList(input.roleTemplateIds, 'roleTemplateIds');
+    if (!parsedRoleTemplateIds.ok) {
+      return NextResponse.json({ ok: false, error: parsedRoleTemplateIds.error }, { status: 400 });
+    }
+
+    const parsedClientIds = parseOptionalIdList(input.clientIds, 'clientIds');
+    if (!parsedClientIds.ok) {
+      return NextResponse.json({ ok: false, error: parsedClientIds.error }, { status: 400 });
+    }
+
+    const parsedDefaultWorkspaceId = parseOptionalNullableId(input.defaultWorkspaceId, 'defaultWorkspaceId');
+    if (!parsedDefaultWorkspaceId.ok) {
+      return NextResponse.json({ ok: false, error: parsedDefaultWorkspaceId.error }, { status: 400 });
+    }
+
+    const parsedDefaultClientId = parseOptionalNullableId(input.defaultClientId, 'defaultClientId');
+    if (!parsedDefaultClientId.ok) {
+      return NextResponse.json({ ok: false, error: parsedDefaultClientId.error }, { status: 400 });
+    }
+
+    // Validated before any write happens below, so a bad id never leaves
+    // the PermissionGrant/Employee-link writes committed with no matching
+    // role-template/client reconciliation.
+    if (parsedRoleTemplateIds.ids !== undefined && !(await roleTemplatesExist(parsedRoleTemplateIds.ids))) {
+      return NextResponse.json({ ok: false, error: 'One or more selected role templates could not be found.' }, { status: 400 });
+    }
+
+    if (parsedClientIds.ids !== undefined && !(await clientsExist(parsedClientIds.ids))) {
+      return NextResponse.json({ ok: false, error: 'One or more selected clients could not be found.' }, { status: 400 });
+    }
+
+    if (parsedDefaultWorkspaceId.id) {
+      const workspaceExists = await prisma.workspace.count({ where: { id: parsedDefaultWorkspaceId.id } });
+      if (!workspaceExists) {
+        return NextResponse.json({ ok: false, error: 'The selected default workspace could not be found.' }, { status: 400 });
+      }
+    }
+
+    if (parsedDefaultClientId.id) {
+      const clientExists = await prisma.client.count({ where: { id: parsedDefaultClientId.id } });
+      if (!clientExists) {
+        return NextResponse.json({ ok: false, error: 'The selected default client could not be found.' }, { status: 400 });
+      }
     }
 
     const employee = await prisma.employee.findUnique({
@@ -237,6 +321,26 @@ export async function POST(request: NextRequest, context: RouteContext) {
       });
     }
 
+    let roleTemplateChange: { added: string[]; removed: string[] } | null = null;
+    if (parsedRoleTemplateIds.ids !== undefined) {
+      roleTemplateChange = await reconcileRoleTemplateAssignments(prisma, adminUserId, parsedRoleTemplateIds.ids, actor.id);
+    }
+
+    let clientAssignmentChange: { added: string[]; removed: string[] } | null = null;
+    if (parsedClientIds.ids !== undefined) {
+      clientAssignmentChange = await reconcileClientAssignments(prisma, adminUserId, parsedClientIds.ids, actor.id);
+    }
+
+    if (parsedDefaultWorkspaceId.id !== undefined || parsedDefaultClientId.id !== undefined) {
+      await prisma.adminUser.update({
+        where: { id: adminUserId },
+        data: {
+          ...(parsedDefaultWorkspaceId.id !== undefined ? { defaultWorkspaceId: parsedDefaultWorkspaceId.id } : {}),
+          ...(parsedDefaultClientId.id !== undefined ? { defaultClientId: parsedDefaultClientId.id } : {}),
+        },
+      });
+    }
+
     let inviteLink: string | null = null;
     let inviteExpiresAt: Date | null = null;
 
@@ -276,9 +380,59 @@ export async function POST(request: NextRequest, context: RouteContext) {
           adminUserId,
           modules: parsedGrants.grants.map((g) => g.module),
           requiresClaim,
+          roleTemplateIds: parsedRoleTemplateIds.ids ?? null,
+          clientIds: parsedClientIds.ids ?? null,
         },
       },
     });
+
+    if (roleTemplateChange && (roleTemplateChange.added.length > 0 || roleTemplateChange.removed.length > 0)) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.id,
+          action: 'ROLE_TEMPLATES_CHANGED',
+          entityType: 'Employee',
+          entityId: employee.id,
+          metadata: { adminUserId, ...roleTemplateChange },
+        },
+      });
+    }
+
+    if (clientAssignmentChange && (clientAssignmentChange.added.length > 0 || clientAssignmentChange.removed.length > 0)) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.id,
+          action: 'CLIENT_ASSIGNMENTS_CHANGED',
+          entityType: 'Employee',
+          entityId: employee.id,
+          metadata: { adminUserId, ...clientAssignmentChange },
+        },
+      });
+    }
+
+    if (parsedDefaultWorkspaceId.id !== undefined) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.id,
+          action: 'DEFAULT_WORKSPACE_CHANGED',
+          entityType: 'Employee',
+          entityId: employee.id,
+          metadata: { adminUserId, defaultWorkspaceId: parsedDefaultWorkspaceId.id },
+        },
+      });
+    }
+
+    if (parsedDefaultClientId.id !== undefined) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.id,
+          action: 'DEFAULT_CLIENT_CHANGED',
+          entityType: 'Employee',
+          entityId: employee.id,
+          metadata: { adminUserId, defaultClientId: parsedDefaultClientId.id },
+        },
+      });
+    }
 
     return NextResponse.json({
       ok: true,
@@ -323,6 +477,48 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
     if (!parsedGrants.ok) {
       return NextResponse.json({ ok: false, error: parsedGrants.error }, { status: 400 });
+    }
+
+    const parsedRoleTemplateIds = parseOptionalIdList(input.roleTemplateIds, 'roleTemplateIds');
+    if (!parsedRoleTemplateIds.ok) {
+      return NextResponse.json({ ok: false, error: parsedRoleTemplateIds.error }, { status: 400 });
+    }
+
+    const parsedClientIds = parseOptionalIdList(input.clientIds, 'clientIds');
+    if (!parsedClientIds.ok) {
+      return NextResponse.json({ ok: false, error: parsedClientIds.error }, { status: 400 });
+    }
+
+    const parsedDefaultWorkspaceId = parseOptionalNullableId(input.defaultWorkspaceId, 'defaultWorkspaceId');
+    if (!parsedDefaultWorkspaceId.ok) {
+      return NextResponse.json({ ok: false, error: parsedDefaultWorkspaceId.error }, { status: 400 });
+    }
+
+    const parsedDefaultClientId = parseOptionalNullableId(input.defaultClientId, 'defaultClientId');
+    if (!parsedDefaultClientId.ok) {
+      return NextResponse.json({ ok: false, error: parsedDefaultClientId.error }, { status: 400 });
+    }
+
+    if (parsedRoleTemplateIds.ids !== undefined && !(await roleTemplatesExist(parsedRoleTemplateIds.ids))) {
+      return NextResponse.json({ ok: false, error: 'One or more selected role templates could not be found.' }, { status: 400 });
+    }
+
+    if (parsedClientIds.ids !== undefined && !(await clientsExist(parsedClientIds.ids))) {
+      return NextResponse.json({ ok: false, error: 'One or more selected clients could not be found.' }, { status: 400 });
+    }
+
+    if (parsedDefaultWorkspaceId.id) {
+      const workspaceExists = await prisma.workspace.count({ where: { id: parsedDefaultWorkspaceId.id } });
+      if (!workspaceExists) {
+        return NextResponse.json({ ok: false, error: 'The selected default workspace could not be found.' }, { status: 400 });
+      }
+    }
+
+    if (parsedDefaultClientId.id) {
+      const clientExists = await prisma.client.count({ where: { id: parsedDefaultClientId.id } });
+      if (!clientExists) {
+        return NextResponse.json({ ok: false, error: 'The selected default client could not be found.' }, { status: 400 });
+      }
     }
 
     const employee = await prisma.employee.findUnique({
@@ -386,6 +582,26 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       });
     }
 
+    let roleTemplateChange: { added: string[]; removed: string[] } | null = null;
+    if (parsedRoleTemplateIds.ids !== undefined) {
+      roleTemplateChange = await reconcileRoleTemplateAssignments(prisma, adminUserId, parsedRoleTemplateIds.ids, actor.id);
+    }
+
+    let clientAssignmentChange: { added: string[]; removed: string[] } | null = null;
+    if (parsedClientIds.ids !== undefined) {
+      clientAssignmentChange = await reconcileClientAssignments(prisma, adminUserId, parsedClientIds.ids, actor.id);
+    }
+
+    if (parsedDefaultWorkspaceId.id !== undefined || parsedDefaultClientId.id !== undefined) {
+      await prisma.adminUser.update({
+        where: { id: adminUserId },
+        data: {
+          ...(parsedDefaultWorkspaceId.id !== undefined ? { defaultWorkspaceId: parsedDefaultWorkspaceId.id } : {}),
+          ...(parsedDefaultClientId.id !== undefined ? { defaultClientId: parsedDefaultClientId.id } : {}),
+        },
+      });
+    }
+
     await prisma.auditLog.create({
       data: {
         actorId: actor.id,
@@ -395,9 +611,59 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
         metadata: {
           adminUserId,
           modules: parsedGrants.grants.map((g) => g.module),
+          roleTemplateIds: parsedRoleTemplateIds.ids ?? null,
+          clientIds: parsedClientIds.ids ?? null,
         },
       },
     });
+
+    if (roleTemplateChange && (roleTemplateChange.added.length > 0 || roleTemplateChange.removed.length > 0)) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.id,
+          action: 'ROLE_TEMPLATES_CHANGED',
+          entityType: 'Employee',
+          entityId: employee.id,
+          metadata: { adminUserId, ...roleTemplateChange },
+        },
+      });
+    }
+
+    if (clientAssignmentChange && (clientAssignmentChange.added.length > 0 || clientAssignmentChange.removed.length > 0)) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.id,
+          action: 'CLIENT_ASSIGNMENTS_CHANGED',
+          entityType: 'Employee',
+          entityId: employee.id,
+          metadata: { adminUserId, ...clientAssignmentChange },
+        },
+      });
+    }
+
+    if (parsedDefaultWorkspaceId.id !== undefined) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.id,
+          action: 'DEFAULT_WORKSPACE_CHANGED',
+          entityType: 'Employee',
+          entityId: employee.id,
+          metadata: { adminUserId, defaultWorkspaceId: parsedDefaultWorkspaceId.id },
+        },
+      });
+    }
+
+    if (parsedDefaultClientId.id !== undefined) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.id,
+          action: 'DEFAULT_CLIENT_CHANGED',
+          entityType: 'Employee',
+          entityId: employee.id,
+          metadata: { adminUserId, defaultClientId: parsedDefaultClientId.id },
+        },
+      });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {

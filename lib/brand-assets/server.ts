@@ -477,6 +477,9 @@ export type UpsertGuidelineInput = Partial<{
   values: string[];
   personality: string | null;
   toneOfVoice: string | null;
+  industry: string | null;
+  targetAudience: string | null;
+  preferredLanguage: string | null;
   logoSpacingNotes: string | null;
   minLogoSizeNotes: string | null;
   approvedUsageNotes: string | null;

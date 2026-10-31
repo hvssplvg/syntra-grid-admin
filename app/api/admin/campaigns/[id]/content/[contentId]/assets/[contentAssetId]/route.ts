@@ -16,7 +16,7 @@ export async function DELETE(
     const identity = await requireCampaignsPermission(AccessAction.EDIT);
     const { id, contentId, contentAssetId } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     await removeBrandAssetFromContent(id, contentId, contentAssetId);
     return NextResponse.json({ ok: true });

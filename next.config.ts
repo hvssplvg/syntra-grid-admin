@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
+  experimental: {
+    agentUpgrade: "security",
+  },
   images: {
     // Client/brand logos are uploaded to Cloudinary (see
     // lib/cloudinary-server.ts) and rendered via next/image in shared

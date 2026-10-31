@@ -101,6 +101,25 @@ export function signedAuthenticatedAssetUrl(
   });
 }
 
+/**
+ * A delivery URL that forces true MP4/H.264 output regardless of the
+ * video's original stored container — a webm recorded in the browser
+ * (Content Studio's Video Studio, see VideoWorkspace.tsx) and an
+ * already-mp4 upload both resolve to the same guaranteed format here.
+ * Needed because publishing destinations like TikTok's Content Posting
+ * API expect MP4/H.264, but Cloudinary otherwise serves back whatever
+ * container was actually uploaded.
+ */
+export function videoDeliveryUrl(publicId: string): string {
+  return cloudinary.url(publicId, {
+    resource_type: 'video',
+    type: 'upload',
+    format: 'mp4',
+    video_codec: 'h264',
+    secure: true,
+  });
+}
+
 // Folder every managed client logo lives under. Exported so the upload
 // route and the derivation below always agree on it.
 export const LOGO_FOLDER = 'syntragrid/clients/logos';
@@ -159,6 +178,29 @@ export function isOwnWallpaperUrl(url: string): boolean {
 
   const pattern = new RegExp(
     `^https://res\\.cloudinary\\.com/${escapeRegExp(CLOUD_NAME)}/image/upload/v\\d+/${escapeRegExp(OVERVIEW_WALLPAPER_FOLDER)}/[^./]+\\.[a-zA-Z0-9]+$`,
+  );
+
+  return pattern.test(url);
+}
+
+/**
+ * Confirms an image URL a client claims as an "existing asset" (e.g. to
+ * animate into AI video) actually points at our own Cloudinary cloud and
+ * the Social Media library's own upload folder — never an arbitrary
+ * external URL handed to a third-party provider (Luma) as if it were
+ * ours. Same safety shape as isOwnWallpaperUrl above.
+ *
+ * The folder string is duplicated from lib/social-media/media.ts's
+ * SOCIAL_MEDIA_FOLDER rather than imported — that module already
+ * imports FROM this file, so importing back would be circular. Keep
+ * both in sync if that folder ever changes.
+ */
+export function isOwnSocialMediaDeliveryUrl(url: string): boolean {
+  if (!CLOUD_NAME) return false;
+
+  const SOCIAL_MEDIA_FOLDER = 'syntragrid/social-media';
+  const pattern = new RegExp(
+    `^https://res\\.cloudinary\\.com/${escapeRegExp(CLOUD_NAME)}/image/upload/v\\d+/${escapeRegExp(SOCIAL_MEDIA_FOLDER)}/[^./]+\\.[a-zA-Z0-9]+$`,
   );
 
   return pattern.test(url);

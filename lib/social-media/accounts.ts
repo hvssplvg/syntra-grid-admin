@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 
 import { prisma } from "@/lib/prisma";
 import { encryptSecret, decryptSecret } from "@/lib/encryption";
-import { SocialAccountStatus, SocialPlatform } from "@/app/generated/prisma/enums";
+import { SocialAccountStatus, SocialAccountType, SocialPlatform } from "@/app/generated/prisma/enums";
 
 export type OAuthFlow = "standard" | "pkce";
 
@@ -106,7 +106,26 @@ export const PLATFORM_CONFIG: Record<SocialPlatform, PlatformOAuthConfig> = {
     clientSecretEnv: "LINKEDIN_CLIENT_SECRET",
     redirectUriEnv: "LINKEDIN_REDIRECT_URI",
     clientIdParam: "client_id",
-    scopes: ["openid", "profile", "w_member_social"],
+    // openid/profile/w_member_social: existing personal-profile publishing
+    // (unchanged). The three organisation scopes below are new — verified
+    // against LinkedIn's current docs, one per capability actually used:
+    //   rw_organization_admin — required by /rest/organizationAcls (company
+    //     page discovery) and /rest/organizations/{id} (page details). See
+    //     https://learn.microsoft.com/linkedin/marketing/community-management/organizations/organization-access-control-by-role
+    //   w_organization_social — required by /rest/posts and /rest/images
+    //     when author is an organisation URN (company-page publishing).
+    //   r_organization_social — reading organisation content; not used by
+    //     any feature yet, requested only because it's in the approved
+    //     scope set and a future read feature would otherwise need another
+    //     reauthorisation round trip.
+    // Deliberately NOT requested: r_organization_social_feed /
+    // w_organization_social_feed (no feed-specific feature exists) and
+    // r_basicprofile (legacy — openid+profile already cover member
+    // identity). An existing token predates these scopes and must be
+    // reauthorised before organisation features work — see
+    // hasLinkedInScopes below; nothing here assumes a stored token already
+    // has them.
+    scopes: ["openid", "profile", "w_member_social", "w_organization_social", "r_organization_social", "rw_organization_admin"],
     flow: "standard",
   },
   X: {
@@ -160,9 +179,42 @@ export const PLATFORM_CONFIG: Record<SocialPlatform, PlatformOAuthConfig> = {
   },
 };
 
+/** LinkedIn company-page publishing uses a SECOND, separate LinkedIn
+ *  developer app ("Syntra Grid Company Manager") — LinkedIn does not
+ *  allow adding the Community Management API product to the original
+ *  personal-profile app ("Syntra Grid Social Manager", configured via
+ *  PLATFORM_CONFIG.LINKEDIN above). The two apps have different
+ *  client_id/client_secret/redirect_uri and different granted scopes —
+ *  this app has NO openid/profile (no identity product), so it can
+ *  never call /v2/userinfo. Same LinkedIn OAuth endpoints, different
+ *  app credentials; selected explicitly by the connect/callback routes
+ *  via an app-variant cookie, never inferred from the platform alone. */
+export const LINKEDIN_ORGANIZATION_OAUTH_CONFIG: PlatformOAuthConfig = {
+  label: "LinkedIn (Company Manager)",
+  authUrl: PLATFORM_CONFIG.LINKEDIN.authUrl,
+  tokenUrl: PLATFORM_CONFIG.LINKEDIN.tokenUrl,
+  clientIdEnv: "LINKEDIN_ORG_CLIENT_ID",
+  clientSecretEnv: "LINKEDIN_ORG_CLIENT_SECRET",
+  redirectUriEnv: "LINKEDIN_ORG_REDIRECT_URI",
+  clientIdParam: "client_id",
+  scopes: ["w_organization_social", "r_organization_social", "rw_organization_admin"],
+  flow: "standard",
+};
+
+/** A real SocialPlatform selects that platform's one OAuth app
+ *  (PLATFORM_CONFIG). The one extra literal selects LinkedIn's SECOND
+ *  app instead — never confused with SocialPlatform.LINKEDIN itself,
+ *  which still always means the personal-profile app. */
+export type OAuthAppKey = SocialPlatform | "LINKEDIN_ORGANIZATION";
+
+function configFor(key: OAuthAppKey): PlatformOAuthConfig {
+  if (key === "LINKEDIN_ORGANIZATION") return LINKEDIN_ORGANIZATION_OAUTH_CONFIG;
+  return PLATFORM_CONFIG[key];
+}
+
 export class PlatformNotConfiguredError extends Error {
-  constructor(platform: SocialPlatform) {
-    const config = PLATFORM_CONFIG[platform];
+  constructor(key: OAuthAppKey) {
+    const config = configFor(key);
     super(
       `${config.label} is not configured. Set ${config.clientIdEnv}, ${config.clientSecretEnv} and ${config.redirectUriEnv}.`,
     );
@@ -175,27 +227,53 @@ function readEnv(name: string): string | null {
   return value ? value : null;
 }
 
-export function isPlatformConfigured(platform: SocialPlatform): boolean {
-  const config = PLATFORM_CONFIG[platform];
-  return Boolean(readEnv(config.clientIdEnv) && readEnv(config.clientSecretEnv) && readEnv(config.redirectUriEnv));
+/** A platform's OAuth redirect URI, with an optional local-development
+ *  override: `${redirectUriEnv}_DEV` (e.g. LINKEDIN_REDIRECT_URI_DEV),
+ *  read only when NODE_ENV !== "production" (next dev's own, standard,
+ *  server-only signal — never derived from a request header, so this
+ *  can't be influenced by a client). Falls back to the normal var
+ *  whenever the dev override isn't set, so every platform's existing
+ *  behaviour — including every production deployment, where this branch
+ *  never runs — is completely unchanged unless a developer opts in by
+ *  setting the _DEV var in their own .env.local.
+ *
+ *  Root-caused a real LinkedIn OAuth failure: .env.local's
+ *  LINKEDIN_REDIRECT_URI held the production URL (the only value ever
+ *  registered with LinkedIn), so running locally sent LinkedIn an
+ *  authorize request whose redirect_uri pointed at a route only
+ *  deployed to production — see the task report for the full
+ *  diagnosis. This override is the fix: local dev gets its own
+ *  registered redirect URI without touching the production value at
+ *  all. */
+function readRedirectUri(config: PlatformOAuthConfig): string | null {
+  if (process.env.NODE_ENV !== "production") {
+    const devOverride = readEnv(`${config.redirectUriEnv}_DEV`);
+    if (devOverride) return devOverride;
+  }
+  return readEnv(config.redirectUriEnv);
 }
 
-export function requiredEnvVarsFor(platform: SocialPlatform): string[] {
-  const config = PLATFORM_CONFIG[platform];
+export function isPlatformConfigured(key: OAuthAppKey): boolean {
+  const config = configFor(key);
+  return Boolean(readEnv(config.clientIdEnv) && readEnv(config.clientSecretEnv) && readRedirectUri(config));
+}
+
+export function requiredEnvVarsFor(key: OAuthAppKey): string[] {
+  const config = configFor(key);
   return [config.clientIdEnv, config.clientSecretEnv, config.redirectUriEnv];
 }
 
-function requireConfig(platform: SocialPlatform) {
-  if (!isPlatformConfigured(platform)) {
-    throw new PlatformNotConfiguredError(platform);
+function requireConfig(key: OAuthAppKey) {
+  if (!isPlatformConfigured(key)) {
+    throw new PlatformNotConfiguredError(key);
   }
 
-  const config = PLATFORM_CONFIG[platform];
+  const config = configFor(key);
   return {
     config,
     clientId: readEnv(config.clientIdEnv) as string,
     clientSecret: readEnv(config.clientSecretEnv) as string,
-    redirectUri: readEnv(config.redirectUriEnv) as string,
+    redirectUri: readRedirectUri(config) as string,
   };
 }
 
@@ -206,8 +284,8 @@ export function createPkcePair() {
   return { verifier, challenge };
 }
 
-export function createAuthorisationUrl(platform: SocialPlatform, state: string, pkceChallenge?: string): string {
-  const { config, clientId, redirectUri } = requireConfig(platform);
+export function createAuthorisationUrl(key: OAuthAppKey, state: string, pkceChallenge?: string): string {
+  const { config, clientId, redirectUri } = requireConfig(key);
 
   const url = new URL(config.authUrl);
   url.searchParams.set(config.clientIdParam, clientId);
@@ -256,11 +334,11 @@ function tokenEndpointAuth(
 }
 
 export async function exchangeAuthorisationCode(
-  platform: SocialPlatform,
+  key: OAuthAppKey,
   code: string,
   pkceVerifier?: string,
 ): Promise<PlatformTokenResponse> {
-  const { config, clientId, clientSecret, redirectUri } = requireConfig(platform);
+  const { config, clientId, clientSecret, redirectUri } = requireConfig(key);
 
   const { headers: authHeaders, includeSecretInBody } = tokenEndpointAuth(config, clientId, clientSecret);
 
@@ -294,7 +372,7 @@ export async function exchangeAuthorisationCode(
   // ever returns a short-lived token (~1 hour) — it must be exchanged
   // once more for a long-lived one (~60 days) before it's any use for
   // background publishing. No other platform here needs this extra hop.
-  if (platform === SocialPlatform.INSTAGRAM) {
+  if (key === SocialPlatform.INSTAGRAM) {
     return exchangeInstagramLongLivedToken(token.access_token, clientSecret);
   }
 
@@ -426,6 +504,124 @@ export async function fetchAccountProfile(platform: SocialPlatform, accessToken:
   }
 }
 
+/* ============================================================================
+   LINKEDIN ORGANISATION DISCOVERY — company-page admin lookup, separate
+   from the OAuth flow above. There is no "exchange for an org token" step
+   on LinkedIn: organisation publishing reuses the same member access
+   token (once it carries the org scopes), addressed with a different
+   author URN at publish time (see LinkedInAdapter in publishing.ts). This
+   section only discovers which organisations the token's member may
+   administer and fetches their display name.
+
+   LINKEDIN_API_VERSION is duplicated from publishing.ts deliberately
+   (importing across that direction would invert the module dependency —
+   publishing.ts already imports from this file) — keep both in sync.
+============================================================================ */
+
+const LINKEDIN_API_VERSION = "202609";
+
+function linkedInRestHeaders(accessToken: string) {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    "LinkedIn-Version": LINKEDIN_API_VERSION,
+    "X-Restli-Protocol-Version": "2.0.0",
+  };
+}
+
+export class LinkedInOrganizationApiError extends Error {
+  constructor(public status: number, rawBody: string) {
+    let message = `LinkedIn API error ${status}: ${rawBody.slice(0, 300)}`;
+    try {
+      const json = rawBody ? (JSON.parse(rawBody) as { message?: string }) : null;
+      if (json?.message) message = json.message;
+    } catch {
+      // Non-JSON body — the generic message above already covers it.
+    }
+    super(message);
+  }
+}
+
+/** Splits LinkedIn's stored OAuth `scope` string and checks every
+ *  required scope is present. Split on comma OR whitespace: although
+ *  OAuth2's spec default is space-separated, checking this app's own
+ *  real stored data showed LinkedIn's token endpoint actually returns
+ *  it comma-separated (e.g. "openid,profile,w_member_social") — the
+ *  comma case is handled for real, not assumed away. Never assumes a
+ *  stored token has a scope just because PLATFORM_CONFIG now requests
+ *  it on NEW authorisations — an existing connection's token only ever
+ *  has what it was actually granted at the time it was last authorised. */
+export function hasLinkedInScopes(scopes: string | null, required: string[]): boolean {
+  if (!scopes) return false;
+  const granted = new Set(scopes.split(/[\s,]+/).filter(Boolean));
+  return required.every((scope) => granted.has(scope));
+}
+
+export type LinkedInOrganizationRef = { id: string; urn: string };
+
+/** GET /rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED
+ *  — the officially documented "Find a Member's Organization Access
+ *  Control Information" API, scoped to administrator roles only (the only
+ *  role that can publish/manage a page). Requires rw_organization_admin.
+ *  https://learn.microsoft.com/linkedin/marketing/community-management/organizations/organization-access-control-by-role
+ *
+ *  LinkedIn's own documentation is inconsistent about the organisation
+ *  field's name across examples on that same page — some show
+ *  "organization", others "organizationTarget" — so both are read
+ *  defensively rather than trusting either exclusively. */
+export async function fetchLinkedInOrganizations(accessToken: string): Promise<LinkedInOrganizationRef[]> {
+  const results: LinkedInOrganizationRef[] = [];
+  let url: string | null =
+    "https://api.linkedin.com/rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED&count=50";
+
+  // LinkedIn administrators realistically number in the low single
+  // digits of pages — this cap is a safety bound against a malformed
+  // "next" link looping forever, not an expected real limit.
+  for (let page = 0; page < 20 && url; page += 1) {
+    const response: Response = await fetch(url, { headers: linkedInRestHeaders(accessToken) });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new LinkedInOrganizationApiError(response.status, text);
+    }
+
+    const json = (await response.json()) as {
+      elements: Array<{ organization?: string; organizationTarget?: string }>;
+      paging?: { links?: Array<{ rel: string; href: string }> };
+    };
+
+    for (const element of json.elements) {
+      const urn = element.organizationTarget ?? element.organization;
+      if (!urn) continue;
+      const id = urn.replace("urn:li:organization:", "");
+      if (!id) continue;
+      results.push({ id, urn });
+    }
+
+    const next = json.paging?.links?.find((link) => link.rel === "next")?.href;
+    url = next ? new URL(next, "https://api.linkedin.com").toString() : null;
+  }
+
+  return results;
+}
+
+/** GET /rest/organizations/{id} (admin-access variant) — display name
+ *  only. logoV2 is a cropped-image URN, not a direct image URL; resolving
+ *  it needs a further images-API call this app doesn't make elsewhere for
+ *  LinkedIn, so organisation accounts simply have no profileImageUrl,
+ *  same as any other platform when one isn't available. Requires
+ *  rw_organization_admin, same as discovery above.
+ *  https://learn.microsoft.com/linkedin/marketing/community-management/organizations/organization-lookup-api */
+export async function fetchLinkedInOrganizationDetails(accessToken: string, organizationId: string): Promise<{ name: string }> {
+  const response = await fetch(`https://api.linkedin.com/rest/organizations/${encodeURIComponent(organizationId)}`, {
+    headers: linkedInRestHeaders(accessToken),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new LinkedInOrganizationApiError(response.status, text);
+  }
+  const data = (await response.json()) as { localizedName?: string };
+  return { name: data.localizedName ?? `LinkedIn organisation ${organizationId}` };
+}
+
 /** Refresh-before-expiry, mirroring lib/monzo/connection.ts's
  *  getValidAccessToken(). Facebook's long-lived-token exchange uses a
  *  different grant (fb_exchange_token) than the generic refresh_token
@@ -451,7 +647,20 @@ export class SocialAccountReauthorisationRequiredError extends Error {
 export async function getValidSocialAccessToken(accountId: string): Promise<string> {
   const account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
 
-  if (!account || account.status !== SocialAccountStatus.CONNECTED || !account.encryptedAccessToken) {
+  if (!account || account.status !== SocialAccountStatus.CONNECTED) {
+    throw new SocialAccountNotConnectedError();
+  }
+
+  // An account that shares its OAuth grant (LinkedIn company pages — see
+  // sharesAuthWithId's doc comment in schema.prisma) never holds its own
+  // token; resolve/refresh the account it borrows from instead. The
+  // borrowed account's own CONNECTED/expiry checks apply from here on, via
+  // the recursive call — this account's row never gets its own token.
+  if (account.sharesAuthWithId) {
+    return getValidSocialAccessToken(account.sharesAuthWithId);
+  }
+
+  if (!account.encryptedAccessToken) {
     throw new SocialAccountNotConnectedError();
   }
 
@@ -471,8 +680,15 @@ export async function getValidSocialAccessToken(accountId: string): Promise<stri
   }
 
   try {
-    const config = PLATFORM_CONFIG[account.platform];
-    const { clientId, clientSecret } = requireConfig(account.platform);
+    // A LinkedIn ORGANIZATION account holding its own token (not
+    // borrowing via sharesAuthWithId — already handled above) was
+    // issued that token by the SEPARATE Company Manager app, never by
+    // the per-platform PLATFORM_CONFIG app — refreshing it with the
+    // wrong app's client_id/secret would fail or, worse, silently
+    // authenticate as the wrong application.
+    const oauthKey: OAuthAppKey = account.accountType === SocialAccountType.ORGANIZATION ? "LINKEDIN_ORGANIZATION" : account.platform;
+    const config = configFor(oauthKey);
+    const { clientId, clientSecret } = requireConfig(oauthKey);
     const { headers: authHeaders, includeSecretInBody } = tokenEndpointAuth(config, clientId, clientSecret);
 
     const body = new URLSearchParams({

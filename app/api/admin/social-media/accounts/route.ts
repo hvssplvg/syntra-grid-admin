@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { AuthenticationError, AuthorisationError } from "@/lib/auth/current-admin";
-import { AccessAction, hasSocialMediaPermission, requireSocialMediaPermission } from "@/lib/social-media/permissions";
+import {
+  AccessAction,
+  hasSocialMediaPermission,
+  requireSocialMediaPermission,
+  socialMediaClientScopeFilter,
+} from "@/lib/social-media/permissions";
 import { isPlatformConfigured, PLATFORM_CONFIG, requiredEnvVarsFor } from "@/lib/social-media/accounts";
 import { SocialPlatform } from "@/app/generated/prisma/enums";
 
@@ -16,10 +21,16 @@ const ACCOUNT_SELECT = {
   username: true,
   profileImageUrl: true,
   status: true,
+  accountType: true,
+  sharesAuthWithId: true,
   connectedAt: true,
   lastSyncedAt: true,
   lastError: true,
   disconnectedAt: true,
+  // Null means "Syntra Grid's own" — see SocialAccount.clientId's doc
+  // comment in prisma/schema.prisma.
+  clientId: true,
+  client: { select: { id: true, name: true, displayName: true } },
 } as const;
 
 /* ============================================================================
@@ -35,7 +46,13 @@ export async function GET() {
   try {
     const identity = await requireSocialMediaPermission(AccessAction.VIEW);
 
+    // A CLIENT-scoped restricted caller never sees Syntra Grid's own
+    // (null-owned) accounts or another client's — only their assigned
+    // clients'. `{ in: [...] }` naturally excludes null clientIds.
+    const clientIdIn = socialMediaClientScopeFilter(identity, AccessAction.VIEW);
+
     const accounts = await prisma.socialAccount.findMany({
+      where: clientIdIn ? { clientId: clientIdIn } : undefined,
       select: ACCOUNT_SELECT,
       orderBy: { createdAt: "asc" },
     });
@@ -46,6 +63,15 @@ export async function GET() {
       configured: isPlatformConfigured(platform),
       requiredEnvVars: isPlatformConfigured(platform) ? [] : requiredEnvVarsFor(platform),
       accounts: accounts.filter((account) => account.platform === platform),
+      // LinkedIn company-page connections use a separate developer app
+      // (see LINKEDIN_ORGANIZATION_OAUTH_CONFIG) with its own
+      // configuration state, independent of the personal app above.
+      ...(platform === SocialPlatform.LINKEDIN
+        ? {
+            organizationAppConfigured: isPlatformConfigured("LINKEDIN_ORGANIZATION"),
+            organizationAppRequiredEnvVars: isPlatformConfigured("LINKEDIN_ORGANIZATION") ? [] : requiredEnvVarsFor("LINKEDIN_ORGANIZATION"),
+          }
+        : {}),
     }));
 
     // Lets the UI decide which workflow actions to even show (e.g.

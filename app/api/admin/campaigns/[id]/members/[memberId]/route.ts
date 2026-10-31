@@ -24,7 +24,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const identity = await requireCampaignsPermission(AccessAction.MANAGE);
     const { id, memberId } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     const body = await request.json().catch(() => null);
     const role = parseEnumValue(body?.role, Object.values(CampaignMemberRole));
@@ -42,7 +42,7 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
     const identity = await requireCampaignsPermission(AccessAction.MANAGE);
     const { id, memberId } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     await removeCampaignMember(identity, id, memberId);
     return NextResponse.json({ ok: true });

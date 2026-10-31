@@ -39,7 +39,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       if (!hasCampaignsPermission(identity, AccessAction.EDIT)) {
         return NextResponse.json({ ok: false, error: "You are not authorised to edit this task." }, { status: 403 });
       }
-      assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+      assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
     }
 
     const body = await request.json().catch(() => ({}));
@@ -89,7 +89,7 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
     const identity = await requireCampaignsPermission(AccessAction.MANAGE);
     const { id, taskId } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.MANAGE, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     await deleteCampaignTask(id, taskId);
     return NextResponse.json({ ok: true });

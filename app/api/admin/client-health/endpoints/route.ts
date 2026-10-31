@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { AuthenticationError, AuthorisationError } from "@/lib/auth/current-admin";
-import { AccessAction, requireClientHealthPermission } from "@/lib/client-health/permissions";
+import { AccessAction, assertClientHealthRowAccess, requireClientHealthPermission } from "@/lib/client-health/permissions";
 import { assertSafeMonitoringUrl, UnsafeUrlError } from "@/lib/monitoring/safeFetch";
 
 export const runtime = "nodejs";
@@ -19,12 +19,14 @@ const MAX_LABEL_LENGTH = 120;
 ============================================================================ */
 export async function GET(request: NextRequest) {
   try {
-    await requireClientHealthPermission(AccessAction.VIEW);
+    const identity = await requireClientHealthPermission(AccessAction.VIEW);
 
     const clientId = request.nextUrl.searchParams.get("clientId");
     if (!clientId) {
       return NextResponse.json({ ok: false, error: "clientId is required." }, { status: 400 });
     }
+
+    assertClientHealthRowAccess(identity, AccessAction.VIEW, clientId);
 
     const endpoints = await prisma.monitoredEndpoint.findMany({
       where: { clientId },
@@ -73,6 +75,8 @@ export async function POST(request: NextRequest) {
     if (!client) {
       return NextResponse.json({ ok: false, error: "That client could not be found." }, { status: 404 });
     }
+
+    assertClientHealthRowAccess(identity, AccessAction.MANAGE, clientId);
 
     if (projectId) {
       const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, clientId: true } });

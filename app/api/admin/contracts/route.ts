@@ -41,6 +41,8 @@ export async function GET(
   request: NextRequest,
 ) {
   try {
+    const identity =
+      await requireContractIdentity();
 
     const searchParams =
       request.nextUrl.searchParams;
@@ -104,6 +106,7 @@ export async function GET(
 
     const feed =
       await getContractFeed({
+        identity,
         filters: {
           search,
 

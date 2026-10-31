@@ -25,6 +25,8 @@
 
 import { prisma } from "@/lib/prisma";
 import {
+  SocialAccountStatus,
+  SocialAccountType,
   SocialMediaPlacement,
   SocialPlatform,
   SocialPostActivityType,
@@ -33,8 +35,9 @@ import {
 } from "@/app/generated/prisma/enums";
 import { Prisma } from "@/app/generated/prisma/client";
 import type { SocialMediaAsset } from "@/app/generated/prisma/client";
-import { getValidSocialAccessToken, isPlatformConfigured, markAccountError, PLATFORM_CONFIG } from "@/lib/social-media/accounts";
+import { getValidSocialAccessToken, hasLinkedInScopes, isPlatformConfigured, markAccountError, OAuthAppKey, PLATFORM_CONFIG } from "@/lib/social-media/accounts";
 import { logPostActivity } from "@/lib/social-media/server";
+import { videoDeliveryUrl } from "@/lib/cloudinary-server";
 
 export type PublishParams = {
   accountId: string;
@@ -107,19 +110,38 @@ export function registerPublishAdapter(platform: SocialPlatform, adapter: Publis
 }
 
 /* ============================================================================
-   LINKEDIN — real personal-profile publishing via LinkedIn's Posts API.
+   LINKEDIN — real publishing to either a personal profile or a company
+   page, via the same Posts API (/rest/posts, /rest/images).
 
-   Scope required: w_member_social (already requested at connect time —
-   see lib/social-media/accounts.ts PLATFORM_CONFIG.LINKEDIN). The author
-   is always the connected member's own identity (SocialAccount.
-   platformAccountId, captured from /v2/userinfo's `sub` at connect time)
-   — there is no code path that accepts or constructs a different member
-   id, so this can never publish on someone else's behalf.
+   Personal: scope w_member_social, author urn:li:person:{member id}
+   (SocialAccount.platformAccountId, captured from /v2/userinfo's `sub` at
+   connect time). Company page: scope w_organization_social, author
+   urn:li:organization:{org id} — only ever reached when
+   account.accountType === ORGANIZATION, which only ever exists via the
+   verified discovery/selection flow in
+   app/api/admin/social-media/accounts/linkedin/organizations/route.ts
+   (never a caller-supplied id). Neither path accepts or constructs an
+   author id from anything other than the resolved SocialAccount row, so
+   this can never publish on someone else's behalf or as an organisation
+   the connected member doesn't actually administer.
 
-   Company-page (organisation) publishing is NOT implemented here: it
-   needs the w_organization_social scope, an organisation-admin check,
-   and a different author URN (urn:li:organization:{id}) — none of which
-   exist yet. See requiredEnvVarsFor/PLATFORM_CONFIG for what IS wired.
+   An organisation account holds no token of its own — it shares its
+   PERSONAL account's OAuth grant (SocialAccount.sharesAuthWithId;
+   getValidSocialAccessToken resolves this automatically). If that
+   personal account is disconnected or its token lacks
+   w_organization_social, publishing fails with a clear error — it never
+   silently falls back to publishing under the personal identity instead.
+
+   LinkedIn-Version is a required header on every /rest/ call, format
+   YYYYMM, and LinkedIn only keeps roughly the last 12 months' worth of
+   versions live — anything older is retired and the API starts
+   rejecting it with HTTP 426 {"code":"NONEXISTENT_VERSION"}. There is
+   no "always valid" value to set once and forget; this must be bumped
+   periodically (last confirmed 2026-10-13, set to 202609 — the most
+   recent version confirmed live as of that check). Re-verify against
+   https://learn.microsoft.com/linkedin/marketing/versioning (LinkedIn's
+   REST API versioning applies this same header/scheme across products,
+   not just Marketing) before assuming this value is still accepted.
 
    LinkedIn-Version is a required header on every /rest/ call, format
    YYYYMM, and LinkedIn only keeps roughly the last 12 months' worth of
@@ -278,19 +300,50 @@ async function createLinkedInPost(token: string, authorUrn: string, caption: str
 
 class LinkedInAdapter implements PublishAdapter {
   async publish(params: PublishParams): Promise<PublishResult> {
-    if (!isPlatformConfigured(SocialPlatform.LINKEDIN)) {
-      return { ok: false, error: `${PLATFORM_CONFIG.LINKEDIN.label} is not configured.` };
-    }
-
     const account = await prisma.socialAccount.findUnique({ where: { id: params.accountId } });
     if (!account || account.platform !== SocialPlatform.LINKEDIN) {
       return { ok: false, error: "This LinkedIn account is no longer connected." };
     }
 
-    // Always the connected member's own identity — never a caller-supplied
-    // or arbitrary id — resolved once at connect time and stored on the
-    // account row.
-    const authorUrn = `urn:li:person:${account.platformAccountId}`;
+    // A company page's token comes from a wholly SEPARATE LinkedIn
+    // developer app (lib/social-media/accounts.ts's
+    // LINKEDIN_ORGANIZATION_OAUTH_CONFIG), not the personal-profile app
+    // — checking the personal app's configuration here would wrongly
+    // block organisation publishing if only the Company Manager app is
+    // set up (or vice versa).
+    const oauthKey: OAuthAppKey = account.accountType === SocialAccountType.ORGANIZATION ? "LINKEDIN_ORGANIZATION" : SocialPlatform.LINKEDIN;
+    if (!isPlatformConfigured(oauthKey)) {
+      return { ok: false, error: `${PLATFORM_CONFIG.LINKEDIN.label} is not configured.` };
+    }
+
+    // Always resolved from the stored account row — never a caller-
+    // supplied or arbitrary id. Personal: the connected member's own
+    // identity (captured at connect time). Organisation: only ever an id
+    // that passed the server-side discovery/selection check in
+    // accounts/linkedin/organizations/route.ts, never trusted blind.
+    const authorUrn =
+      account.accountType === SocialAccountType.ORGANIZATION
+        ? `urn:li:organization:${account.platformAccountId}`
+        : `urn:li:person:${account.platformAccountId}`;
+
+    if (account.accountType === SocialAccountType.ORGANIZATION) {
+      // The normal case now is this row holding its OWN Company Manager
+      // token directly (sharesAuthWithId null). sharesAuthWithId is only
+      // set when a second page was connected under the same grant and
+      // deliberately shares the first page's row instead of duplicating
+      // the token — in that case, check the row it depends on instead.
+      // Either way, never silently fall back to personal-identity
+      // publishing if the check fails.
+      const scopeSource = account.sharesAuthWithId
+        ? await prisma.socialAccount.findUnique({ where: { id: account.sharesAuthWithId } })
+        : account;
+      if (!scopeSource || scopeSource.status !== SocialAccountStatus.CONNECTED) {
+        return { ok: false, error: "The LinkedIn connection this company page depends on needs reconnecting." };
+      }
+      if (!hasLinkedInScopes(scopeSource.scopes, ["w_organization_social"])) {
+        return { ok: false, error: "This LinkedIn connection doesn't have permission to post as this company page — reconnect it to grant that permission." };
+      }
+    }
 
     let token: string;
     try {
@@ -1181,7 +1234,13 @@ class TikTokAdapter implements PublishAdapter {
       // endpoint's documented schema takes only source_info (see the
       // module header comment above).
 
-      const assetResponse = await fetch(video.url);
+      // Fetch a format-forced MP4/H.264 delivery URL rather than the
+      // raw stored video.url — the stored asset may be a webm recorded
+      // client-side (Content Studio's Video Studio), and TikTok's
+      // Content Posting API expects true MP4/H.264 regardless of what
+      // container was originally uploaded. See videoDeliveryUrl's doc
+      // comment in lib/cloudinary-server.ts.
+      const assetResponse = await fetch(videoDeliveryUrl(video.cloudinaryPublicId));
       if (!assetResponse.ok) {
         return { ok: false, error: `Could not fetch the attached video for upload (${assetResponse.status}).` };
       }

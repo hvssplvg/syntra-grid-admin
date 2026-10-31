@@ -7,9 +7,9 @@
 
 import { prisma } from "@/lib/prisma";
 import { AuthorisationError } from "@/lib/auth/current-admin";
-import { CampaignActivityType, CampaignObjective, CampaignPriority, CampaignStatus, CurrencyCode } from "@/app/generated/prisma/enums";
+import { AccessScope, CampaignActivityType, CampaignObjective, CampaignPriority, CampaignStatus, CurrencyCode } from "@/app/generated/prisma/enums";
 import { Prisma } from "@/app/generated/prisma/client";
-import { AccessAction, campaignOwnScopeFilter, type ResolvedIdentity } from "@/lib/campaigns/permissions";
+import { AccessAction, CAMPAIGNS_MODULE, campaignOwnScopeFilter, type ResolvedIdentity } from "@/lib/campaigns/permissions";
 import { logCampaignActivity } from "@/lib/campaigns/activity";
 
 /* ============================================================================
@@ -107,10 +107,26 @@ export async function listCampaigns(identity: ResolvedIdentity, filters: ListCam
 
   const ownFilter = campaignOwnScopeFilter(identity, AccessAction.VIEW);
 
+  // A CLIENT-scoped ownFilter narrows to { clientId: { in: [...] } } — a
+  // caller-requested clientId must never override that, only narrow
+  // within it, otherwise a restricted account could request someone
+  // else's client id directly and bypass the scope entirely.
+  const ownFilterClientIn =
+    ownFilter && "clientId" in ownFilter
+      ? (ownFilter.clientId as { in?: string[] } | undefined)?.in
+      : undefined;
+
+  const scopedClientIdFilter =
+    filters.clientId && ownFilterClientIn
+      ? ownFilterClientIn.includes(filters.clientId)
+        ? filters.clientId
+        : "__unresolvable__"
+      : filters.clientId ?? undefined;
+
   const where: Prisma.CampaignWhereInput = {
     ...(ownFilter ?? {}),
     ...(filters.status ? { status: filters.status } : {}),
-    ...(filters.clientId ? { clientId: filters.clientId } : {}),
+    ...(scopedClientIdFilter ? { clientId: scopedClientIdFilter } : {}),
     ...(filters.projectId ? { projectId: filters.projectId } : {}),
     ...(filters.objective ? { objective: filters.objective } : {}),
     ...(filters.search
@@ -330,6 +346,19 @@ export type CampaignInput = {
 
 export async function createCampaign(identity: ResolvedIdentity, input: CampaignInput) {
   const { derivedClientId } = await assertRelatedRecordsExist(input);
+
+  // A CLIENT-scoped restricted caller may only create campaigns for
+  // their own assigned clients — mirrors assertCampaignRowAccess's
+  // CLIENT branch, but there's no existing row yet to check against.
+  if (!identity.isFullAccess) {
+    const grantedScope = identity.permissions.get(CAMPAIGNS_MODULE)?.get(AccessAction.CREATE);
+
+    if (grantedScope === AccessScope.CLIENT) {
+      if (!derivedClientId || !identity.assignedClientIds.includes(derivedClientId)) {
+        throw new AuthorisationError("You can only create campaigns for your assigned clients.");
+      }
+    }
+  }
 
   const campaign = await prisma.campaign.create({
     data: {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { AuthenticationError, AuthorisationError } from "@/lib/auth/current-admin";
-import { AccessAction, requireClientHealthPermission } from "@/lib/client-health/permissions";
+import { AccessAction, assertClientHealthRowAccess, requireClientHealthPermission } from "@/lib/client-health/permissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,10 +18,13 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     const identity = await requireClientHealthPermission(AccessAction.MANAGE);
     const { id } = await params;
 
-    const incident = await prisma.incident.findUnique({ where: { id }, select: { id: true, resolved: true } });
+    const incident = await prisma.incident.findUnique({ where: { id }, select: { id: true, resolved: true, clientId: true } });
     if (!incident) {
       return NextResponse.json({ ok: false, error: "That incident could not be found." }, { status: 404 });
     }
+
+    assertClientHealthRowAccess(identity, AccessAction.MANAGE, incident.clientId);
+
     if (incident.resolved) {
       return NextResponse.json({ ok: false, error: "This incident is already resolved." }, { status: 400 });
     }

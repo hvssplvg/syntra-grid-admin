@@ -13,7 +13,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const identity = await requireCampaignsPermission(AccessAction.APPROVE);
     const { id, approvalId } = await params;
     const campaign = await getCampaignOrThrow(id);
-    assertCampaignRowAccess(identity, AccessAction.APPROVE, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+    assertCampaignRowAccess(identity, AccessAction.APPROVE, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
 
     const body = await request.json().catch(() => ({}));
     const approval = await decideCampaignApproval(identity, id, approvalId, "APPROVED", typeof body?.comment === "string" ? body.comment : null);

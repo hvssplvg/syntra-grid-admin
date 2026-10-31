@@ -73,7 +73,24 @@ export async function POST(request: NextRequest) {
     const ownerId = parseOptionalId(body.ownerId);
     const managerId = parseOptionalId(body.managerId);
 
-    if ([clientId, projectId, departmentId, ownerId, managerId].some((value) => value === undefined)) {
+    // parseOptionalId returns undefined both when a field is simply
+    // absent from the body (the common case — the campaign editor only
+    // ever sends name/description/status/startDate/endDate, see
+    // CampaignsTab.tsx) and when it was present but malformed. Only the
+    // second case is an error — rejecting the first meant creating a
+    // campaign 400'd unconditionally, since none of these five fields
+    // are ever sent at all today.
+    const invalidRelatedId = (
+      [
+        ["clientId", body.clientId, clientId],
+        ["projectId", body.projectId, projectId],
+        ["departmentId", body.departmentId, departmentId],
+        ["ownerId", body.ownerId, ownerId],
+        ["managerId", body.managerId, managerId],
+      ] as const
+    ).some(([, raw, parsed]) => raw !== undefined && parsed === undefined);
+
+    if (invalidRelatedId) {
       return NextResponse.json({ ok: false, error: "One of the selected related records is invalid." }, { status: 400 });
     }
 

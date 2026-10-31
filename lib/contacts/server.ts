@@ -3,10 +3,15 @@ import {
   type AdminUser,
   type Prisma,
 } from "@/app/generated/prisma/client";
+import { AccessAction, AccessScope } from "@/app/generated/prisma/enums";
 
 import {
   AuthorisationError,
-  requireAdmin,
+  assertClientRowAccess,
+  clientScopeIdFilter,
+  getCurrentIdentity,
+  hasPermission,
+  type ResolvedIdentity,
 } from "@/lib/auth/current-admin";
 
 import { prisma } from "@/lib/prisma";
@@ -16,9 +21,14 @@ import { prisma } from "@/lib/prisma";
  * =============================================================================
  */
 
+/** The fine-grained permission module key for Contacts — see
+ *  adminNav.ts's "contacts" AdminTab and SECURED_MODULE_KEYS. */
+export const CONTACTS_MODULE = "contacts";
+
 export type ContactIdentity = {
   admin: AdminUser;
   canManageContacts: boolean;
+  resolved: ResolvedIdentity;
 };
 
 export type ContactClientDTO = {
@@ -123,31 +133,87 @@ export type ContactWithRelations =
  * =============================================================================
  */
 
+/**
+ * Full-access behaviour is unchanged (OWNER/ADMIN/DEVELOPER may manage,
+ * every other role is view-only). A restricted account is admitted only
+ * once it holds at least VIEW on CONTACTS_MODULE (fail-closed by
+ * default, matching requireAdmin's own convention) — its canManageContacts
+ * then comes from an EDIT grant rather than AdminRole, since a
+ * restricted account's role field doesn't carry management intent.
+ */
 export async function requireContactIdentity(): Promise<ContactIdentity> {
-  const admin =
-    await requireAdmin();
+  const resolved = await getCurrentIdentity();
 
-  const canManageContacts =
-    admin.role === "OWNER" ||
-    admin.role === "ADMIN" ||
-    admin.role === "DEVELOPER";
+  if (!resolved.isFullAccess && !hasPermission(resolved, CONTACTS_MODULE, AccessAction.VIEW)) {
+    throw new AuthorisationError("You are not authorised to view contacts.");
+  }
+
+  const canManageContacts = resolved.isFullAccess
+    ? resolved.admin.role === "OWNER" ||
+      resolved.admin.role === "ADMIN" ||
+      resolved.admin.role === "DEVELOPER"
+    : hasPermission(resolved, CONTACTS_MODULE, AccessAction.EDIT);
 
   return {
-    admin,
+    admin: resolved.admin,
     canManageContacts,
+    resolved,
   };
+}
+
+function hasContactAction(identity: ContactIdentity, action: AccessAction): boolean {
+  if (identity.resolved.isFullAccess) {
+    return action === AccessAction.VIEW ? true : identity.canManageContacts;
+  }
+
+  return hasPermission(identity.resolved, CONTACTS_MODULE, action);
+}
+
+function assertContactAction(identity: ContactIdentity, action: AccessAction) {
+  if (!hasContactAction(identity, action)) {
+    throw new AuthorisationError(
+      "You do not have permission to manage client contacts.",
+    );
+  }
 }
 
 export function assertCanManageContacts(
   identity: ContactIdentity,
 ) {
-  if (
-    !identity.canManageContacts
-  ) {
-    throw new AuthorisationError(
-      "You do not have permission to manage client contacts.",
-    );
-  }
+  assertContactAction(identity, AccessAction.EDIT);
+}
+
+/** The `{ in: [...] }` client-id condition for a CLIENT-scoped
+ *  restricted caller's list query, or undefined when no narrowing
+ *  applies. */
+function contactClientIdFilter(identity: ContactIdentity, action: AccessAction) {
+  return clientScopeIdFilter(identity.resolved, CONTACTS_MODULE, action);
+}
+
+/** Throws unless the identity may `action` this specific contact's
+ *  record — module-level first, then (for a CLIENT-scoped restricted
+ *  caller) the contact's own client against their ClientAssignment
+ *  rows. Never trust the contact id alone. */
+export function assertContactRowAccess(
+  identity: ContactIdentity,
+  action: AccessAction,
+  row: { clientId: string },
+) {
+  assertContactAction(identity, action);
+  assertClientRowAccess(identity.resolved, CONTACTS_MODULE, action, row);
+}
+
+/** True unless the identity is a CLIENT-scoped restricted caller whose
+ *  assigned clients don't include this specific client — used by the
+ *  DTO's per-row permission flags, which must never claim an action is
+ *  available when assertContactRowAccess would actually reject it. */
+function rowClientScopeOk(identity: ContactIdentity, action: AccessAction, clientId: string): boolean {
+  if (identity.resolved.isFullAccess) return true;
+
+  const grantedScope = identity.resolved.permissions.get(CONTACTS_MODULE)?.get(action);
+  if (grantedScope !== AccessScope.CLIENT) return true;
+
+  return identity.resolved.assignedClientIds.includes(clientId);
 }
 
 /* =============================================================================
@@ -329,6 +395,20 @@ export async function getContactFeed({
       clientId;
   }
 
+  // A CLIENT-scoped restricted caller never sees another client's
+  // contacts, regardless of what clientId the browser requested.
+  const clientIdIn = contactClientIdFilter(identity, AccessAction.VIEW);
+
+  if (clientIdIn) {
+    if (clientId) {
+      if (!clientIdIn.in.includes(clientId)) {
+        where.clientId = "__unresolvable__";
+      }
+    } else {
+      where.clientId = clientIdIn;
+    }
+  }
+
   if (role) {
     where.role =
       role;
@@ -439,8 +519,9 @@ export async function createContact({
 
   notes?: string | null;
 }) {
-  assertCanManageContacts(
+  assertContactAction(
     identity,
+    AccessAction.CREATE,
   );
 
   const resolvedClientId =
@@ -452,6 +533,16 @@ export async function createContact({
   await requireContactClient(
     resolvedClientId,
   );
+
+  if (
+    !identity.resolved.isFullAccess &&
+    identity.resolved.permissions.get(CONTACTS_MODULE)?.get(AccessAction.CREATE) === AccessScope.CLIENT &&
+    !identity.resolved.assignedClientIds.includes(resolvedClientId)
+  ) {
+    throw new AuthorisationError(
+      "You can only create contacts for your assigned clients.",
+    );
+  }
 
   const resolvedFirstName =
     requiredText(
@@ -603,14 +694,16 @@ export async function updateContact({
 
   notes?: string | null;
 }) {
-  assertCanManageContacts(
-    identity,
-  );
-
   const existing =
     await requireContact(
       contactId,
     );
+
+  assertContactRowAccess(
+    identity,
+    AccessAction.EDIT,
+    existing,
+  );
 
   const resolvedClientId =
     requiredText(
@@ -621,6 +714,18 @@ export async function updateContact({
   await requireContactClient(
     resolvedClientId,
   );
+
+  // Moving a contact to a different client is itself subject to the
+  // same CLIENT-scope check as creating one there in the first place.
+  if (
+    !identity.resolved.isFullAccess &&
+    identity.resolved.permissions.get(CONTACTS_MODULE)?.get(AccessAction.EDIT) === AccessScope.CLIENT &&
+    !identity.resolved.assignedClientIds.includes(resolvedClientId)
+  ) {
+    throw new AuthorisationError(
+      "You can only move contacts to your assigned clients.",
+    );
+  }
 
   const resolvedEmail =
     cleanNullableText(
@@ -735,14 +840,16 @@ export async function deleteContact({
   identity: ContactIdentity;
   contactId: string;
 }) {
-  assertCanManageContacts(
-    identity,
-  );
-
   const contact =
     await requireContact(
       contactId,
     );
+
+  assertContactRowAccess(
+    identity,
+    AccessAction.DELETE,
+    contact,
+  );
 
   await prisma.clientContact.delete({
     where: {
@@ -839,10 +946,12 @@ export function contactDTO(
 
     permissions: {
       canEdit:
-        identity.canManageContacts,
+        hasContactAction(identity, AccessAction.EDIT) &&
+        rowClientScopeOk(identity, AccessAction.EDIT, contact.clientId),
 
       canDelete:
-        identity.canManageContacts,
+        hasContactAction(identity, AccessAction.DELETE) &&
+        rowClientScopeOk(identity, AccessAction.DELETE, contact.clientId),
     },
 
     createdAt:

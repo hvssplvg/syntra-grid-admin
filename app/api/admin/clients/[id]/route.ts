@@ -2,12 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import type { Prisma } from "@/app/generated/prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { AccessAction } from "@/app/generated/prisma/enums";
 import {
   AuthenticationError,
   AuthorisationError,
-  requireAdmin,
+  assertClientRowAccess,
+  getCurrentIdentity,
+  hasPermission,
   requireClientEditor,
 } from "@/lib/auth/current-admin";
+
+/** The fine-grained permission module key for the Clients directory —
+ *  see adminNav.ts's "clients" AdminTab and SECURED_MODULE_KEYS. */
+const CLIENTS_MODULE = "clients";
 import {
   derivePublicIdFromLogoUrl,
   destroyCloudinaryAsset,
@@ -484,7 +491,11 @@ export async function GET(
   context: RouteContext,
 ) {
   try {
-    await requireAdmin();
+    const identity = await getCurrentIdentity();
+
+    if (!identity.isFullAccess && !hasPermission(identity, CLIENTS_MODULE, AccessAction.VIEW)) {
+      throw new AuthorisationError("You are not authorised to view clients.");
+    }
 
     const { id } = await context.params;
 
@@ -510,6 +521,12 @@ export async function GET(
         404,
       );
     }
+
+    // Never trust the id alone: a CLIENT-scoped restricted caller may
+    // only view a client they're actually assigned to.
+    assertClientRowAccess(identity, CLIENTS_MODULE, AccessAction.VIEW, {
+      clientId: client.id,
+    });
 
     /* -----------------------------------------------------------------------
        CLIENT 360 SUMMARY

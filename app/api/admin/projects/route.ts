@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { AccessAction } from '@/app/generated/prisma/enums';
 import {
   AuthenticationError,
   AuthorisationError,
-  requireAdmin,
+  clientScopeIdFilter,
+  getCurrentIdentity,
+  hasPermission,
 } from '@/lib/auth/current-admin';
 import { prisma } from '@/lib/prisma';
+
+/** The fine-grained permission module key for Projects — see
+ *  adminNav.ts's "projects" AdminTab and SECURED_MODULE_KEYS. */
+const PROJECTS_MODULE = 'projects';
 
 /* ============================================================================
    HELPERS
@@ -57,7 +64,11 @@ function errorResponse(error: unknown) {
 
 export async function GET(request: NextRequest) {
   try {
-    await requireAdmin();
+    const identity = await getCurrentIdentity();
+
+    if (!identity.isFullAccess && !hasPermission(identity, PROJECTS_MODULE, AccessAction.VIEW)) {
+      throw new AuthorisationError('You are not authorised to view projects.');
+    }
 
     const { searchParams } = new URL(request.url);
 
@@ -69,8 +80,20 @@ export async function GET(request: NextRequest) {
         ? Math.min(200, Math.floor(pageSizeParam))
         : 200;
 
+    // A CLIENT-scoped restricted caller never sees another client's
+    // projects, regardless of what clientId the browser requested.
+    const clientIdIn = clientScopeIdFilter(identity, PROJECTS_MODULE, AccessAction.VIEW);
+
+    const where = clientId
+      ? clientIdIn && !clientIdIn.in.includes(clientId)
+        ? { clientId: '__unresolvable__' }
+        : { clientId }
+      : clientIdIn
+        ? { clientId: clientIdIn }
+        : undefined;
+
     const projects = await prisma.project.findMany({
-      where: clientId ? { clientId } : undefined,
+      where,
 
       select: {
         id: true,

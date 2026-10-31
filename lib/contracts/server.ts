@@ -10,10 +10,16 @@ import {
   type AdminRole,
 } from "@/app/generated/prisma/client";
 
+import { AccessAction, AccessScope } from "@/app/generated/prisma/enums";
+
 import {
   AuthenticationError,
   AuthorisationError,
-  requireAdmin,
+  assertClientRowAccess,
+  clientScopeIdFilter,
+  getCurrentIdentity,
+  hasPermission,
+  type ResolvedIdentity,
 } from "@/lib/auth/current-admin";
 
 import { prisma } from "@/lib/prisma";
@@ -42,6 +48,10 @@ const CONTRACT_MANAGER_ROLES: AdminRole[] = [
   "FINANCE",
 ];
 
+/** The fine-grained permission module key for Contracts — see
+ *  adminNav.ts's "contracts" AdminTab and SECURED_MODULE_KEYS. */
+export const CONTRACTS_MODULE = "contracts";
+
 /* =============================================================================
  * TYPES
  * =============================================================================
@@ -51,6 +61,7 @@ export type ContractIdentity = {
   id: string;
   email: string;
   role: AdminRole;
+  resolved: ResolvedIdentity;
 };
 
 export type ContractStatusFilter = ContractStatus | "EXPIRING";
@@ -291,13 +302,26 @@ export function contractApiError(error: unknown): {
  * =============================================================================
  */
 
+/**
+ * Full-access behaviour is unchanged: every full-access admin, any role,
+ * may view; CONTRACT_MANAGER_ROLES still gates every mutation. A
+ * restricted account reaches this for the first time here — it is
+ * admitted only once it holds at least VIEW on CONTRACTS_MODULE (fail-
+ * closed by default, matching requireAdmin's own convention), and every
+ * subsequent action/row check below consults its specific grants.
+ */
 export async function requireContractIdentity(): Promise<ContractIdentity> {
-  const admin = await requireAdmin();
+  const resolved = await getCurrentIdentity();
+
+  if (!resolved.isFullAccess && !hasPermission(resolved, CONTRACTS_MODULE, AccessAction.VIEW)) {
+    throw new AuthorisationError("You are not authorised to view contracts.");
+  }
 
   return {
-    id: admin.id,
-    email: admin.email,
-    role: admin.role,
+    id: resolved.admin.id,
+    email: resolved.admin.email,
+    role: resolved.admin.role,
+    resolved,
   };
 }
 
@@ -305,12 +329,49 @@ function canManageContracts(identity: ContractIdentity): boolean {
   return CONTRACT_MANAGER_ROLES.includes(identity.role);
 }
 
-function assertCanManageContracts(identity: ContractIdentity) {
-  if (!canManageContracts(identity)) {
+/**
+ * Whether the identity may perform `action` on contracts in general
+ * (module-level — row-level CLIENT scope is a separate check, see
+ * assertContractRowAccess, since it needs the specific contract's
+ * clientId). Full-access: VIEW is always allowed, unchanged from before
+ * this system existed; every other action still requires
+ * CONTRACT_MANAGER_ROLES, unchanged. Restricted: requires an explicit
+ * PermissionGrant for that exact action on "contracts".
+ */
+function hasContractAction(identity: ContractIdentity, action: AccessAction): boolean {
+  if (identity.resolved.isFullAccess) {
+    return action === AccessAction.VIEW ? true : canManageContracts(identity);
+  }
+
+  return hasPermission(identity.resolved, CONTRACTS_MODULE, action);
+}
+
+function assertContractAction(identity: ContractIdentity, action: AccessAction) {
+  if (!hasContractAction(identity, action)) {
     throw new AuthorisationError(
       "Only the owner, administrators, developers and finance users can manage contracts.",
     );
   }
+}
+
+/** The `{ in: [...] }` client-id condition for a CLIENT-scoped restricted
+ *  caller's list query, or undefined when no narrowing applies. */
+function contractClientIdFilter(identity: ContractIdentity, action: AccessAction) {
+  return clientScopeIdFilter(identity.resolved, CONTRACTS_MODULE, action);
+}
+
+/** Throws unless the identity may `action` this specific contract —
+ *  module-level first, then (for a CLIENT-scoped restricted caller) the
+ *  contract's own clientId against their ClientAssignment rows. Never
+ *  trust the contract id alone: every mutation below calls this
+ *  immediately after loading the existing row. */
+export function assertContractRowAccess(
+  identity: ContractIdentity,
+  action: AccessAction,
+  row: { clientId: string },
+) {
+  assertContractAction(identity, action);
+  assertClientRowAccess(identity.resolved, CONTRACTS_MODULE, action, row);
 }
 
 /* =============================================================================
@@ -643,10 +704,17 @@ export function getEffectiveContractStatus(contract: {
  */
 
 function computeContractPermissions(
-  contract: { status: ContractStatus; signedAt: Date | null },
+  contract: { status: ContractStatus; signedAt: Date | null; clientId: string },
   identity: ContractIdentity,
 ) {
-  const manage = canManageContracts(identity);
+  const manage =
+    hasContractAction(identity, AccessAction.EDIT) &&
+    (identity.resolved.isFullAccess ||
+      resolveClientScopeOk(identity, AccessAction.EDIT, contract.clientId));
+  const canDelete =
+    hasContractAction(identity, AccessAction.DELETE) &&
+    (identity.resolved.isFullAccess ||
+      resolveClientScopeOk(identity, AccessAction.DELETE, contract.clientId));
   const locked =
     contract.status === ContractStatus.TERMINATED ||
     contract.status === ContractStatus.CANCELLED;
@@ -670,8 +738,20 @@ function computeContractPermissions(
       (contract.status === ContractStatus.DRAFT ||
         contract.status === ContractStatus.PENDING_SIGNATURE),
     canReplaceDocument: manage && !locked,
-    canDelete: manage && contract.status === ContractStatus.DRAFT,
+    canDelete: canDelete && contract.status === ContractStatus.DRAFT,
   };
+}
+
+/** True unless the identity is a CLIENT-scoped restricted caller whose
+ *  assigned clients don't include this contract's own client. */
+function resolveClientScopeOk(
+  identity: ContractIdentity,
+  action: AccessAction,
+  clientId: string,
+): boolean {
+  const grantedScope = identity.resolved.permissions.get(CONTRACTS_MODULE)?.get(action);
+  if (grantedScope !== AccessScope.CLIENT) return true;
+  return identity.resolved.assignedClientIds.includes(clientId);
 }
 
 /* =============================================================================
@@ -1044,10 +1124,12 @@ function buildContractOrderBy(
  */
 
 export async function getContractFeed({
+  identity,
   filters = {},
 }: {
+  identity: ContractIdentity;
   filters?: ContractFeedFilters;
-} = {}) {
+}) {
   const page = Math.max(DEFAULT_PAGE, filters.page ?? DEFAULT_PAGE);
 
   const pageSize = Math.min(
@@ -1056,13 +1138,20 @@ export async function getContractFeed({
   );
 
   const where = buildContractWhere(filters);
+
+  // A CLIENT-scoped restricted caller never sees another client's
+  // contracts, no matter what clientId the browser requested — this
+  // narrows (never widens) whatever buildContractWhere already produced.
+  const clientIdIn = contractClientIdFilter(identity, AccessAction.VIEW);
+  const scopedWhere = clientIdIn ? { AND: [where, { clientId: clientIdIn }] } : where;
+
   const orderBy = buildContractOrderBy(filters.sort);
 
   const [total, contracts, allSummary] = await Promise.all([
-    prisma.contract.count({ where }),
+    prisma.contract.count({ where: scopedWhere }),
 
     prisma.contract.findMany({
-      where,
+      where: scopedWhere,
       include: contractListInclude,
       orderBy,
       skip: (page - 1) * pageSize,
@@ -1071,9 +1160,12 @@ export async function getContractFeed({
 
     /*
      * Summary tiles reflect every contract regardless of the active list
-     * filters, so this intentionally has no `where` clause.
+     * filters, so this intentionally has no filters-derived `where`
+     * clause — but a CLIENT-scoped caller's summary must still never
+     * total up contracts outside their assigned clients.
      */
     prisma.contract.findMany({
+      where: clientIdIn ? { clientId: clientIdIn } : undefined,
       select: {
         status: true,
         value: true,
@@ -1228,9 +1320,15 @@ export async function createContract({
   identity: ContractIdentity;
   input: CreateContractInput;
 }) {
-  assertCanManageContracts(identity);
+  assertContractAction(identity, AccessAction.CREATE);
 
   await requireClientForContract(input.clientId);
+
+  if (!resolveClientScopeOk(identity, AccessAction.CREATE, input.clientId)) {
+    throw new AuthorisationError(
+      "You can only create contracts for your assigned clients.",
+    );
+  }
 
   if (input.projectId) {
     await requireProjectForClient(input.projectId, input.clientId);
@@ -1330,9 +1428,8 @@ export async function updateContract({
   contractId: string;
   input: UpdateContractInput;
 }) {
-  assertCanManageContracts(identity);
-
   const existing = await requireContract(contractId);
+  assertContractRowAccess(identity, AccessAction.EDIT, existing);
 
   if (
     existing.status === ContractStatus.TERMINATED ||
@@ -1438,9 +1535,8 @@ export async function deleteContract({
   identity: ContractIdentity;
   contractId: string;
 }) {
-  assertCanManageContracts(identity);
-
   const existing = await requireContract(contractId);
+  assertContractRowAccess(identity, AccessAction.DELETE, existing);
 
   if (existing.status !== ContractStatus.DRAFT) {
     throw new ContractApiError(
@@ -1466,9 +1562,8 @@ export async function sendContractForSignature({
   identity: ContractIdentity;
   contractId: string;
 }) {
-  assertCanManageContracts(identity);
-
   const existing = await requireContract(contractId);
+  assertContractRowAccess(identity, AccessAction.EDIT, existing);
 
   if (existing.status !== ContractStatus.DRAFT) {
     throw new ContractApiError(
@@ -1514,9 +1609,8 @@ export async function markContractSigned({
   signedByClientName: string | null;
   signedByCompanyName: string | null;
 }) {
-  assertCanManageContracts(identity);
-
   const existing = await requireContract(contractId);
+  assertContractRowAccess(identity, AccessAction.EDIT, existing);
 
   if (existing.status !== ContractStatus.PENDING_SIGNATURE) {
     throw new ContractApiError(
@@ -1558,9 +1652,8 @@ export async function activateContract({
   identity: ContractIdentity;
   contractId: string;
 }) {
-  assertCanManageContracts(identity);
-
   const existing = await requireContract(contractId);
+  assertContractRowAccess(identity, AccessAction.EDIT, existing);
 
   if (existing.status !== ContractStatus.PENDING_SIGNATURE) {
     throw new ContractApiError(
@@ -1622,9 +1715,8 @@ export async function renewContract({
   autoRenew?: boolean;
   noticePeriodDays?: number | null;
 }) {
-  assertCanManageContracts(identity);
-
   const existing = await requireContract(contractId);
+  assertContractRowAccess(identity, AccessAction.EDIT, existing);
 
   if (
     existing.status !== ContractStatus.ACTIVE &&
@@ -1696,9 +1788,8 @@ export async function terminateContract({
   contractId: string;
   reason: string | null;
 }) {
-  assertCanManageContracts(identity);
-
   const existing = await requireContract(contractId);
+  assertContractRowAccess(identity, AccessAction.EDIT, existing);
 
   if (existing.status !== ContractStatus.ACTIVE) {
     throw new ContractApiError(
@@ -1740,9 +1831,8 @@ export async function cancelContract({
   contractId: string;
   reason: string | null;
 }) {
-  assertCanManageContracts(identity);
-
   const existing = await requireContract(contractId);
+  assertContractRowAccess(identity, AccessAction.EDIT, existing);
 
   if (
     existing.status !== ContractStatus.DRAFT &&
@@ -1793,9 +1883,8 @@ export async function replaceContractDocument({
   mimeType: string | null;
   sizeBytes: bigint | null;
 }) {
-  assertCanManageContracts(identity);
-
   const existing = await requireContract(contractId);
+  assertContractRowAccess(identity, AccessAction.EDIT, existing);
 
   if (
     existing.status === ContractStatus.TERMINATED ||

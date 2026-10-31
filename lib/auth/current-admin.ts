@@ -5,30 +5,31 @@ import { cache } from 'react';
 import { auth } from '@/lib/auth/server';
 import { prisma } from '@/lib/prisma';
 
-import type { AdminUser as AdminUserRecord, Employee } from '@/app/generated/prisma/client';
-import { AccessAction, AccessScope } from '@/app/generated/prisma/enums';
+import type { AccessAction, AccessScope } from '@/app/generated/prisma/enums';
 
-export class AuthenticationError extends Error {
-  constructor(message = 'Authentication required.') {
-    super(message);
-    this.name = 'AuthenticationError';
-  }
-}
+// The pure, DB/session-free half of this system lives in
+// lib/auth/permissions.ts (no next/headers dependency, so it's directly
+// unit-testable) — re-exported here so every existing call site can keep
+// importing from this one file unchanged.
+export {
+  AuthenticationError,
+  AuthorisationError,
+  SCOPE_RANK,
+  hasPermission,
+  resolveClientScope,
+  clientScopeIdFilter,
+  assertClientRowAccess,
+  type AdminRole,
+  type ResolvedIdentity,
+} from '@/lib/auth/permissions';
 
-export class AuthorisationError extends Error {
-  constructor(message = 'You are not authorised to perform this action.') {
-    super(message);
-    this.name = 'AuthorisationError';
-  }
-}
-
-export type AdminRole =
-  | 'OWNER'
-  | 'ADMIN'
-  | 'DEVELOPER'
-  | 'SUPPORT'
-  | 'FINANCE'
-  | 'VIEWER';
+import {
+  AuthenticationError,
+  AuthorisationError,
+  hasPermission,
+  type AdminRole,
+  type ResolvedIdentity,
+} from '@/lib/auth/permissions';
 
 /**
  * Resolves the signed-in admin, linking the auth account to an invited
@@ -146,10 +147,26 @@ export async function requireAdmin() {
   return admin;
 }
 
+/**
+ * A restricted account (AdminUser.restrictedAccess === true) must never
+ * pass this, regardless of what its `role` column says — AdminRole and
+ * restrictedAccess are two different admins could independently set
+ * (the Access tab's role override exists mainly for pre-existing,
+ * full-access accounts), and every one of this function's callers
+ * (requireFinanceAdmin/requireTeamManager/requireClientEditor) predates
+ * the fine-grained permission system entirely. Without this check, a
+ * restricted account whose role happened to be set to e.g. ADMIN would
+ * pass these role-list gates outright, bypassing PermissionGrant/
+ * ClientAssignment entirely — the exact "CEO access granted by a field
+ * other than a trusted server-side restrictedAccess check" failure mode
+ * this system exists to prevent. Reach for a restricted account must
+ * only ever come from its PermissionGrant rows (hasPermission/
+ * requirePermission), never from this legacy role-list path.
+ */
 async function requireRole(roles: AdminRole[], message: string) {
   const admin = await getCurrentAdmin();
 
-  if (!roles.includes(admin.role as AdminRole)) {
+  if (admin.restrictedAccess || !roles.includes(admin.role as AdminRole)) {
     throw new AuthorisationError(message);
   }
 
@@ -189,26 +206,11 @@ export async function requireClientEditor() {
  * and therefore full access here regardless of its AdminRole — this system
  * can only ever grant additional reach to a brand-new restricted account,
  * never take reach away from an account it didn't create.
+ *
+ * SCOPE_RANK/ResolvedIdentity/hasPermission live in lib/auth/permissions.ts
+ * (re-exported above) — getCurrentIdentity below is the only thing that
+ * actually RESOLVES a ResolvedIdentity from a live session.
  */
-
-const SCOPE_RANK: Record<AccessScope, number> = {
-  [AccessScope.OWN]: 0,
-  // Narrower than a whole department (an assigned subset of clients),
-  // wider than just your own rows. Not consulted by any row-level check
-  // yet (see ClientAssignment's doc comment in schema.prisma) — ranked
-  // now so merging grants for the same module+action already behaves
-  // correctly once CLIENT-scoped grants exist.
-  [AccessScope.CLIENT]: 1,
-  [AccessScope.DEPARTMENT]: 2,
-  [AccessScope.ALL]: 3,
-};
-
-export type ResolvedIdentity = {
-  admin: AdminUserRecord;
-  employee: Employee | null;
-  isFullAccess: boolean;
-  permissions: Map<string, Map<AccessAction, AccessScope>>;
-};
 
 /** Cached per request for the same reason as getCurrentAdmin above — this
  *  is called by requirePermission/hasPermission call sites throughout the
@@ -217,11 +219,14 @@ export const getCurrentIdentity = cache(async function getCurrentIdentity(): Pro
   const admin = await getCurrentAdmin();
   const isFullAccess = !admin.restrictedAccess;
 
-  const [employee, grants] = await Promise.all([
+  const [employee, grants, clientAssignments] = await Promise.all([
     prisma.employee.findUnique({ where: { adminUserId: admin.id } }),
     isFullAccess
       ? Promise.resolve([])
       : prisma.permissionGrant.findMany({ where: { adminUserId: admin.id } }),
+    isFullAccess
+      ? Promise.resolve([])
+      : prisma.clientAssignment.findMany({ where: { adminUserId: admin.id }, select: { clientId: true } }),
   ]);
 
   const permissions = new Map<string, Map<AccessAction, AccessScope>>();
@@ -234,24 +239,31 @@ export const getCurrentIdentity = cache(async function getCurrentIdentity(): Pro
     permissions.get(grant.module)!.set(grant.action, grant.scope);
   }
 
-  return { admin, employee, isFullAccess, permissions };
+  const assignedClientIds = clientAssignments.map((row) => row.clientId);
+
+  return { admin, employee, isFullAccess, permissions, assignedClientIds };
 });
 
-export function hasPermission(
-  identity: ResolvedIdentity,
-  module: string,
-  action: AccessAction,
-  opts?: { scope?: AccessScope },
-): boolean {
-  if (identity.isFullAccess) return true;
+/**
+ * Raw list of client ids a restricted AdminUser holds a ClientAssignment
+ * row for. Standalone (rather than always going through getCurrentIdentity)
+ * because a few callers — the workspace/client switcher filters, and the
+ * read-only "Preview as" feature in Team — need this for an AdminUser who
+ * isn't the current request's signed-in identity. Cached per request only
+ * when called with the current admin's own id, same as getCurrentAdmin;
+ * calls with a different id (preview) hit the database directly, since
+ * React's cache() keys on arguments and previewed ids vary per request.
+ */
+export const getAssignedClientIds = cache(async function getAssignedClientIds(
+  adminUserId: string,
+): Promise<string[]> {
+  const rows = await prisma.clientAssignment.findMany({
+    where: { adminUserId },
+    select: { clientId: true },
+  });
 
-  const grantedScope = identity.permissions.get(module)?.get(action);
-
-  if (!grantedScope) return false;
-  if (!opts?.scope) return true;
-
-  return SCOPE_RANK[grantedScope] >= SCOPE_RANK[opts.scope];
-}
+  return rows.map((row) => row.clientId);
+});
 
 export async function requirePermission(
   module: string,

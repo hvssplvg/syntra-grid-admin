@@ -8,6 +8,8 @@ import {
   createAuthorisationUrl,
   createPkcePair,
   isPlatformConfigured,
+  LINKEDIN_ORGANIZATION_OAUTH_CONFIG,
+  OAuthAppKey,
   PLATFORM_CONFIG,
   requiredEnvVarsFor,
 } from "@/lib/social-media/accounts";
@@ -49,23 +51,36 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(socialMediaUrl);
     }
 
-    if (!isPlatformConfigured(platform)) {
+    // LinkedIn company-page connections use a SEPARATE LinkedIn developer
+    // app ("Syntra Grid Company Manager") — LinkedIn won't allow the
+    // Community Management API product on the original personal-profile
+    // app. Selected only via this explicit query flag, never inferred —
+    // every other platform (and a plain LinkedIn connect) is unaffected.
+    const useLinkedInOrgApp = platform === SocialPlatform.LINKEDIN && request.nextUrl.searchParams.get("linkedinApp") === "organization";
+    const oauthKey: OAuthAppKey = useLinkedInOrgApp ? "LINKEDIN_ORGANIZATION" : platform;
+    const config = useLinkedInOrgApp ? LINKEDIN_ORGANIZATION_OAUTH_CONFIG : PLATFORM_CONFIG[platform];
+
+    if (!isPlatformConfigured(oauthKey)) {
       socialMediaUrl.searchParams.set("social", "not_configured");
       socialMediaUrl.searchParams.set("platform", platform);
-      socialMediaUrl.searchParams.set("missing", requiredEnvVarsFor(platform).join(","));
+      socialMediaUrl.searchParams.set("missing", requiredEnvVarsFor(oauthKey).join(","));
       return NextResponse.redirect(socialMediaUrl);
     }
 
     const state = crypto.randomBytes(32).toString("hex");
-    const pkce = PLATFORM_CONFIG[platform].flow === "pkce" ? createPkcePair() : null;
+    const pkce = config.flow === "pkce" ? createPkcePair() : null;
 
-    const authorisationUrl = createAuthorisationUrl(platform, state, pkce?.challenge);
+    const authorisationUrl = createAuthorisationUrl(oauthKey, state, pkce?.challenge);
 
     const response = NextResponse.redirect(authorisationUrl);
 
     response.cookies.set("social_oauth_state", state, COOKIE_OPTS);
     response.cookies.set("social_oauth_admin", identity.admin.id, COOKIE_OPTS);
     response.cookies.set("social_oauth_platform", platform, COOKIE_OPTS);
+
+    if (useLinkedInOrgApp) {
+      response.cookies.set("social_oauth_linkedin_app", "organization", COOKIE_OPTS);
+    }
 
     if (pkce) {
       response.cookies.set("social_oauth_pkce_verifier", pkce.verifier, COOKIE_OPTS);

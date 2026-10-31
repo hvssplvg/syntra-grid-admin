@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { AuthenticationError, AuthorisationError } from "@/lib/auth/current-admin";
-import { AccessAction, requireClientHealthPermission } from "@/lib/client-health/permissions";
+import { AccessAction, clientHealthClientScopeFilter, requireClientHealthPermission } from "@/lib/client-health/permissions";
 import { listClientHealth } from "@/lib/client-health/server";
 import { ClientPriority } from "@/app/generated/prisma/enums";
 import type { ClientHealthStatus, HealthDimension } from "@/lib/client-health/compute";
@@ -23,12 +23,14 @@ const DIMENSIONS: HealthDimension[] = ["monitoring", "support", "delivery", "com
 ============================================================================ */
 export async function GET(request: NextRequest) {
   try {
-    await requireClientHealthPermission(AccessAction.VIEW);
+    const identity = await requireClientHealthPermission(AccessAction.VIEW);
 
     const params = request.nextUrl.searchParams;
     const statusParam = params.get("status");
     const dimensionParam = params.get("dimension");
     const priorityParam = params.get("priority");
+
+    const clientIdIn = clientHealthClientScopeFilter(identity, AccessAction.VIEW);
 
     const items = await listClientHealth({
       status: statusParam && STATUSES.includes(statusParam as ClientHealthStatus) ? (statusParam as ClientHealthStatus) : undefined,
@@ -36,6 +38,7 @@ export async function GET(request: NextRequest) {
       priority: priorityParam && Object.values(ClientPriority).includes(priorityParam as ClientPriority) ? (priorityParam as ClientPriority) : undefined,
       search: params.get("search")?.trim() || undefined,
       clientId: params.get("clientId")?.trim() || undefined,
+      allowedClientIds: clientIdIn?.in,
     });
 
     return NextResponse.json({ ok: true, items });

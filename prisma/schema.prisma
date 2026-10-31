@@ -38,11 +38,19 @@ model AdminUser {
   // is unaffected until a default is explicitly set.
   defaultWorkspaceId String?
 
+  // Which Client this account's client-context switcher opens by default.
+  // Same convenience-only guarantee as defaultWorkspaceId — it never
+  // grants access to that client; CLIENT-scoped PermissionGrant +
+  // ClientAssignment is still what's actually enforced server-side.
+  // Nullable so every existing account is unaffected until set.
+  defaultClientId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   department       Department? @relation("DepartmentMembers", fields: [departmentId], references: [id])
   defaultWorkspace Workspace?  @relation("AdminUserDefaultWorkspace", fields: [defaultWorkspaceId], references: [id])
+  defaultClient    Client?     @relation("AdminUserDefaultClient", fields: [defaultClientId], references: [id])
 
   employee Employee?
 
@@ -98,6 +106,12 @@ model AdminUser {
   clientAssignments     ClientAssignment[] @relation("AdminUserClientAssignments")
   clientAssignmentsMade ClientAssignment[] @relation("ClientAssignmentAssignedBy")
 
+  // Named role templates currently applied to this account — see
+  // AdminUserRoleTemplate. Distinct from the raw PermissionGrant rows the
+  // templates resolve into: this is provenance/display only.
+  roleTemplatesAssigned AdminUserRoleTemplate[] @relation("AdminUserRoleTemplates")
+  roleTemplatesGranted  AdminUserRoleTemplate[] @relation("RoleTemplateAssignedBy")
+
   // Client Health
   monitoredEndpointsCreated MonitoredEndpoint[] @relation("MonitoredEndpointCreatedBy")
   incidentsAcknowledged     Incident[]          @relation("IncidentAcknowledgedBy")
@@ -116,6 +130,14 @@ model AdminUser {
   socialPostsReviewed       SocialPost[]         @relation("SocialPostReviewedBy")
   socialMediaAssetsUploaded SocialMediaAsset[]   @relation("SocialMediaAssetUploadedBy")
   socialPostActivities      SocialPostActivity[] @relation("SocialPostActivityActor")
+  contentProjectsOwned      ContentProject[]     @relation("ContentProjectOwner")
+
+  // Real AI video generation (Luma)
+  aiVideoJobs AiVideoJob[]
+
+  // Trend Intelligence
+  trendsCreated Trend[] @relation("TrendCreatedBy")
+  trendsSaved   Trend[] @relation("TrendSavedBy")
 
   // Brand assets
   brandKitsCreated          BrandKit[]               @relation("BrandKitCreatedBy")
@@ -167,6 +189,7 @@ model AdminUser {
 
   @@index([departmentId])
   @@index([defaultWorkspaceId])
+  @@index([defaultClientId])
 }
 
 /**
@@ -411,20 +434,15 @@ model AccessInvite {
  * full-access account (e.g. the Owner) can select any workspace and keeps
  * every permission regardless — see lib/auth/current-admin.ts.
  * A RoleTemplate is a named, reusable bundle of PermissionGrant-shaped
- * rows (RoleTemplateGrant) — applying one to an employee during
- * onboarding just bulk-creates PermissionGrant rows, the same mechanism
- * app/api/admin/team/[id]/access already uses for a manually-built grant
- * list. Not wired into that flow yet — this migration only adds the
- * schema; the onboarding UI work is a separate, later pass.
- * NOTE for that later pass: lib/access/role-templates.ts already has a
- * same-named, UI-only precursor to this (`ROLE_TEMPLATES`, hardcoded
- * presets that pre-fill the Grant Dashboard Access matrix — never
- * persisted). That file's own comment says so explicitly. The two
- * `RoleTemplate` names are in different modules so nothing collides at
- * compile time, but the later pass should migrate those hardcoded
- * presets into seeded rows here and have the Team UI read from the
- * database instead, then delete the old file, rather than maintaining
- * both.
+ * rows (RoleTemplateGrant) — applying one (or several — see
+ * AdminUserRoleTemplate) to an employee via Team -> Access ->
+ * Grant/Change Dashboard Access resolves, via
+ * mergeRoleTemplateGrants (lib/access/server.ts), into the same
+ * PermissionGrant rows a manually-built grant list produces.
+ * app/api/admin/team/[id]/access accepts roleTemplateIds alongside the
+ * existing grants array. The old lib/access/role-templates.ts
+ * (`ROLE_TEMPLATES`, hardcoded, never persisted) has been replaced by
+ * these seeded rows — see the Phase 4 migration's seed data.
  */
 
 model Workspace {
@@ -468,6 +486,7 @@ model RoleTemplate {
 
   defaultWorkspace Workspace?          @relation(fields: [defaultWorkspaceId], references: [id])
   grants           RoleTemplateGrant[]
+  assignedUsers    AdminUserRoleTemplate[]
 
   @@index([defaultWorkspaceId])
 }
@@ -487,12 +506,41 @@ model RoleTemplateGrant {
 }
 
 /**
+ * Join table recording which named RoleTemplate(s) are currently applied
+ * to a restricted AdminUser — support for multiple roles per employee
+ * (e.g. Developer + Project Manager). This is provenance/display only:
+ * the actual enforced permissions are still the plain PermissionGrant
+ * rows that applying a template (or several) resolves into — see
+ * mergeRoleTemplateGrants in lib/access/server.ts. Editing a template, or
+ * adding/removing one here, re-resolves and rewrites those
+ * PermissionGrant rows; this table itself is never consulted by any
+ * permission check.
+ */
+model AdminUserRoleTemplate {
+  id String @id @default(cuid())
+
+  adminUserId    String
+  roleTemplateId String
+  assignedById   String?
+
+  assignedAt DateTime @default(now())
+
+  adminUser    AdminUser    @relation("AdminUserRoleTemplates", fields: [adminUserId], references: [id], onDelete: Cascade)
+  roleTemplate RoleTemplate @relation(fields: [roleTemplateId], references: [id], onDelete: Cascade)
+  assignedBy   AdminUser?   @relation("RoleTemplateAssignedBy", fields: [assignedById], references: [id])
+
+  @@unique([adminUserId, roleTemplateId])
+  @@index([adminUserId])
+  @@index([roleTemplateId])
+}
+
+/**
  * Which specific clients an AdminUser may access — consulted by
  * row-level access checks (the assertXRowAccess family already used by
- * campaigns/social-media) when a PermissionGrant has
- * AccessScope.CLIENT, the same way DEPARTMENT scope already consults
- * AdminUser.departmentId. Not wired into any check yet — this migration
- * only adds the schema; enforcement is a separate, later pass.
+ * campaigns/social-media, plus the generic clientScopeFilter/
+ * assertClientRowAccess in lib/auth/current-admin.ts) when a
+ * PermissionGrant has AccessScope.CLIENT, the same way DEPARTMENT scope
+ * already consults AdminUser.departmentId.
  */
 model ClientAssignment {
   id String @id @default(cuid())
@@ -598,6 +646,15 @@ model Client {
   // ClientAssignment) — distinct from accountOwner, which is a single
   // commercial owner, not an access grant.
   assignedAdminUsers ClientAssignment[] @relation("ClientAssignments")
+
+  // Accounts whose client-context switcher defaults to this client — see
+  // AdminUser.defaultClientId.
+  defaultContextForAdminUsers AdminUser[] @relation("AdminUserDefaultClient")
+
+  // Social accounts explicitly assigned as belonging to this client — see
+  // SocialAccount.clientId. Never populated automatically; an account with
+  // no clientId is Syntra Grid's own.
+  socialAccounts SocialAccount[]
 
   @@index([status])
   @@index([priority])
@@ -4129,6 +4186,17 @@ enum SocialAccountStatus {
   ERROR
 }
 
+/**
+ * PERSONAL for every existing account on every platform (the default) —
+ * ORGANIZATION is used only by LinkedIn company-page connections, which
+ * share a PERSONAL account's OAuth grant rather than holding their own
+ * (see SocialAccount.sharesAuthWithId).
+ */
+enum SocialAccountType {
+  PERSONAL
+  ORGANIZATION
+}
+
 enum SocialCampaignStatus {
   PLANNED
   ACTIVE
@@ -4240,16 +4308,43 @@ model SocialAccount {
   lastErrorAt    DateTime?
   disconnectedAt DateTime?
 
+  accountType      SocialAccountType @default(PERSONAL)
+  /**
+   * Set only on an ORGANIZATION account — points at the PERSONAL account
+   * whose OAuth token it publishes through (LinkedIn's company-page
+   * publishing reuses the member token, with a different author URN, not
+   * a separate per-page credential). An account with this set never has
+   * its own encryptedAccessToken/encryptedRefreshToken — see
+   * getValidSocialAccessToken in lib/social-media/accounts.ts.
+   */
+  sharesAuthWithId String?
+
+  // Which client this account belongs to. Null means "Syntra Grid's own"
+  // — every account that existed before this field was added, and every
+  // newly-connected account by default, is null until an administrator
+  // explicitly assigns it. Never set automatically or backfilled; a
+  // CLIENT-scoped restricted account can never see or act on a
+  // null-owned (Syntra Grid's own) account — see
+  // lib/social-media/permissions.ts.
+  clientId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   connectedBy AdminUser? @relation("SocialAccountConnectedBy", fields: [connectedById], references: [id])
+
+  sharesAuthWith  SocialAccount?  @relation("SocialAccountSharesAuth", fields: [sharesAuthWithId], references: [id])
+  sharingAccounts SocialAccount[] @relation("SocialAccountSharesAuth")
+
+  client Client? @relation(fields: [clientId], references: [id])
 
   targets SocialPostPlatform[]
 
   @@unique([platform, platformAccountId])
   @@index([platform])
   @@index([status])
+  @@index([sharesAuthWithId])
+  @@index([clientId])
 }
 
 model SocialCampaign {
@@ -4311,9 +4406,242 @@ model SocialPost {
   campaignContent CampaignContent?
   campaignMetrics CampaignMetric[]
 
+  // Content Studio — set when a ContentProject (an editable graphic)
+  // was promoted into this post. The FK lives on
+  // ContentProject.socialPostId, same pattern as CampaignContent above.
+  contentProject ContentProject?
+
   @@index([status])
   @@index([campaignId])
   @@index([scheduledAt])
+}
+
+/**
+ * Content Studio's editable project (Phase 3) — currently only
+ * graphics. canvasData is the full editable layer document (the
+ * client-side canvas state); only the final flattened export reaches
+ * SocialMediaAsset/SocialPost, same as any other upload. Never marked
+ * published here — see SocialPost.contentProject's own comment. Kept to
+ * one table/one enum value deliberately until a second content type
+ * genuinely needs more (see the Content Studio plan).
+ */
+model ContentProject {
+  id String @id @default(cuid())
+
+  title      String
+  type       ContentProjectType @default(GRAPHIC)
+  canvasData Json
+
+  ownerId String
+
+  // Set once this project is promoted into a real post — never marked
+  // published here, same pattern as CampaignContent.socialPostId.
+  socialPostId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner      AdminUser   @relation("ContentProjectOwner", fields: [ownerId], references: [id])
+  socialPost SocialPost? @relation(fields: [socialPostId], references: [id])
+
+  // Reverse side of Trend.contentProjectId — set once a trend is
+  // promoted into this project via "Generate content".
+  trend Trend?
+
+  // Real AI video generation (Luma) jobs targeting scenes within this
+  // project's canvasData.
+  aiVideoJobs AiVideoJob[]
+
+  @@index([ownerId])
+}
+
+enum ContentProjectType {
+  GRAPHIC
+  VIDEO
+}
+
+/**
+ * One real, paid Luma AI video-generation job — async by nature (submit
+ * now, poll/complete minutes later), so this is a persisted row, not an
+ * in-memory ledger entry (contrast lib/ai/imageUsage.ts, which is
+ * explicitly in-memory and explicitly only viable because an image
+ * generation completes synchronously within one request).
+ * `sceneId` identifies which VideoScene within the owning
+ * ContentProject's canvasData this clip targets — not a foreign key
+ * (scenes live inside the JSON canvasData blob, not their own table).
+ * Lifecycle mirrors SocialPostPlatform's proven async-job shape
+ * (lastAttemptAt/lastPolledAt/retryCount/lastError idiom) rather than
+ * inventing a new one. DRAFT/AWAITING_CONFIRMATION are reserved for a
+ * possible future "save a storyboard without generating yet" feature —
+ * v1's flow creates a row only once the admin has already confirmed
+ * cost, going straight to QUEUED.
+ */
+model AiVideoJob {
+  id String @id @default(cuid())
+
+  adminUserId      String
+  contentProjectId String?
+  sceneId          String?
+
+  provider String
+  model    String
+  prompt   String
+
+  aspectRatio     String
+  resolution      String
+  durationSeconds Int
+  startFrameUrl   String?
+  endFrameUrl     String?
+
+  // Image-to-video (Graphic Studio's "Animate with AI", and Video
+  // Studio's own Image-to-Video sub-mode). generationMethod is derived
+  // server-side from whether a resolved start frame exists — never
+  // trusted from the client (see resolveTrustedStartFrame in
+  // lib/ai/aiVideoJobs.ts). sourceImageAssetId is a plain scalar, not a
+  // Prisma relation — avoids needing a reverse field on
+  // SocialMediaAsset for what's purely a traceability pointer; resolved
+  // manually wherever needed.
+  generationMethod   AiVideoGenerationMethod @default(TEXT_TO_VIDEO)
+  sourceImageAssetId String?
+
+  providerJobId String?
+  status        AiVideoJobStatus @default(DRAFT)
+
+  estimatedCostUsd Float
+  actualCostUsd    Float?
+
+  outputVideoUrl String?
+  errorMessage   String?
+  retryCount     Int     @default(0)
+
+  lastAttemptAt DateTime?
+  lastPolledAt  DateTime?
+  completedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adminUser      AdminUser       @relation(fields: [adminUserId], references: [id])
+  contentProject ContentProject? @relation(fields: [contentProjectId], references: [id])
+
+  @@index([adminUserId])
+  @@index([status])
+  @@index([contentProjectId])
+}
+
+enum AiVideoJobStatus {
+  DRAFT
+  AWAITING_CONFIRMATION
+  QUEUED
+  GENERATING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AiVideoGenerationMethod {
+  TEXT_TO_VIDEO
+  IMAGE_TO_VIDEO
+}
+
+/**
+ * Trend Intelligence (Phase 8). One row per discovered or manually
+ * imported trend; `type`/`status` filters drive all seven library
+ * views (Discover/Audio/Meme/Video-Format/Hook/Saved/My Library)
+ * rather than separate tables. `aiAnalysis`/`aiAnalyzedAt` double as
+ * the cache for AI analysis — re-analysis is opt-in, never automatic.
+ */
+model Trend {
+  id String @id @default(cuid())
+
+  title       String
+  platform    TrendPlatform
+  type        TrendType     @default(GENERAL)
+  category    String?
+  description String
+
+  // Nullable-unique: manual entries can omit a source URL, but when
+  // present it dedupes repeated automated-discovery fetches.
+  sourceUrl      String?     @unique
+  source         TrendSource
+  discoveredAt   DateTime    @default(now())
+  lastVerifiedAt DateTime?
+
+  // Freeform, platform-dependent — populated only where available.
+  popularityIndicators Json?
+  audioInfo            Json?
+
+  licensingStatus TrendLicensingStatus @default(UNKNOWN)
+  status          TrendStatus          @default(NEW)
+
+  suitableIndustries String[] @default([])
+  suitableAudiences  String[] @default([])
+  recommendedFormats String[] @default([])
+  suggestedCaptions  String[] @default([])
+  hashtags           String[] @default([])
+
+  relevanceScore Int?
+  aiAnalysis     Json?
+  aiAnalyzedAt   DateTime?
+
+  // Set once "Generate content" promotes this trend into a real
+  // ContentProject — same forward-promotion pattern as
+  // ContentProject.socialPostId.
+  contentProjectId String? @unique
+
+  createdById String?
+  savedById   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdBy      AdminUser?      @relation("TrendCreatedBy", fields: [createdById], references: [id])
+  savedBy        AdminUser?      @relation("TrendSavedBy", fields: [savedById], references: [id])
+  contentProject ContentProject? @relation(fields: [contentProjectId], references: [id])
+
+  @@index([status])
+  @@index([platform])
+  @@index([type])
+  @@index([relevanceScore])
+}
+
+enum TrendPlatform {
+  TIKTOK
+  INSTAGRAM
+  YOUTUBE
+  LINKEDIN
+  REDDIT
+  X
+  OTHER
+}
+
+enum TrendType {
+  AUDIO
+  MEME
+  VIDEO_FORMAT
+  HOOK
+  GENERAL
+}
+
+enum TrendSource {
+  AUTOMATED
+  MANUAL
+}
+
+enum TrendStatus {
+  NEW
+  SAVED
+  DISMISSED
+  USED
+  ARCHIVED
+}
+
+enum TrendLicensingStatus {
+  ORIGINAL_SAFE_TO_ADAPT
+  REQUIRES_LICENSE
+  RESTRICTED
+  UNKNOWN
 }
 
 /**
@@ -4712,6 +5040,15 @@ model BrandGuideline {
   values      String[] @default([])
   personality String?
   toneOfVoice String?
+
+  // Business personalisation (Trend Intelligence) — freeform, same
+  // convention as the other guideline text fields.
+  industry          String?
+  targetAudience    String?
+  // Defaults to "English" at the application layer (lib/ai/brand.ts)
+  // when unset — a real, overridable field, never a hardcoded prompt
+  // string, so future multilingual support only needs this filled in.
+  preferredLanguage String?
 
   logoSpacingNotes    String?
   minLogoSizeNotes    String?

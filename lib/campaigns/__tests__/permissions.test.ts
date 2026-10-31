@@ -20,6 +20,7 @@ function fakeIdentity(opts: {
     employee: opts.employeeId ? ({ id: opts.employeeId, departmentId: opts.departmentId ?? null } as ResolvedIdentity["employee"]) : null,
     isFullAccess: opts.isFullAccess ?? false,
     permissions,
+    assignedClientIds: [],
   };
 }
 

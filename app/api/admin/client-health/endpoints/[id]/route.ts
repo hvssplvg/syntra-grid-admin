@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { AuthenticationError, AuthorisationError } from "@/lib/auth/current-admin";
-import { AccessAction, requireClientHealthPermission } from "@/lib/client-health/permissions";
+import { AccessAction, assertClientHealthRowAccess, requireClientHealthPermission } from "@/lib/client-health/permissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,13 +16,15 @@ export const dynamic = "force-dynamic";
 ============================================================================ */
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireClientHealthPermission(AccessAction.MANAGE);
+    const identity = await requireClientHealthPermission(AccessAction.MANAGE);
     const { id } = await params;
 
-    const endpoint = await prisma.monitoredEndpoint.findUnique({ where: { id }, select: { id: true } });
+    const endpoint = await prisma.monitoredEndpoint.findUnique({ where: { id }, select: { id: true, clientId: true } });
     if (!endpoint) {
       return NextResponse.json({ ok: false, error: "That monitored endpoint could not be found." }, { status: 404 });
     }
+
+    assertClientHealthRowAccess(identity, AccessAction.MANAGE, endpoint.clientId);
 
     await prisma.monitoredEndpoint.delete({ where: { id } });
 

@@ -16,6 +16,7 @@ import {
 import { Prisma } from "@/app/generated/prisma/client";
 import {
   AccessAction,
+  assertSocialMediaRowAccess,
   type ResolvedIdentity,
   socialMediaOwnScopeFilter,
 } from "@/lib/social-media/permissions";
@@ -105,7 +106,20 @@ const POST_INCLUDE = {
   createdBy: { select: ADMIN_SELECT },
   updatedBy: { select: ADMIN_SELECT },
   reviewedBy: { select: ADMIN_SELECT },
-  targets: { include: { account: { select: { id: true, platform: true, accountName: true, username: true, status: true } } } },
+  targets: {
+    include: {
+      account: {
+        select: {
+          id: true,
+          platform: true,
+          accountName: true,
+          username: true,
+          status: true,
+          clientId: true,
+        },
+      },
+    },
+  },
   assets: { include: { asset: true }, orderBy: { position: "asc" as const } },
 } satisfies Prisma.SocialPostInclude;
 
@@ -212,11 +226,28 @@ export type CreatePostInput = {
   assetIds?: string[];
 };
 
-async function requireAccountsExist(accountIds: string[]) {
+/**
+ * Confirms every selected account exists, and — for a CLIENT-scoped
+ * restricted caller — that each one belongs to one of their assigned
+ * clients (never Syntra Grid's own null-owned accounts, never another
+ * client's). `action` is whichever action the caller is already being
+ * checked against (CREATE for composing a new post, EDIT for revising
+ * targets on an existing one).
+ */
+async function requireAccountsExist(identity: ResolvedIdentity, action: AccessAction, accountIds: string[]) {
   if (accountIds.length === 0) return;
-  const count = await prisma.socialAccount.count({ where: { id: { in: accountIds } } });
-  if (count !== accountIds.length) {
+
+  const accounts = await prisma.socialAccount.findMany({
+    where: { id: { in: accountIds } },
+    select: { id: true, clientId: true },
+  });
+
+  if (accounts.length !== accountIds.length) {
     throw new AuthorisationError("One or more selected accounts could not be found.");
+  }
+
+  for (const account of accounts) {
+    assertSocialMediaRowAccess(identity, action, { createdById: null, clientId: account.clientId });
   }
 }
 
@@ -229,7 +260,7 @@ async function requireAssetsExist(assetIds: string[]) {
 }
 
 export async function createPost(identity: ResolvedIdentity, input: CreatePostInput) {
-  await requireAccountsExist(input.targets.map((target) => target.accountId));
+  await requireAccountsExist(identity, AccessAction.CREATE, input.targets.map((target) => target.accountId));
   await requireAssetsExist(input.assetIds ?? []);
 
   const accounts = input.targets.length
@@ -284,7 +315,7 @@ export async function updatePost(identity: ResolvedIdentity, postId: string, inp
   }
 
   if (input.targets) {
-    await requireAccountsExist(input.targets.map((target) => target.accountId));
+    await requireAccountsExist(identity, AccessAction.EDIT, input.targets.map((target) => target.accountId));
   }
 
   if (input.assetIds) {
@@ -580,6 +611,20 @@ export async function prepareDirectPublish(identity: ResolvedIdentity, postId: s
 
   if (existing.targets.length === 0) {
     throw new AuthorisationError("Select at least one connected account before publishing.");
+  }
+
+  // A CLIENT-scoped restricted caller may only publish through accounts
+  // belonging to their assigned clients — never Syntra Grid's own
+  // (null-owned) accounts or another client's, regardless of who
+  // originally composed this post. AccessAction.APPROVE matches the
+  // action the publish-now route itself already requires (direct
+  // publish skips review, so it's gated at the same trust level as
+  // approving).
+  for (const target of existing.targets) {
+    assertSocialMediaRowAccess(identity, AccessAction.APPROVE, {
+      createdById: null,
+      clientId: target.account.clientId,
+    });
   }
 
   // Already-PUBLISHED targets are left untouched — calling this again on

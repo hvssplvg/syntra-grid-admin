@@ -154,6 +154,8 @@ const employeeSelect = {
       role: true,
       active: true,
       restrictedAccess: true,
+      defaultWorkspaceId: true,
+      defaultClientId: true,
       createdAt: true,
       updatedAt: true,
 
@@ -163,6 +165,14 @@ const employeeSelect = {
           action: true,
           scope: true,
         },
+      },
+
+      roleTemplatesAssigned: {
+        select: { roleTemplateId: true },
+      },
+
+      clientAssignments: {
+        select: { clientId: true },
       },
     },
   },
@@ -305,13 +315,23 @@ function hasOwn(
   );
 }
 
+/**
+ * Only AuthenticationError/AuthorisationError messages are ever written
+ * by this file's own code for a human to read — every other thrown
+ * error (a Prisma error being the main one in practice) is an internal
+ * implementation detail (a table/column name, a raw SQL fragment) that
+ * must never reach the client raw. The full error is still logged
+ * server-side via console.error at each catch site above this.
+ */
 function getErrorMessage(
   error: unknown,
   fallback: string,
 ): string {
-  return error instanceof Error
-    ? error.message
-    : fallback;
+  if (error instanceof AuthenticationError || error instanceof AuthorisationError) {
+    return error.message;
+  }
+
+  return fallback;
 }
 
 function getErrorStatus(
@@ -437,11 +457,23 @@ function stripConfidentialFields<T extends Record<string, unknown>>(
     delete safe[field];
   }
 
-  // A colleague's dashboard permission grants are an access-management
-  // detail, not something another department member needs to see.
+  // A colleague's dashboard permission grants, role templates, client
+  // assignments and defaults are all access-management detail, not
+  // something another department member needs to see.
   if (safe.adminUser && typeof safe.adminUser === 'object') {
-    const { permissionGrants, ...adminUserRest } =
-      safe.adminUser as Record<string, unknown>;
+    const {
+      permissionGrants,
+      roleTemplatesAssigned,
+      clientAssignments,
+      defaultWorkspaceId,
+      defaultClientId,
+      ...adminUserRest
+    } = safe.adminUser as Record<string, unknown>;
+    void permissionGrants;
+    void roleTemplatesAssigned;
+    void clientAssignments;
+    void defaultWorkspaceId;
+    void defaultClientId;
     safe.adminUser = adminUserRest;
   }
 

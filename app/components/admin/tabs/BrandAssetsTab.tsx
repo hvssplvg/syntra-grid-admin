@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import {
@@ -49,6 +50,10 @@ import {
 
 type WorkspaceView = "overview" | "library" | "guidelines" | "kits" | "templates" | "requests";
 
+/** A one-shot instruction carried alongside a tab change, so a quick
+ *  action can open the thing it names instead of only pointing at it. */
+type WorkspaceIntent = "upload-asset" | "new-kit" | "new-template" | "new-request" | null;
+
 type LoadStatus = "idle" | "loading" | "ready" | "error";
 
 type IconType = typeof FileText;
@@ -86,7 +91,7 @@ type RequestStatus =
 type PersonRef = { id: string; firstName: string | null; lastName: string | null } | null;
 
 function personName(person: PersonRef): string {
-  if (!person) return "—";
+  if (!person) return "Unknown";
   return [person.firstName, person.lastName].filter(Boolean).join(" ") || "Unnamed";
 }
 
@@ -150,6 +155,9 @@ type ApiBrandGuideline = {
   values: string[];
   personality: string | null;
   toneOfVoice: string | null;
+  industry: string | null;
+  targetAudience: string | null;
+  preferredLanguage: string | null;
   logoSpacingNotes: string | null;
   minLogoSizeNotes: string | null;
   approvedUsageNotes: string | null;
@@ -243,8 +251,12 @@ const FOCUS =
   "outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]";
 const FOCUS_INSET = "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent)]";
 const CARD = "rounded-[22px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_1px_2px_rgba(0,0,0,0.04)]";
+/** The ink on the accent button is a fixed near-black rather than white.
+ *  The accent is a gold in both themes, and white on gold is about 3:1,
+ *  which fails contrast in light and dark alike; a dark ink reads at
+ *  roughly 8:1 against either value. */
 const BTN_PRIMARY =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[11.5px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_8px_18px_-10px_var(--accent)] transition-[filter,transform,opacity] duration-150 hover:brightness-110 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
+  "inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-[11.5px] font-semibold text-[#181206] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_8px_18px_-10px_var(--accent)] transition-[filter,transform,opacity] duration-150 hover:brightness-[1.06] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
 const BTN_SECONDARY =
   "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] px-4 text-[11.5px] font-semibold text-[var(--text)] transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--surface-muted)] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
 const BTN_DANGER =
@@ -254,6 +266,16 @@ const INPUT =
   "w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] text-[12px] text-[var(--text)] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[var(--text-subtle)] focus:border-[var(--accent)] focus:ring-4 focus:ring-[color-mix(in_srgb,var(--accent)_14%,transparent)]";
 const LABEL = "mb-1.5 block text-[11px] font-semibold text-[var(--text)]";
 const BTN_COMPACT = "h-8 rounded-lg px-2.5 text-[11px]";
+
+/** INPUT carries `w-full`, which a later `w-auto` in the same class
+ *  string does not override: Tailwind emits them in its own order, not
+ *  the order they are written. Every filter select in this module was
+ *  therefore rendering full width and stacking the toolbar into four
+ *  rows. These give a select an explicit width instead. */
+const SELECT =
+  "h-10 shrink-0 rounded-xl border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[12px] text-[var(--text)] outline-none transition-[border-color,box-shadow] duration-150 focus:border-[var(--accent)] focus:ring-4 focus:ring-[color-mix(in_srgb,var(--accent)_14%,transparent)]";
+const SELECT_SM = "w-[138px]";
+const SELECT_MD = "w-[166px]";
 
 /* =============================================================================
    FORMATTING HELPERS
@@ -285,6 +307,82 @@ function relativeTime(value: string): string {
   const days = Math.round(hours / 24);
   if (days < 30) return `${days}d ago`;
   return formatDate(value);
+}
+
+/* =============================================================================
+   MOTION + DIALOG BEHAVIOUR
+
+   This module used to borrow `sg-fade` and `sg-noscrollbar` from the
+   stylesheet SocialMediaTab injects, so whenever Brand Assets was opened
+   without that tab mounted the dialogs appeared with no transition and
+   the section nav showed a scrollbar. It carries its own now.
+============================================================================= */
+
+const BA_STYLES = `
+@keyframes ba-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ba-rise { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes ba-sheet { from { transform: translateY(100%); } to { transform: none; } }
+.ba-fade { animation: ba-fade .16s ease-out both; }
+.ba-rise { animation: ba-rise .22s cubic-bezier(.2,.8,.2,1) both; }
+.ba-sheet { animation: ba-sheet .3s cubic-bezier(.32,.72,0,1) both; }
+@media (min-width: 640px) { .ba-sheet { animation: ba-rise .22s cubic-bezier(.2,.8,.2,1) both; } }
+.ba-noscrollbar { scrollbar-width: none; }
+.ba-noscrollbar::-webkit-scrollbar { display: none; }
+.ba-scroll { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.ba-scroll::-webkit-scrollbar { width: 9px; }
+.ba-scroll::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 99px; border: 3px solid transparent; background-clip: content-box; }
+@media (prefers-reduced-motion: reduce) {
+  .ba-fade, .ba-rise, .ba-sheet { animation-duration: 1ms !important; }
+}
+`;
+
+/** Everything a dialog in this module needs and none of them had: Escape
+ *  to close, the page behind locked so it cannot scroll under the
+ *  overlay, and focus handed back to whatever opened it. */
+function useDialogChrome(onClose: () => void, enabled = true) {
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
+
+  useEffect(() => {
+    if (!enabled) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const body = document.body;
+    const gutter = window.innerWidth - document.documentElement.clientWidth;
+    const previousOverflow = body.style.overflow;
+    const previousPadding = body.style.paddingRight;
+
+    body.style.overflow = "hidden";
+    if (gutter > 0) body.style.paddingRight = `${gutter}px`;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      body.style.overflow = previousOverflow;
+      body.style.paddingRight = previousPadding;
+      if (opener && document.contains(opener)) opener.focus({ preventScroll: true });
+    };
+  }, [enabled]);
+}
+
+/** Holds a value back until typing stops. Every list in this module used
+ *  to refetch on each keystroke, which meant one request per character
+ *  and, worse, a slow early response could land after a fast later one
+ *  and overwrite the newer results. */
+function useDebounced<T>(value: T, delay = 300): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setSettled(value), delay);
+    return () => window.clearTimeout(timeout);
+  }, [value, delay]);
+  return settled;
 }
 
 /* =============================================================================
@@ -611,6 +709,8 @@ function ConfirmDialog({ request, onClose }: { request: DialogRequest; onClose: 
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  useDialogChrome(onClose, !busy);
+
   useEffect(() => {
     (textareaRef.current ?? inputRef.current)?.focus();
   }, []);
@@ -642,9 +742,9 @@ function ConfirmDialog({ request, onClose }: { request: DialogRequest; onClose: 
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
       }}
-      className="sg-fade fixed inset-0 z-[190] flex items-center justify-center bg-black/45 p-4"
+      className="ba-fade fixed inset-0 z-[190] flex items-center justify-center bg-black/45 p-4"
     >
-      <div role="dialog" aria-modal="true" className="w-full max-w-[420px] rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-2xl">
+      <div role="dialog" aria-modal="true" className="ba-rise w-full max-w-[420px] rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-2xl">
         <h3 className="text-[15px] font-semibold text-[var(--text)]">{request.title}</h3>
         {request.description && <div className="mt-1.5 text-[12px] leading-5 text-[var(--text-muted)]">{request.description}</div>}
 
@@ -754,41 +854,72 @@ export default function BrandAssetsTab() {
 
   const activeKits = useMemo(() => kits.filter((kit) => kit.status !== "ARCHIVED"), [kits]);
 
-  const goTo = useCallback((target: WorkspaceView) => setView(target), []);
+  /** A quick action used to do nothing but change tab, so "Upload Asset"
+   *  dropped you on the library with the picker still closed. The intent
+   *  travels with the navigation and the destination acts on it once. */
+  const [intent, setIntent] = useState<WorkspaceIntent>(null);
+  const goTo = useCallback((target: WorkspaceView, nextIntent: WorkspaceIntent = null) => {
+    setView(target);
+    setIntent(nextIntent);
+  }, []);
+  const clearIntent = useCallback(() => setIntent(null), []);
 
   return (
     <div className="space-y-5">
+      <style>{BA_STYLES}</style>
+
       {/* Header */}
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-[20px] font-semibold tracking-[-0.03em] text-[var(--text)]">Brand Assets</h1>
           <p className="mt-1 max-w-[560px] text-[12.5px] leading-6 text-[var(--text-muted)]">
-            Logos, identity assets, guidelines, templates and approvals — one source of truth for every brand Syntra Grid manages.
+            Logos, identity assets, guidelines, templates and approvals. One source of truth for every brand Syntra Grid manages.
           </p>
         </div>
       </header>
 
       {/* Section tabs */}
       <nav className="flex items-end justify-between gap-4 border-b border-[var(--line)]">
-        <div role="tablist" aria-label="Brand assets sections" className="sg-noscrollbar relative -mb-px flex min-w-0 gap-1 overflow-x-auto">
+        <div role="tablist" aria-label="Brand assets sections" className="ba-noscrollbar relative -mb-px flex min-w-0 gap-1 overflow-x-auto">
           {NAVIGATION.map((item) => {
             const Icon = item.icon;
             const active = view === item.id;
+            // The one number on this screen that means somebody is
+            // waiting on you, shown where the work actually is.
+            const badge = item.id === "requests" ? (overview?.pendingApprovalRequests ?? 0) : 0;
             return (
               <button
                 key={item.id}
                 type="button"
                 role="tab"
                 aria-selected={active}
-                onClick={() => setView(item.id)}
+                onClick={() => goTo(item.id)}
                 className={cx(
-                  "inline-flex h-11 shrink-0 items-center gap-2 rounded-t-lg px-3 text-[12px] font-medium transition-colors duration-150",
+                  "relative inline-flex h-11 shrink-0 items-center gap-2 rounded-t-lg px-3 text-[12px] font-medium transition-colors duration-150",
                   FOCUS_INSET,
                   active ? "text-[var(--text)]" : "text-[var(--text-muted)] hover:text-[var(--text)]",
                 )}
               >
                 <Icon size={15} className={cx("transition-colors duration-150", active && "text-[var(--accent)]")} />
                 {item.label}
+                {badge > 0 && (
+                  <span
+                    title={`${badge} waiting for review`}
+                    className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[color-mix(in_srgb,#D97706_16%,transparent)] px-1 text-[9.5px] font-bold text-[#D97706] tabular-nums"
+                  >
+                    {badge}
+                  </span>
+                )}
+                {/* The active tab had nothing but slightly darker text to
+                    mark it. This is the underline the rounded-t-lg and
+                    the -mb-px on the row were already set up for. */}
+                <span
+                  aria-hidden
+                  className={cx(
+                    "absolute inset-x-1.5 bottom-0 h-0.5 rounded-full transition-opacity duration-150",
+                    active ? "bg-[var(--accent)] opacity-100" : "opacity-0",
+                  )}
+                />
               </button>
             );
           })}
@@ -800,7 +931,9 @@ export default function BrandAssetsTab() {
         <OverviewWorkspace overview={overview} status={overviewStatus} onRefresh={refreshOverview} onNavigate={goTo} />
       )}
 
-      {view === "library" && <AssetLibraryWorkspace kits={activeKits} notify={notify} notifyError={notifyError} setDialog={setDialog} />}
+      {view === "library" && (
+        <AssetLibraryWorkspace kits={activeKits} notify={notify} notifyError={notifyError} setDialog={setDialog} intent={intent} onIntentHandled={clearIntent} />
+      )}
 
       {view === "guidelines" && <BrandGuidelinesWorkspace kits={activeKits} notify={notify} notifyError={notifyError} setDialog={setDialog} />}
 
@@ -812,12 +945,18 @@ export default function BrandAssetsTab() {
           notify={notify}
           notifyError={notifyError}
           setDialog={setDialog}
+          intent={intent}
+          onIntentHandled={clearIntent}
         />
       )}
 
-      {view === "templates" && <TemplatesWorkspace kits={activeKits} notify={notify} notifyError={notifyError} setDialog={setDialog} />}
+      {view === "templates" && (
+        <TemplatesWorkspace kits={activeKits} notify={notify} notifyError={notifyError} setDialog={setDialog} intent={intent} onIntentHandled={clearIntent} />
+      )}
 
-      {view === "requests" && <RequestsWorkspace kits={activeKits} notify={notify} notifyError={notifyError} setDialog={setDialog} />}
+      {view === "requests" && (
+        <RequestsWorkspace kits={activeKits} notify={notify} notifyError={notifyError} setDialog={setDialog} intent={intent} onIntentHandled={clearIntent} />
+      )}
 
       {dialog && <ConfirmDialog request={dialog} onClose={() => setDialog(null)} />}
       {notice && <Toast notice={notice} onDismiss={() => setNotice(null)} />}
@@ -838,14 +977,14 @@ function OverviewWorkspace({
   overview: OverviewData | null;
   status: LoadStatus;
   onRefresh: () => void;
-  onNavigate: (view: WorkspaceView) => void;
+  onNavigate: (view: WorkspaceView, intent?: WorkspaceIntent) => void;
 }) {
-  const quickActions: Array<{ label: string; icon: IconType; view: WorkspaceView }> = [
-    { label: "Upload Asset", icon: Upload, view: "library" },
-    { label: "Create Brand Kit", icon: Palette, view: "kits" },
-    { label: "Add Guideline", icon: BookOpen, view: "guidelines" },
-    { label: "Create Template", icon: Layers, view: "templates" },
-    { label: "New Asset Request", icon: Send, view: "requests" },
+  const quickActions: Array<{ label: string; icon: IconType; view: WorkspaceView; intent: WorkspaceIntent }> = [
+    { label: "Upload an asset", icon: Upload, view: "library", intent: "upload-asset" },
+    { label: "Create a brand kit", icon: Palette, view: "kits", intent: "new-kit" },
+    { label: "Edit guidelines", icon: BookOpen, view: "guidelines", intent: null },
+    { label: "Add a template", icon: Layers, view: "templates", intent: "new-template" },
+    { label: "Raise a request", icon: Send, view: "requests", intent: "new-request" },
   ];
 
   if (status === "loading" && !overview) {
@@ -889,8 +1028,8 @@ function OverviewWorkspace({
       <div>
         <h2 className="mb-2.5 text-[12.5px] font-semibold text-[var(--text)]">Quick actions</h2>
         <div className="flex flex-wrap gap-2">
-          {quickActions.map(({ label, icon: Icon, view }) => (
-            <button key={label} type="button" onClick={() => onNavigate(view)} className={cx(BTN_SECONDARY, FOCUS)}>
+          {quickActions.map(({ label, icon: Icon, view, intent }) => (
+            <button key={label} type="button" onClick={() => onNavigate(view, intent)} className={cx(BTN_SECONDARY, FOCUS)}>
               <Icon size={13} />
               {label}
             </button>
@@ -913,7 +1052,9 @@ function OverviewWorkspace({
               {overview.recentAssets.map((asset) => (
                 <li key={asset.id} className="flex items-center gap-3 px-4 py-2.5 sm:px-5">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--surface-muted)] text-[var(--text-subtle)]">
-                    {asset.type === "IMAGE" || asset.type === "SVG" ? (
+                    {asset.type === "SVG" ? (
+                      <img src={asset.url} alt="" className="h-full w-full object-contain p-1.5" />
+                    ) : asset.type === "IMAGE" ? (
                       <img src={asset.url} alt="" className="h-full w-full object-cover" />
                     ) : (
                       <AssetTypeIcon type={asset.type} />
@@ -977,9 +1118,12 @@ type SharedWorkspaceProps = {
   notify: (message: string) => void;
   notifyError: (error: unknown, fallback: string) => void;
   setDialog: (request: DialogRequest | null) => void;
+  /** Set when a quick action navigated here meaning to do something. */
+  intent?: WorkspaceIntent;
+  onIntentHandled?: () => void;
 };
 
-function AssetLibraryWorkspace({ kits, notify, notifyError, setDialog }: SharedWorkspaceProps) {
+function AssetLibraryWorkspace({ kits, notify, notifyError, setDialog, intent, onIntentHandled }: SharedWorkspaceProps) {
   const [assets, setAssets] = useState<ApiBrandAsset[]>([]);
   const [status, setStatus] = useState<LoadStatus>("idle");
   const [search, setSearch] = useState("");
@@ -989,24 +1133,74 @@ function AssetLibraryWorkspace({ kits, notify, notifyError, setDialog }: SharedW
   const [selected, setSelected] = useState<ApiBrandAsset | null>(null);
   const [dragging, setDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Typing no longer fires a request per character, and a slow early
+  // response can no longer land after a fast later one: every fetch
+  // carries a sequence number and only the newest is allowed to write.
+  const debouncedSearch = useDebounced(search);
+  const requestSeq = useRef(0);
+
+  const query = useMemo(
+    () => ({
+      type: typeFilter === "ALL" ? undefined : typeFilter,
+      status: statusFilter,
+      search: debouncedSearch.trim() || undefined,
+    }),
+    [typeFilter, statusFilter, debouncedSearch],
+  );
+
   const refresh = useCallback(() => {
+    const seq = (requestSeq.current += 1);
     Promise.resolve().then(() => setStatus("loading"));
-    fetchAssetsApi({ type: typeFilter === "ALL" ? undefined : typeFilter, status: statusFilter, search: search || undefined })
-      .then(({ assets: result }) => {
+    fetchAssetsApi(query)
+      .then(({ assets: result, pagination: page }) => {
+        if (seq !== requestSeq.current) return;
         setAssets(result);
+        setPagination(page);
         setStatus("ready");
       })
       .catch((error) => {
+        if (seq !== requestSeq.current) return;
         setStatus("error");
         notifyError(error, "Unable to load assets.");
       });
-  }, [typeFilter, statusFilter, search, notifyError]);
+  }, [query, notifyError]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  /** The API has always paged these and the page after the first was
+   *  simply never requested, so a library of 248 assets looked like a
+   *  library of 24. */
+  const loadMore = useCallback(() => {
+    if (!pagination?.hasNext || loadingMore) return;
+    const seq = requestSeq.current;
+    setLoadingMore(true);
+    fetchAssetsApi({ ...query, page: pagination.page + 1 })
+      .then(({ assets: result, pagination: page }) => {
+        if (seq !== requestSeq.current) return;
+        setAssets((current) => {
+          const seen = new Set(current.map((item) => item.id));
+          return [...current, ...result.filter((item) => !seen.has(item.id))];
+        });
+        setPagination(page);
+      })
+      .catch((error) => notifyError(error, "Unable to load more assets."))
+      .finally(() => setLoadingMore(false));
+  }, [pagination, loadingMore, query, notifyError]);
+
+  // A quick action that says "Upload an asset" opens the picker.
+  const intentRef = useRef(false);
+  useEffect(() => {
+    if (intent !== "upload-asset" || intentRef.current) return;
+    intentRef.current = true;
+    fileInputRef.current?.click();
+    onIntentHandled?.();
+  }, [intent, onIntentHandled]);
 
   const sortedAssets = useMemo(() => {
     const copy = [...assets];
@@ -1076,7 +1270,7 @@ function AssetLibraryWorkspace({ kits, notify, notifyError, setDialog }: SharedW
   const confirmDelete = (asset: ApiBrandAsset) => {
     setDialog({
       title: "Delete this asset?",
-      description: "This permanently removes the file and cannot be undone. Archive it instead if you might need it later.",
+      description: "This permanently removes the file and cannot be undone. Archive it instead if you might need it later on.",
       confirmLabel: "Delete",
       tone: "danger",
       onConfirm: async () => {
@@ -1091,17 +1285,30 @@ function AssetLibraryWorkspace({ kits, notify, notifyError, setDialog }: SharedW
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[200px] flex-1">
+        <div className="relative min-w-[220px] flex-1">
           <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]" />
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search assets…"
-            className={cx(INPUT, "h-10 pl-8 pr-3")}
+            placeholder="Search assets by name or tag"
+            className={cx(INPUT, "h-10 pl-8", search ? "pr-9" : "pr-3")}
           />
+          {search && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => setSearch("")}
+              className={cx(
+                "absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[var(--text-subtle)] transition hover:bg-[var(--surface-muted)] hover:text-[var(--text)]",
+                FOCUS,
+              )}
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
 
-        <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as AssetType | "ALL")} className={cx(INPUT, "h-10 w-auto px-2.5")}>
+        <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as AssetType | "ALL")} className={cx(SELECT, SELECT_MD, FOCUS)}>
           <option value="ALL">All types</option>
           {Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => (
             <option key={value} value={value}>
@@ -1110,12 +1317,12 @@ function AssetLibraryWorkspace({ kits, notify, notifyError, setDialog }: SharedW
           ))}
         </select>
 
-        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as AssetStatus)} className={cx(INPUT, "h-10 w-auto px-2.5")}>
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as AssetStatus)} className={cx(SELECT, SELECT_SM, FOCUS)}>
           <option value="ACTIVE">Active</option>
           <option value="ARCHIVED">Archived</option>
         </select>
 
-        <select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)} className={cx(INPUT, "h-10 w-auto px-2.5")}>
+        <select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)} className={cx(SELECT, SELECT_SM, FOCUS)}>
           <option value="newest">Newest first</option>
           <option value="oldest">Oldest first</option>
           <option value="name">Name</option>
@@ -1138,10 +1345,29 @@ function AssetLibraryWorkspace({ kits, notify, notifyError, setDialog }: SharedW
         </button>
       </div>
 
+      {/* A count with a bar, rather than a line of text doing its own
+          clamping arithmetic inline. */}
       {uploadProgress && (
-        <p className="flex items-center gap-2 text-[11.5px] text-[var(--text-muted)]">
-          <Loader2 size={13} className="animate-spin" />
-          Uploading file {uploadProgress.done + 1 > uploadProgress.total ? uploadProgress.total : uploadProgress.done + 1} of {uploadProgress.total}…
+        <div className="ba-fade rounded-xl border border-[var(--line)] bg-[var(--surface)] p-3">
+          <p className="flex items-center gap-2 text-[11.5px] font-medium text-[var(--text)]">
+            <Loader2 size={13} className="animate-spin text-[var(--accent)]" />
+            Uploading {Math.min(uploadProgress.done + 1, uploadProgress.total)} of {uploadProgress.total}
+          </p>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--surface-muted)]">
+            <div
+              className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-200"
+              style={{ width: `${(uploadProgress.done / Math.max(1, uploadProgress.total)) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* What you are looking at, and how much of it there is. */}
+      {status === "ready" && pagination && pagination.total > 0 && (
+        <p className="text-[11px] text-[var(--text-subtle)]">
+          Showing {sortedAssets.length} of {pagination.total.toLocaleString("en-GB")}
+          {statusFilter === "ARCHIVED" ? " archived" : ""} asset{pagination.total === 1 ? "" : "s"}
+          {debouncedSearch.trim() ? ` matching “${debouncedSearch.trim()}”` : ""}.
         </p>
       )}
 
@@ -1179,8 +1405,14 @@ function AssetLibraryWorkspace({ kits, notify, notifyError, setDialog }: SharedW
                 onClick={() => setSelected(asset)}
                 className={cx(CARD, "group flex flex-col overflow-hidden text-left transition hover:border-[var(--accent)]", FOCUS)}
               >
-                <span className="relative flex aspect-[4/3] items-center justify-center bg-[var(--surface-muted)] text-[var(--text-subtle)]">
-                  {asset.type === "IMAGE" || asset.type === "SVG" ? (
+                {/* A logo is the one thing a brand library must never
+                    crop, and object-cover was cropping every one of
+                    them. Marks are contained on a neutral field;
+                    photographs and video still fill the tile. */}
+                <span className="relative flex aspect-[4/3] items-center justify-center overflow-hidden bg-[var(--surface-muted)] text-[var(--text-subtle)]">
+                  {asset.type === "SVG" ? (
+                    <img src={asset.url} alt="" className="h-full w-full object-contain p-4" />
+                  ) : asset.type === "IMAGE" ? (
                     <img src={asset.url} alt="" className="h-full w-full object-cover" />
                   ) : asset.type === "VIDEO" ? (
                     <video src={asset.url} className="h-full w-full object-cover" muted />
@@ -1202,6 +1434,18 @@ function AssetLibraryWorkspace({ kits, notify, notifyError, setDialog }: SharedW
           </div>
         )}
       </div>
+
+      {pagination?.hasNext && (
+        <div className="flex justify-center pt-1">
+          <button type="button" onClick={loadMore} disabled={loadingMore} className={cx(BTN_SECONDARY, FOCUS)}>
+            {loadingMore ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+            Load more
+            <span className="text-[var(--text-subtle)]">
+              ({(pagination.total - sortedAssets.length).toLocaleString("en-GB")} left)
+            </span>
+          </button>
+        </div>
+      )}
 
       {selected && (
         <AssetDetailPanel
@@ -1253,6 +1497,8 @@ function AssetDetailPanel({
   const [versionsOpen, setVersionsOpen] = useState(false);
   const replaceInputRef = useRef<HTMLInputElement>(null);
 
+  useDialogChrome(onClose);
+
   const save = async () => {
     setSaving(true);
     try {
@@ -1280,7 +1526,7 @@ function AssetDetailPanel({
       formData.append("file", file);
       const updated = await replaceAssetApi(asset.id, formData);
       onUpdated(updated);
-      notify("File replaced — the previous version was saved to history.");
+      notify("File replaced. The previous version was saved to history.");
     } catch (error) {
       notifyError(error, "Unable to replace this file.");
     } finally {
@@ -1311,8 +1557,8 @@ function AssetDetailPanel({
   };
 
   return (
-    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="sg-fade fixed inset-0 z-[150] flex items-end justify-center bg-black/45 sm:items-center sm:p-6">
-      <div role="dialog" aria-modal="true" className="flex h-[92dvh] w-full max-w-[720px] flex-col overflow-hidden rounded-t-[24px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl sm:h-auto sm:max-h-[88dvh] sm:rounded-[24px]">
+    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="ba-fade fixed inset-0 z-[150] flex items-end justify-center bg-black/45 sm:items-center sm:p-6">
+      <div role="dialog" aria-modal="true" className="ba-sheet flex h-[92dvh] w-full max-w-[720px] flex-col overflow-hidden rounded-t-[24px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl sm:h-auto sm:max-h-[88dvh] sm:rounded-[24px]">
         <div className="flex items-center justify-between border-b border-[var(--line)] px-5 py-4">
           <h2 className="truncate text-[15px] font-semibold text-[var(--text)]">{asset.name}</h2>
           <IconButton label="Close" onClick={onClose} bordered>
@@ -1320,7 +1566,7 @@ function AssetDetailPanel({
           </IconButton>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="ba-scroll flex-1 overflow-y-auto px-5 py-4">
           <div className="mb-4 flex aspect-[16/9] items-center justify-center overflow-hidden rounded-xl bg-[var(--surface-muted)]">
             {asset.type === "IMAGE" || asset.type === "SVG" ? (
               <img src={asset.url} alt="" className="h-full w-full object-contain" />
@@ -1416,7 +1662,7 @@ function AssetDetailPanel({
                 {versions === null ? (
                   <li className="text-[11px] text-[var(--text-muted)]">Loading…</li>
                 ) : versions.length === 0 ? (
-                  <li className="text-[11px] text-[var(--text-muted)]">No previous versions — this is the only file this asset has had.</li>
+                  <li className="text-[11px] text-[var(--text-muted)]">No previous versions. This is the only file this asset has had.</li>
                 ) : (
                   versions.map((version) => (
                     <li key={version.id} className="flex items-center justify-between gap-2 rounded-lg bg-[var(--surface-muted)] px-3 py-2 text-[11px]">
@@ -1485,6 +1731,8 @@ function BrandKitsWorkspace({
   notify,
   notifyError,
   setDialog,
+  intent,
+  onIntentHandled,
 }: {
   kits: ApiBrandKit[];
   status: LoadStatus;
@@ -1492,10 +1740,20 @@ function BrandKitsWorkspace({
   notify: (message: string) => void;
   notifyError: (error: unknown, fallback: string) => void;
   setDialog: (request: DialogRequest | null) => void;
+  intent?: WorkspaceIntent;
+  onIntentHandled?: () => void;
 }) {
   const [editing, setEditing] = useState<ApiBrandKit | "new" | null>(null);
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+
+  const intentRef = useRef(false);
+  useEffect(() => {
+    if (intent !== "new-kit" || intentRef.current) return;
+    intentRef.current = true;
+    setEditing("new");
+    onIntentHandled?.();
+  }, [intent, onIntentHandled]);
 
   const visibleKits = useMemo(
     () =>
@@ -1508,7 +1766,7 @@ function BrandKitsWorkspace({
   const archiveKit = (kit: ApiBrandKit) => {
     setDialog({
       title: "Archive this brand kit?",
-      description: "Its assets, templates and guideline stay intact — the kit just moves out of the active list.",
+      description: "Its assets, templates and guideline stay intact. The kit simply moves out of the active list.",
       confirmLabel: "Archive",
       tone: "danger",
       onConfirm: async () => {
@@ -1536,13 +1794,20 @@ function BrandKitsWorkspace({
           <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]" />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search brand kits…" className={cx(INPUT, "h-10 pl-8 pr-3")} />
         </div>
+        {/* A filter is not the loudest thing on the screen, so this
+            reads as a pressed toggle rather than a second primary. */}
         <button
           type="button"
+          aria-pressed={showArchived}
           onClick={() => setShowArchived((value) => !value)}
-          className={cx(showArchived ? BTN_PRIMARY : BTN_SECONDARY, FOCUS)}
+          className={cx(
+            BTN_SECONDARY,
+            FOCUS,
+            showArchived && "border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] text-[var(--accent)]",
+          )}
         >
           <Archive size={13} />
-          {showArchived ? "Showing archived" : "Active"}
+          {showArchived ? "Archived" : "Active"}
         </button>
         <button type="button" onClick={() => setEditing("new")} className={cx(BTN_PRIMARY, FOCUS)}>
           <Plus size={14} />
@@ -1567,7 +1832,7 @@ function BrandKitsWorkspace({
               <div className="flex items-start justify-between gap-2">
                 <button type="button" onClick={() => setEditing(kit)} className="min-w-0 text-left">
                   <p className="truncate text-[13px] font-semibold text-[var(--text)] hover:underline">{kit.name}</p>
-                  <p className="truncate text-[10.5px] text-[var(--text-subtle)]">{kit.client ? kit.client.name : "No client · internal"}</p>
+                  <p className="truncate text-[10.5px] text-[var(--text-subtle)]">{kit.client ? kit.client.name : "Internal brand"}</p>
                 </button>
                 {kit.status === "ARCHIVED" && <Pill label="Archived" hue="var(--text-subtle)" />}
                 {kit.status === "DRAFT" && <Pill label="Draft" hue="#D97706" />}
@@ -1647,6 +1912,8 @@ function BrandKitEditor({
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [saving, setSaving] = useState(false);
 
+  useDialogChrome(onClose);
+
   useEffect(() => {
     fetch("/api/admin/client-options", { credentials: "include" })
       .then((response) => response.json())
@@ -1689,8 +1956,8 @@ function BrandKitEditor({
   };
 
   return (
-    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="sg-fade fixed inset-0 z-[150] flex items-end justify-center bg-black/45 sm:items-center sm:p-6">
-      <div role="dialog" aria-modal="true" className="flex max-h-[88dvh] w-full max-w-[560px] flex-col overflow-hidden rounded-t-[24px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl sm:rounded-[24px]">
+    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="ba-fade fixed inset-0 z-[150] flex items-end justify-center bg-black/45 sm:items-center sm:p-6">
+      <div role="dialog" aria-modal="true" className="ba-sheet flex max-h-[88dvh] w-full max-w-[560px] flex-col overflow-hidden rounded-t-[24px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl sm:rounded-[24px]">
         <div className="flex items-center justify-between border-b border-[var(--line)] px-5 py-4">
           <h2 className="text-[15px] font-semibold text-[var(--text)]">{kit ? "Edit brand kit" : "Create brand kit"}</h2>
           <IconButton label="Close" onClick={onClose} bordered>
@@ -1698,7 +1965,7 @@ function BrandKitEditor({
           </IconButton>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="ba-scroll flex-1 overflow-y-auto px-5 py-4">
           <div>
             <label className={LABEL}>Name</label>
             <input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Syntra Grid" className={cx(INPUT, "h-10 px-3")} />
@@ -1708,9 +1975,9 @@ function BrandKitEditor({
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} className={cx(INPUT, "resize-y px-3 py-2")} />
           </div>
           <div className="mt-3">
-            <label className={LABEL}>Client (leave blank for an internal / non-client brand)</label>
+            <label className={LABEL}>Client, left blank for an internal brand</label>
             <select value={clientId} onChange={(event) => setClientId(event.target.value)} className={cx(INPUT, "h-10 px-3")}>
-              <option value="">No client — internal brand</option>
+              <option value="">No client, an internal brand</option>
               {clients.map((client) => (
                 <option key={client.id} value={client.id}>
                   {client.name}
@@ -1760,6 +2027,9 @@ const GUIDELINE_FIELDS: Array<{
       { key: "vision", label: "Vision", multiline: true },
       { key: "personality", label: "Brand personality", multiline: true },
       { key: "toneOfVoice", label: "Tone of voice", multiline: true },
+      { key: "industry", label: "Industry" },
+      { key: "targetAudience", label: "Target audience", multiline: true },
+      { key: "preferredLanguage", label: "Preferred language for AI-generated content" },
     ],
   },
   {
@@ -1978,7 +2248,7 @@ function BrandGuidelinesWorkspace({ kits, notify, notifyError }: SharedWorkspace
    TEMPLATES
 ============================================================================= */
 
-function TemplatesWorkspace({ kits, notify, notifyError }: SharedWorkspaceProps) {
+function TemplatesWorkspace({ kits, notify, notifyError, intent, onIntentHandled }: SharedWorkspaceProps) {
   const [templates, setTemplates] = useState<ApiBrandTemplate[]>([]);
   const [status, setStatus] = useState<LoadStatus>("idle");
   const [search, setSearch] = useState("");
@@ -1988,23 +2258,66 @@ function TemplatesWorkspace({ kits, notify, notifyError }: SharedWorkspaceProps)
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadForm, setUploadForm] = useState<{ file: File; name: string; category: TemplateCategory; brandKitId: string } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const debouncedSearch = useDebounced(search);
+  const requestSeq = useRef(0);
+
+  const query = useMemo(
+    () => ({
+      category: categoryFilter === "ALL" ? undefined : categoryFilter,
+      status: statusFilter,
+      search: debouncedSearch.trim() || undefined,
+    }),
+    [categoryFilter, statusFilter, debouncedSearch],
+  );
 
   const refresh = useCallback(() => {
+    const seq = (requestSeq.current += 1);
     Promise.resolve().then(() => setStatus("loading"));
-    fetchTemplatesApi({ category: categoryFilter === "ALL" ? undefined : categoryFilter, status: statusFilter, search: search || undefined })
-      .then(({ templates: result }) => {
+    fetchTemplatesApi(query)
+      .then(({ templates: result, pagination: page }) => {
+        if (seq !== requestSeq.current) return;
         setTemplates(result);
+        setPagination(page);
         setStatus("ready");
       })
       .catch((error) => {
+        if (seq !== requestSeq.current) return;
         setStatus("error");
         notifyError(error, "Unable to load templates.");
       });
-  }, [categoryFilter, statusFilter, search, notifyError]);
+  }, [query, notifyError]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const loadMore = useCallback(() => {
+    if (!pagination?.hasNext || loadingMore) return;
+    const seq = requestSeq.current;
+    setLoadingMore(true);
+    fetchTemplatesApi({ ...query, page: pagination.page + 1 })
+      .then(({ templates: result, pagination: page }) => {
+        if (seq !== requestSeq.current) return;
+        setTemplates((current) => {
+          const seen = new Set(current.map((item) => item.id));
+          return [...current, ...result.filter((item) => !seen.has(item.id))];
+        });
+        setPagination(page);
+      })
+      .catch((error) => notifyError(error, "Unable to load more templates."))
+      .finally(() => setLoadingMore(false));
+  }, [pagination, loadingMore, query, notifyError]);
+
+  const intentRef = useRef(false);
+  useEffect(() => {
+    if (intent !== "new-template" || intentRef.current) return;
+    intentRef.current = true;
+    fileInputRef.current?.click();
+    onIntentHandled?.();
+  }, [intent, onIntentHandled]);
 
   const startUpload = (file: File) => {
     setUploadForm({ file, name: file.name.replace(/\.[^./]+$/, ""), category: "OTHER", brandKitId: "" });
@@ -2057,7 +2370,7 @@ function TemplatesWorkspace({ kits, notify, notifyError }: SharedWorkspaceProps)
           <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]" />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search templates…" className={cx(INPUT, "h-10 pl-8 pr-3")} />
         </div>
-        <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as TemplateCategory | "ALL")} className={cx(INPUT, "h-10 w-auto px-2.5")}>
+        <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as TemplateCategory | "ALL")} className={cx(SELECT, SELECT_MD, FOCUS)}>
           <option value="ALL">All categories</option>
           {Object.entries(TEMPLATE_CATEGORY_LABELS).map(([value, label]) => (
             <option key={value} value={value}>
@@ -2065,7 +2378,7 @@ function TemplatesWorkspace({ kits, notify, notifyError }: SharedWorkspaceProps)
             </option>
           ))}
         </select>
-        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as TemplateStatus)} className={cx(INPUT, "h-10 w-auto px-2.5")}>
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as TemplateStatus)} className={cx(SELECT, SELECT_SM, FOCUS)}>
           <option value="ACTIVE">Active</option>
           <option value="ARCHIVED">Archived</option>
         </select>
@@ -2132,8 +2445,8 @@ function TemplatesWorkspace({ kits, notify, notifyError }: SharedWorkspaceProps)
       )}
 
       {uploadForm && (
-        <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setUploadForm(null)} className="sg-fade fixed inset-0 z-[150] flex items-center justify-center bg-black/45 p-4">
-          <div role="dialog" aria-modal="true" className="w-full max-w-[440px] rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-2xl">
+        <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setUploadForm(null)} className="ba-fade fixed inset-0 z-[150] flex items-center justify-center bg-black/45 p-4">
+          <div role="dialog" aria-modal="true" className="ba-rise w-full max-w-[440px] rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-2xl">
             <h3 className="text-[14px] font-semibold text-[var(--text)]">Upload template</h3>
             <p className="mt-1 truncate text-[11px] text-[var(--text-muted)]">{uploadForm.file.name}</p>
 
@@ -2233,8 +2546,8 @@ function TemplateDetailPanel({
   };
 
   return (
-    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="sg-fade fixed inset-0 z-[150] flex items-center justify-center bg-black/45 p-4">
-      <div role="dialog" aria-modal="true" className="w-full max-w-[480px] rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-2xl">
+    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="ba-fade fixed inset-0 z-[150] flex items-center justify-center bg-black/45 p-4">
+      <div role="dialog" aria-modal="true" className="ba-rise w-full max-w-[480px] rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-2xl">
         <div className="flex items-center justify-between">
           <h3 className="text-[14px] font-semibold text-[var(--text)]">Edit template</h3>
           <IconButton label="Close" onClick={onClose}>
@@ -2284,7 +2597,7 @@ function TemplateDetailPanel({
    REQUESTS & APPROVALS
 ============================================================================= */
 
-function RequestsWorkspace({ kits, notify, notifyError, setDialog }: SharedWorkspaceProps) {
+function RequestsWorkspace({ kits, notify, notifyError, setDialog, intent, onIntentHandled }: SharedWorkspaceProps) {
   const [requests, setRequests] = useState<ApiBrandRequest[]>([]);
   const [status, setStatus] = useState<LoadStatus>("idle");
   const [statusFilter, setStatusFilter] = useState<RequestStatus | "ALL">("ALL");
@@ -2292,27 +2605,66 @@ function RequestsWorkspace({ kits, notify, notifyError, setDialog }: SharedWorks
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
   const [openRequestId, setOpenRequestId] = useState<string | null>(null);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const refresh = useCallback(() => {
-    Promise.resolve().then(() => setStatus("loading"));
-    fetchRequestsApi({
+  const debouncedSearch = useDebounced(search);
+  const requestSeq = useRef(0);
+
+  const query = useMemo(
+    () => ({
       status: statusFilter === "ALL" ? undefined : statusFilter,
       priority: priorityFilter === "ALL" ? undefined : priorityFilter,
-      search: search || undefined,
-    })
-      .then(({ requests: result }) => {
+      search: debouncedSearch.trim() || undefined,
+    }),
+    [statusFilter, priorityFilter, debouncedSearch],
+  );
+
+  const refresh = useCallback(() => {
+    const seq = (requestSeq.current += 1);
+    Promise.resolve().then(() => setStatus("loading"));
+    fetchRequestsApi(query)
+      .then(({ requests: result, pagination: page }) => {
+        if (seq !== requestSeq.current) return;
         setRequests(result);
+        setPagination(page);
         setStatus("ready");
       })
       .catch((error) => {
+        if (seq !== requestSeq.current) return;
         setStatus("error");
         notifyError(error, "Unable to load requests.");
       });
-  }, [statusFilter, priorityFilter, search, notifyError]);
+  }, [query, notifyError]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const loadMore = useCallback(() => {
+    if (!pagination?.hasNext || loadingMore) return;
+    const seq = requestSeq.current;
+    setLoadingMore(true);
+    fetchRequestsApi({ ...query, page: pagination.page + 1 })
+      .then(({ requests: result, pagination: page }) => {
+        if (seq !== requestSeq.current) return;
+        setRequests((current) => {
+          const seen = new Set(current.map((item) => item.id));
+          return [...current, ...result.filter((item) => !seen.has(item.id))];
+        });
+        setPagination(page);
+      })
+      .catch((error) => notifyError(error, "Unable to load more requests."))
+      .finally(() => setLoadingMore(false));
+  }, [pagination, loadingMore, query, notifyError]);
+
+  const intentRef = useRef(false);
+  useEffect(() => {
+    if (intent !== "new-request" || intentRef.current) return;
+    intentRef.current = true;
+    setCreating(true);
+    onIntentHandled?.();
+  }, [intent, onIntentHandled]);
 
   return (
     <div className="space-y-4">
@@ -2321,7 +2673,7 @@ function RequestsWorkspace({ kits, notify, notifyError, setDialog }: SharedWorks
           <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-subtle)]" />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search requests…" className={cx(INPUT, "h-10 pl-8 pr-3")} />
         </div>
-        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as RequestStatus | "ALL")} className={cx(INPUT, "h-10 w-auto px-2.5")}>
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as RequestStatus | "ALL")} className={cx(SELECT, SELECT_MD, FOCUS)}>
           <option value="ALL">All statuses</option>
           {Object.entries(REQUEST_STATUS_META).map(([value, meta]) => (
             <option key={value} value={value}>
@@ -2329,7 +2681,7 @@ function RequestsWorkspace({ kits, notify, notifyError, setDialog }: SharedWorks
             </option>
           ))}
         </select>
-        <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value as RequestPriority | "ALL")} className={cx(INPUT, "h-10 w-auto px-2.5")}>
+        <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value as RequestPriority | "ALL")} className={cx(SELECT, SELECT_SM, FOCUS)}>
           <option value="ALL">All priorities</option>
           {Object.entries(PRIORITY_META).map(([value, meta]) => (
             <option key={value} value={value}>
@@ -2372,6 +2724,16 @@ function RequestsWorkspace({ kits, notify, notifyError, setDialog }: SharedWorks
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {pagination?.hasNext && (
+        <div className="flex justify-center pt-1">
+          <button type="button" onClick={loadMore} disabled={loadingMore} className={cx(BTN_SECONDARY, FOCUS)}>
+            {loadingMore ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+            Load more
+            <span className="text-[var(--text-subtle)]">({(pagination.total - requests.length).toLocaleString("en-GB")} left)</span>
+          </button>
         </div>
       )}
 
@@ -2420,6 +2782,8 @@ function CreateRequestDialog({
   const [dueDate, setDueDate] = useState("");
   const [saving, setSaving] = useState(false);
 
+  useDialogChrome(onClose);
+
   const create = async () => {
     if (!title.trim() || !description.trim()) {
       notifyError(new Error("A title and description are required."), "A title and description are required.");
@@ -2444,8 +2808,8 @@ function CreateRequestDialog({
   };
 
   return (
-    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="sg-fade fixed inset-0 z-[150] flex items-end justify-center bg-black/45 sm:items-center sm:p-6">
-      <div role="dialog" aria-modal="true" className="flex max-h-[88dvh] w-full max-w-[520px] flex-col overflow-hidden rounded-t-[24px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl sm:rounded-[24px]">
+    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="ba-fade fixed inset-0 z-[150] flex items-end justify-center bg-black/45 sm:items-center sm:p-6">
+      <div role="dialog" aria-modal="true" className="ba-sheet flex max-h-[88dvh] w-full max-w-[520px] flex-col overflow-hidden rounded-t-[24px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl sm:rounded-[24px]">
         <div className="flex items-center justify-between border-b border-[var(--line)] px-5 py-4">
           <h2 className="text-[15px] font-semibold text-[var(--text)]">New asset request</h2>
           <IconButton label="Close" onClick={onClose} bordered>
@@ -2453,7 +2817,7 @@ function CreateRequestDialog({
           </IconButton>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="ba-scroll flex-1 overflow-y-auto px-5 py-4">
           <div>
             <label className={LABEL}>Title</label>
             <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. New Instagram carousel for product launch" className={cx(INPUT, "h-10 px-3")} />
@@ -2538,6 +2902,8 @@ function RequestDetailPanel({
   const [commentBody, setCommentBody] = useState("");
   const attachmentInputRef = useRef<HTMLInputElement>(null);
 
+  useDialogChrome(onClose);
+
   const load = useCallback(() => {
     Promise.resolve().then(() => setStatus("loading"));
     fetchRequestApi(requestId)
@@ -2617,7 +2983,7 @@ function RequestDetailPanel({
 
   if (status === "loading" && !request) {
     return (
-      <div className="sg-fade fixed inset-0 z-[150] flex items-center justify-center bg-black/45 p-4">
+      <div className="ba-fade fixed inset-0 z-[150] flex items-center justify-center bg-black/45 p-4">
         <div className="h-[60dvh] w-full max-w-[640px] animate-pulse rounded-2xl bg-[var(--surface)]" />
       </div>
     );
@@ -2628,8 +2994,8 @@ function RequestDetailPanel({
   const meta = REQUEST_STATUS_META[request.status];
 
   return (
-    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="sg-fade fixed inset-0 z-[150] flex items-end justify-center bg-black/45 sm:items-center sm:p-6">
-      <div role="dialog" aria-modal="true" className="flex h-[92dvh] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[24px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl sm:h-auto sm:max-h-[88dvh] sm:rounded-[24px]">
+    <div role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()} className="ba-fade fixed inset-0 z-[150] flex items-end justify-center bg-black/45 sm:items-center sm:p-6">
+      <div role="dialog" aria-modal="true" className="ba-sheet flex h-[92dvh] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[24px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl sm:h-auto sm:max-h-[88dvh] sm:rounded-[24px]">
         <div className="flex items-start justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
           <div className="min-w-0">
             <h2 className="truncate text-[15px] font-semibold text-[var(--text)]">{request.title}</h2>
@@ -2642,7 +3008,7 @@ function RequestDetailPanel({
           </IconButton>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="ba-scroll flex-1 overflow-y-auto px-5 py-4">
           <div className="flex flex-wrap items-center gap-2">
             <Pill label={meta.label} hue={meta.hue} />
             <Pill label={PRIORITY_META[request.priority].label} hue={PRIORITY_META[request.priority].hue} />

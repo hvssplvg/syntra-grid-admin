@@ -27,7 +27,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (!hasCampaignsPermission(identity, AccessAction.EDIT)) {
         return NextResponse.json({ ok: false, error: "You are not authorised to edit this expense." }, { status: 403 });
       }
-      assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId });
+      assertCampaignRowAccess(identity, AccessAction.EDIT, { createdById: campaign.createdById, departmentId: campaign.departmentId, clientId: campaign.clientId });
     }
 
     const body = await request.json().catch(() => ({}));
