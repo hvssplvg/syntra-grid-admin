@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
+import { useSelectedClient } from '@/app/components/admin/SelectedClientContext';
+import ClientScopedSupportList from './support/ClientScopedSupportList';
 import {
   AlertCircle,
   AlertTriangle,
@@ -239,7 +241,14 @@ const emptyForm: TicketForm = {
   assignedTo: '',
 };
 
-export default function SupportPage() {
+/**
+ * This mocked, company-wide ticket queue predates client-context work and
+ * stays exactly as it was — rebuilding it against real, cross-client data
+ * is a separate, larger task. The default export below only renders it
+ * for the company-wide case; a selected client gets the real list instead
+ * (ClientScopedSupportList).
+ */
+function SupportPageMock() {
   const [tickets, setTickets] =
     useState<SupportTicket[]>(initialTickets);
 
@@ -1620,4 +1629,14 @@ function formatRelativeTime(value: string) {
   }
 
   return formatDate(value);
+}
+
+export default function SupportTab() {
+  const { selectedClientId } = useSelectedClient();
+
+  if (selectedClientId) {
+    return <ClientScopedSupportList clientId={selectedClientId} />;
+  }
+
+  return <SupportPageMock />;
 }

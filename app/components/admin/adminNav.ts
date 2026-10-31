@@ -754,7 +754,7 @@ export const ADMIN_TABS: Record<
       "Relationship, support and service health for every client.",
     section: "Client Success",
     icon: Activity,
-    status: "PLANNED",
+    status: "ACTIVE",
   },
 
   feedback: {
@@ -1525,6 +1525,7 @@ export const SECURED_MODULE_KEYS: ReadonlySet<AdminTab> = new Set([
   "campaigns",
   "brand_assets",
   "seo_analytics",
+  "client_health",
 ]);
 
 export function isModuleSecured(tab: AdminTab): boolean {

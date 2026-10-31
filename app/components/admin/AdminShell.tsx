@@ -35,6 +35,8 @@ import type {
   NavigationDirection,
 } from "./AdminHome";
 
+import type { WorkspaceApiRecord } from "@/lib/workspaces/workspacesApi";
+
 /* ============================================================================
    TYPES
 ============================================================================ */
@@ -63,6 +65,22 @@ export type AdminShellProps = {
   // section (see getVisibleSectionTabs/shouldShowSectionTabBar/
   // getSectionLandingTab in adminNav.ts).
   isFullAccess?: boolean;
+
+  // Set only while Social Media's Graphic Studio full-workspace editor
+  // is open (see FullWorkspaceContext.tsx) — OR'd alongside
+  // isCommandWorkspace below so it reuses the exact same full-bleed
+  // content layout Command sections already have, without reclassifying
+  // Social Media as a Command section.
+  fullBleedContent?: boolean;
+
+  // Department-focus workspace switcher (see lib/workspaces/server.ts) —
+  // forwarded straight through to AdminHeader, which renders the
+  // control. AdminShell itself doesn't use these; the actual section
+  // reordering already happened in AdminHome before `sections` above was
+  // computed.
+  workspaces?: WorkspaceApiRecord[];
+  activeWorkspaceKey?: string | null;
+  onWorkspaceChange?: (key: string) => void;
 
   navigationDirection:
     NavigationDirection;
@@ -176,6 +194,48 @@ const COMMAND_MOBILE_CONTENT = `
   p-0
 `;
 
+/**
+ * Full-bleed workspace content (today: only Social Media's Graphic
+ * Studio, via fullBleedContent — see FullWorkspaceContext.tsx).
+ *
+ * Deliberately `h-full`/`overflow-hidden`, not Command's `min-h-full`:
+ * Command sections are allowed to grow taller than the viewport and
+ * let the shell scroll area scroll. The Graphic Studio must not —
+ * "genuinely full-screen" means the canvas's fit-to-screen math needs
+ * a container that is actually height-capped, not one that keeps
+ * growing to fit its content and lets an ancestor scroll instead.
+ */
+
+const FULL_BLEED_DESKTOP_CONTENT = `
+  relative
+
+  flex
+  h-full
+  w-full
+  min-w-0
+
+  flex-col
+
+  overflow-hidden
+
+  p-0
+`;
+
+const FULL_BLEED_MOBILE_CONTENT = `
+  relative
+
+  flex
+  h-full
+  w-full
+  min-w-0
+
+  flex-col
+
+  overflow-hidden
+
+  p-0
+`;
+
 /* ============================================================================
    COMPONENT
 ============================================================================ */
@@ -187,6 +247,10 @@ export default function AdminShell({
   tabDefinitions,
   sections,
   isFullAccess = true,
+  fullBleedContent = false,
+  workspaces,
+  activeWorkspaceKey,
+  onWorkspaceChange,
   navigationDirection,
   onOpenNotificationsWorkspace,
   onOpenMyAccount,
@@ -343,12 +407,16 @@ export default function AdminShell({
   const desktopContentClass =
     isCommandWorkspace
       ? COMMAND_DESKTOP_CONTENT
-      : STANDARD_DESKTOP_CONTENT;
+      : fullBleedContent
+        ? FULL_BLEED_DESKTOP_CONTENT
+        : STANDARD_DESKTOP_CONTENT;
 
   const mobileContentClass =
     isCommandWorkspace
       ? COMMAND_MOBILE_CONTENT
-      : STANDARD_MOBILE_CONTENT;
+      : fullBleedContent
+        ? FULL_BLEED_MOBILE_CONTENT
+        : STANDARD_MOBILE_CONTENT;
 
   /* --------------------------------------------------------------------------
      SELECT TAB
@@ -721,7 +789,17 @@ export default function AdminShell({
           flex-col
           overflow-x-hidden
         `
-      : `
+      : fullBleedContent
+        ? `
+            relative
+            flex
+            h-full
+            w-full
+            min-w-0
+            flex-col
+            overflow-hidden
+          `
+        : `
           min-w-0
           overflow-x-hidden
         `;
@@ -741,7 +819,22 @@ export default function AdminShell({
 
           ${contentTransitionClass}
         `
-      : `
+      : fullBleedContent
+        ? `
+            relative
+            flex
+            h-full
+            w-full
+            min-w-0
+            flex-col
+            overflow-hidden
+
+            transform-gpu
+            will-change-[transform,opacity]
+
+            ${contentTransitionClass}
+          `
+        : `
           min-w-0
 
           transform-gpu
@@ -892,32 +985,42 @@ export default function AdminShell({
               remain available.
           ================================================================== */}
 
-          <div
-            className="
-              relative
-              z-30
-              shrink-0
-            "
-          >
-            <AdminHeader
-              admin={admin}
-              sections={sections}
-              activeSection={
-                activeSection
-              }
-              activeTab={activeTab}
-              onTabSelect={
-                selectTab
-              }
-              isFullAccess={
-                isFullAccess
-              }
-              onOpenNotificationsWorkspace={onOpenNotificationsWorkspace}
-              onOpenMyAccount={onOpenMyAccount}
-              onOpenMessagesConversation={onOpenMessagesConversation}
-              isMessagesWorkspaceOpen={isMessagesWorkspaceOpen}
-            />
-          </div>
+          {/* Fully unmounted (not just condensed) while the Graphic
+              Studio's full-bleed workspace is open — the admin sidebar
+              to the left remains the only persistent navigation; the
+              workspace's own compact toolbar replaces this header, per
+              the Content Studio plan's "genuinely full-screen" requirement. */}
+          {!fullBleedContent && (
+            <div
+              className="
+                relative
+                z-30
+                shrink-0
+              "
+            >
+              <AdminHeader
+                admin={admin}
+                sections={sections}
+                activeSection={
+                  activeSection
+                }
+                activeTab={activeTab}
+                onTabSelect={
+                  selectTab
+                }
+                isFullAccess={
+                  isFullAccess
+                }
+                workspaces={workspaces}
+                activeWorkspaceKey={activeWorkspaceKey}
+                onWorkspaceChange={onWorkspaceChange}
+                onOpenNotificationsWorkspace={onOpenNotificationsWorkspace}
+                onOpenMyAccount={onOpenMyAccount}
+                onOpenMessagesConversation={onOpenMessagesConversation}
+                isMessagesWorkspaceOpen={isMessagesWorkspaceOpen}
+              />
+            </div>
+          )}
 
           {/* ==================================================================
               SCROLL AREA
@@ -956,7 +1059,7 @@ export default function AdminShell({
               flex-1
 
               overflow-x-hidden
-              overflow-y-auto
+              ${fullBleedContent ? "overflow-y-hidden" : "overflow-y-auto"}
 
               overscroll-contain
 
@@ -1091,7 +1194,7 @@ export default function AdminShell({
                 sm:px-5
 
                 ${
-                  isCommandWorkspace
+                  isCommandWorkspace || fullBleedContent
                     ? "h-[58px]"
                     : "h-[66px]"
                 }
@@ -1139,7 +1242,12 @@ export default function AdminShell({
               </button>
 
               {/* ==============================================================
-                  WORKSPACE LABEL
+                  WORKSPACE LABEL + AVATAR
+
+                  Hidden while the Graphic Studio's full-bleed workspace is
+                  open — only the menu button above remains, so the global
+                  admin sidebar/navigation drawer stays reachable on mobile
+                  while the Growth header itself disappears.
 
                   Command:
                     Display Command only.
@@ -1148,6 +1256,7 @@ export default function AdminShell({
                     Display section and active tab.
               ============================================================== */}
 
+              {!fullBleedContent && (
               <div
                 className="
                   min-w-0
@@ -1226,16 +1335,19 @@ export default function AdminShell({
                   </>
                 )}
               </div>
+              )}
 
               {/* ==============================================================
                   PROFILE AVATAR
               ============================================================== */}
 
-              <MobileAvatar
-                name={
-                  admin.fullName
-                }
-              />
+              {!fullBleedContent && (
+                <MobileAvatar
+                  name={
+                    admin.fullName
+                  }
+                />
+              )}
             </div>
 
             {/* ================================================================
@@ -1248,7 +1360,7 @@ export default function AdminShell({
                   Original tab behaviour.
             ================================================================ */}
 
-            {showMobileTabBar && (
+            {showMobileTabBar && !fullBleedContent && (
               <div
                 className="
                   no-scrollbar
@@ -1345,7 +1457,7 @@ export default function AdminShell({
               flex-1
 
               overflow-x-hidden
-              overflow-y-auto
+              ${fullBleedContent ? "overflow-y-hidden" : "overflow-y-auto"}
 
               ${
                 isCommandWorkspace

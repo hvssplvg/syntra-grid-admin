@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect */
 "use client";
 
 import {
@@ -19,6 +18,10 @@ import {
   CLIENTS_ENDPOINT,
   fetchClientsPayload,
 } from "@/lib/clients/clientsApi";
+
+import type { WorkspaceApiRecord } from "@/lib/workspaces/workspacesApi";
+import { useSelectedClient } from "./SelectedClientContext";
+import { resolveWorkspaceIcon } from "@/lib/workspaces/icons";
 
 import {
   Bell,
@@ -79,6 +82,10 @@ type AdminHeaderProps = {
   activeTab: AdminTab;
   onTabSelect: (tab: AdminTab) => void;
   isFullAccess?: boolean;
+  /** Set only while Social Media's Graphic Studio full-workspace editor
+   *  is open — condenses the header and hides the tab bar the same way
+   *  Command sections already do, without reclassifying this section. */
+  fullBleedContent?: boolean;
   onOpenNotificationsWorkspace: () => void;
   onOpenMyAccount: () => void;
   /** Opens the messaging workspace with a specific conversation
@@ -87,6 +94,13 @@ type AdminHeaderProps = {
   /** Reduces notification-sound noise while the employee is actively in
    *  the messaging workspace — see NotificationsMenu's sound hook. */
   isMessagesWorkspaceOpen?: boolean;
+  /** Department-focus workspace switcher (see lib/workspaces/server.ts)
+   *  — a distinct, independent concept from the client-context switcher
+   *  below (ClientContext, now backed by SelectedClientContext.tsx's
+   *  shared app-wide state). Both coexist. */
+  workspaces?: WorkspaceApiRecord[];
+  activeWorkspaceKey?: string | null;
+  onWorkspaceChange?: (key: string) => void;
 };
 
 type SearchResult = {
@@ -105,11 +119,17 @@ type TabIndicatorPosition = {
   ready: boolean;
 };
 
-type WorkspaceContextType = "company" | "client";
+// Renamed from WorkspaceContext — this is the CLIENT-CONTEXT switcher
+// (which client's data you're viewing), a distinct, independent feature
+// from the department-focus "Workspace" switcher (see
+// lib/workspaces/server.ts). The two coexist. The actual selection now
+// lives in SelectedClientContext.tsx (shared app-wide); this file still
+// owns the dropdown UI and these option-shape types.
+type ClientContextType = "company" | "client";
 
-type WorkspaceContext = {
+type ClientContext = {
   id: string;
-  type: WorkspaceContextType;
+  type: ClientContextType;
   entityId: string | null;
   label: string;
   shortLabel: string;
@@ -168,9 +188,6 @@ type ProfileApiResponse = {
    CONFIGURATION
 ============================================================================= */
 
-const WORKSPACE_STORAGE_KEY =
-  "syntragrid.workspace-context";
-
 const COMPANY_LOGO_URL =
   "/images/syntra-logo.png";
 
@@ -180,7 +197,7 @@ const OPERATIONAL_CLIENT_STATUSES = new Set([
   "PAUSED",
 ]);
 
-const COMPANY_CONTEXT: WorkspaceContext = {
+const COMPANY_CONTEXT: ClientContext = {
   id: "company",
   type: "company",
   entityId: null,
@@ -514,6 +531,10 @@ export default function AdminHeader({
   activeTab,
   onTabSelect,
   isFullAccess = true,
+  fullBleedContent = false,
+  workspaces = [],
+  activeWorkspaceKey = null,
+  onWorkspaceChange,
   onOpenNotificationsWorkspace,
   onOpenMyAccount,
   onOpenMessagesConversation,
@@ -524,7 +545,7 @@ export default function AdminHeader({
   const notificationCentre = useNotificationCentre(admin.id, isMessagesWorkspaceOpen);
 
   const commandWorkspace =
-    isCommandSection(activeSection);
+    isCommandSection(activeSection) || fullBleedContent;
 
   const showTabBar =
     shouldShowSectionTabBar(
@@ -546,6 +567,9 @@ export default function AdminHeader({
     useRef<HTMLDivElement>(null);
 
   const contextRef =
+    useRef<HTMLDivElement>(null);
+
+  const workspaceMenuRef =
     useRef<HTMLDivElement>(null);
 
   const notificationsRef =
@@ -582,6 +606,9 @@ export default function AdminHeader({
     useState(false);
 
   const [contextOpen, setContextOpen] =
+    useState(false);
+
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] =
     useState(false);
 
   const [
@@ -771,47 +798,35 @@ export default function AdminHeader({
   );
 
   /* ===========================================================================
-     WORKSPACE CONTEXT
+     CLIENT CONTEXT
+
+     The selection itself now lives in SelectedClientContext.tsx (shared
+     app-wide — see its own doc comment for why: this switcher used to be
+     purely cosmetic, nothing outside this file ever read it). This
+     component still owns the dropdown UI and the resolved option list,
+     translating between the shared context's raw client id (or null for
+     company-wide) and this file's own ClientContext.id shape
+     ("company"/"client:<id>") that the dropdown rendering already used.
   =========================================================================== */
 
-  const [
-    selectedContextId,
-    setSelectedContextId,
-  ] = useState(COMPANY_CONTEXT.id);
-
-  const [
-    contextHydrated,
-    setContextHydrated,
-  ] = useState(false);
+  const {
+    selectedClientId,
+    selectClient,
+    hydrated: contextHydrated,
+  } = useSelectedClient();
 
   useEffect(() => {
-    if (!isFullAccess) {
-      setSelectedContextId(COMPANY_CONTEXT.id);
-      setContextHydrated(true);
-      return;
+    // A restricted account can't pick a client context at all yet
+    // (ClientAssignment isn't enforced anywhere — see
+    // SelectedClientContext.tsx's doc comment) — force company-wide,
+    // exactly the pre-existing restriction this replaces.
+    if (!isFullAccess && selectedClientId) {
+      selectClient(null);
     }
-
-    try {
-      const stored =
-        window.localStorage.getItem(
-          WORKSPACE_STORAGE_KEY,
-        );
-
-      if (stored) {
-        setSelectedContextId(stored);
-      }
-    } catch (error) {
-      console.warn(
-        "Could not restore workspace context:",
-        error,
-      );
-    } finally {
-      setContextHydrated(true);
-    }
-  }, [isFullAccess]);
+  }, [isFullAccess, selectedClientId, selectClient]);
 
   const clientContexts =
-    useMemo<WorkspaceContext[]>(() => {
+    useMemo<ClientContext[]>(() => {
       if (!canOpenClients) {
         return [];
       }
@@ -853,8 +868,8 @@ export default function AdminHeader({
         );
     }, [clients, canOpenClients]);
 
-  const workspaceContexts =
-    useMemo<WorkspaceContext[]>(
+  const clientContextOptions =
+    useMemo<ClientContext[]>(
       () => [
         COMPANY_CONTEXT,
         ...clientContexts,
@@ -863,87 +878,74 @@ export default function AdminHeader({
     );
 
   const currentContext = useMemo(() => {
-    if (!isFullAccess) {
+    if (!isFullAccess || !selectedClientId) {
       return COMPANY_CONTEXT;
     }
 
     return (
-      workspaceContexts.find(
+      clientContexts.find(
         (context) =>
-          context.id === selectedContextId,
+          context.entityId === selectedClientId,
       ) ?? COMPANY_CONTEXT
     );
   }, [
     isFullAccess,
-    workspaceContexts,
-    selectedContextId,
+    clientContexts,
+    selectedClientId,
   ]);
 
   useEffect(() => {
     if (!isFullAccess) return;
     if (!contextHydrated) return;
+    if (!selectedClientId) return;
     if (clientsLoading) return;
     if (!clientsPayload) return;
     if (clientsSwrError) return;
 
-    const exists = workspaceContexts.some(
+    // The persisted/URL-carried client no longer exists among the
+    // currently-loaded, operational clients (e.g. it was archived) —
+    // fall back to company-wide rather than silently showing a stale
+    // selection or an empty match.
+    const exists = clientContexts.some(
       (context) =>
-        context.id === selectedContextId,
+        context.entityId === selectedClientId,
     );
 
     if (exists) return;
 
-    setSelectedContextId(
-      COMPANY_CONTEXT.id,
-    );
-
-    try {
-      window.localStorage.setItem(
-        WORKSPACE_STORAGE_KEY,
-        COMPANY_CONTEXT.id,
-      );
-    } catch {
-      // Optional local preference.
-    }
+    selectClient(null);
   }, [
     isFullAccess,
     contextHydrated,
+    selectedClientId,
     clientsLoading,
     clientsPayload,
     clientsSwrError,
-    workspaceContexts,
-    selectedContextId,
+    clientContexts,
+    selectClient,
   ]);
 
-  const selectWorkspaceContext =
+  const selectClientContext =
     useCallback(
       (contextId: string) => {
         if (!isFullAccess) return;
 
-        const permitted =
-          workspaceContexts.some(
-            (context) =>
-              context.id === contextId,
-          );
-
-        if (!permitted) return;
-
-        setSelectedContextId(contextId);
-        setContextOpen(false);
-
-        try {
-          window.localStorage.setItem(
-            WORKSPACE_STORAGE_KEY,
-            contextId,
-          );
-        } catch (error) {
-          console.warn(
-            "Could not persist workspace context:",
-            error,
-          );
+        if (contextId === COMPANY_CONTEXT.id) {
+          selectClient(null);
+          setContextOpen(false);
+          return;
         }
+
+        const match = clientContexts.find(
+          (context) => context.id === contextId,
+        );
+
+        if (!match) return;
+
+        selectClient(match.entityId);
+        setContextOpen(false);
       },
-      [isFullAccess, workspaceContexts],
+      [isFullAccess, clientContexts, selectClient],
     );
 
   /* ===========================================================================
@@ -1139,6 +1141,13 @@ export default function AdminHeader({
       }
 
       if (
+        workspaceMenuRef.current &&
+        !workspaceMenuRef.current.contains(target)
+      ) {
+        setWorkspaceMenuOpen(false);
+      }
+
+      if (
         notificationsRef.current &&
         !notificationsRef.current.contains(target)
       ) {
@@ -1180,6 +1189,7 @@ export default function AdminHeader({
         setSearchOpen(true);
         setProfileOpen(false);
         setContextOpen(false);
+        setWorkspaceMenuOpen(false);
         setNotificationsOpen(false);
 
         window.setTimeout(
@@ -1193,6 +1203,7 @@ export default function AdminHeader({
         setSearchOpen(false);
         setProfileOpen(false);
         setContextOpen(false);
+        setWorkspaceMenuOpen(false);
         setNotificationsOpen(false);
       }
     };
@@ -1353,10 +1364,90 @@ export default function AdminHeader({
             </div>
           </div>
 
+          {/* ============================================================
+              WORKSPACE SWITCHER (department focus — distinct from the
+              client-context selector just below). Full-access only for
+              now; never hides anything the Owner can already reach — see
+              lib/workspaces/server.ts's doc comment.
+          ============================================================ */}
+
+          {isFullAccess && workspaces.length > 0 && onWorkspaceChange && (
+            <div
+              ref={workspaceMenuRef}
+              className="relative"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkspaceMenuOpen((value) => !value);
+                  setContextOpen(false);
+                  setProfileOpen(false);
+                  setNotificationsOpen(false);
+                }}
+                aria-expanded={workspaceMenuOpen}
+                aria-label="Switch workspace"
+                className="
+                  hidden h-10 items-center gap-2
+                  rounded-full border border-[var(--line)]
+                  bg-[var(--surface)]
+                  pl-3 pr-2.5 text-left shadow-sm
+                  transition-colors
+                  hover:bg-[var(--surface-muted)]
+                  xl:flex
+                "
+              >
+                {(() => {
+                  const ActiveWorkspaceIcon = resolveWorkspaceIcon(
+                    workspaces.find((workspace) => workspace.key === activeWorkspaceKey)?.icon,
+                  );
+                  return <ActiveWorkspaceIcon size={14} className="shrink-0 text-[var(--text-subtle)]" />;
+                })()}
+                <span className="max-w-[120px] truncate text-[10px] font-semibold text-[var(--text)]">
+                  {workspaces.find((workspace) => workspace.key === activeWorkspaceKey)?.name ?? "Executive"}
+                </span>
+                <ChevronDown
+                  size={13}
+                  className={`text-[var(--text-subtle)] transition-transform ${workspaceMenuOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+
+              {workspaceMenuOpen && (
+                <div
+                  role="menu"
+                  aria-label="Switch workspace"
+                  className="absolute right-0 top-[calc(100%+8px)] z-40 w-60 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-[var(--shadow-popover)]"
+                >
+                  {workspaces.map((workspace) => {
+                    const Icon = resolveWorkspaceIcon(workspace.icon);
+                    const selected = workspace.key === activeWorkspaceKey;
+                    return (
+                      <button
+                        key={workspace.id}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onWorkspaceChange(workspace.key);
+                          setWorkspaceMenuOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[11.5px] transition-colors ${
+                          selected ? "bg-[var(--surface-muted)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--surface-muted)] hover:text-[var(--text)]"
+                        }`}
+                      >
+                        <Icon size={14} className="shrink-0" style={workspace.colour ? { color: workspace.colour } : undefined} />
+                        <span className="min-w-0 flex-1 truncate font-medium">{workspace.name}</span>
+                        {selected && <Check size={13} className="shrink-0 text-[var(--accent)]" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex-1" />
 
           {/* ============================================================
-              WORKSPACE SELECTOR
+              CLIENT CONTEXT SELECTOR
           ============================================================ */}
 
           <div
@@ -1387,7 +1478,7 @@ export default function AdminHeader({
                 xl:flex
               "
             >
-              <WorkspaceAvatar
+              <ClientContextAvatar
                 context={currentContext}
                 size="small"
               />
@@ -1431,7 +1522,7 @@ export default function AdminHeader({
                     currentContext.id
                   }
                   contexts={
-                    workspaceContexts
+                    clientContextOptions
                   }
                   loading={
                     canOpenClients &&
@@ -1446,7 +1537,7 @@ export default function AdminHeader({
                     void loadClients();
                   }}
                   onSelect={
-                    selectWorkspaceContext
+                    selectClientContext
                   }
                 />
               )}
@@ -1692,7 +1783,7 @@ export default function AdminHeader({
             SECTION TABS
         ================================================================ */}
 
-        {showTabBar && (
+        {showTabBar && !fullBleedContent && (
           <div
             ref={tabRowRef}
             className="
@@ -1837,14 +1928,14 @@ export default function AdminHeader({
 }
 
 /* =============================================================================
-   WORKSPACE AVATAR
+   CLIENT CONTEXT AVATAR
 ============================================================================= */
 
-function WorkspaceAvatar({
+function ClientContextAvatar({
   context,
   size = "medium",
 }: {
-  context: WorkspaceContext;
+  context: ClientContext;
   size?: "small" | "medium";
 }) {
   const sizeClass =
@@ -1906,7 +1997,7 @@ function WorkspaceAvatar({
 }
 
 /* =============================================================================
-   WORKSPACE CONTEXT MENU
+   CLIENT CONTEXT MENU
 ============================================================================= */
 
 function ContextMenu({
@@ -1918,7 +2009,7 @@ function ContextMenu({
   onSelect,
 }: {
   currentContextId: string;
-  contexts: WorkspaceContext[];
+  contexts: ClientContext[];
   loading: boolean;
   error: string | null;
   onRetry: () => void;
@@ -2068,7 +2159,7 @@ function ContextMenu({
 }
 
 /* =============================================================================
-   WORKSPACE CONTEXT ITEM
+   CLIENT CONTEXT ITEM
 ============================================================================= */
 
 function ContextMenuItem({
@@ -2076,7 +2167,7 @@ function ContextMenuItem({
   selected,
   onSelect,
 }: {
-  context: WorkspaceContext;
+  context: ClientContext;
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
@@ -2099,7 +2190,7 @@ function ContextMenuItem({
         }
       `}
     >
-      <WorkspaceAvatar
+      <ClientContextAvatar
         context={context}
       />
 

@@ -43,6 +43,39 @@ import {
 } from './AdminThemeProvider';
 
 /* ============================================================================
+   DOCK MAGNIFICATION PREFERENCES
+
+   Two small media-query hooks, not a new dependency — the dock hover
+   effect below (WorkspaceGroup/WorkspaceButton) reads both of these to
+   decide whether to apply any scale/translate at all.
+============================================================================ */
+
+function useMediaQueryPreference(query: string): boolean {
+  const [matches, setMatches] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mql = window.matchMedia(query);
+    // One-time sync of a per-browser media query preference on mount,
+    // never a derived-state loop — mirrors AdminHeader.tsx's identical
+    // hydration pattern.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMatches(mql.matches);
+    const listener = (event: MediaQueryListEvent) => setMatches(event.matches);
+    mql.addEventListener('change', listener);
+    return () => mql.removeEventListener('change', listener);
+  }, [query]);
+
+  return matches;
+}
+
+function useDockMagnificationEnabled(): boolean {
+  const canHoverWithFinePointer = useMediaQueryPreference('(hover: hover) and (pointer: fine)');
+  const prefersReducedMotion = useMediaQueryPreference('(prefers-reduced-motion: reduce)');
+  return canHoverWithFinePointer && !prefersReducedMotion;
+}
+
+/* ============================================================================
    TYPES
 ============================================================================ */
 
@@ -293,6 +326,11 @@ export default function AdminSidebar({
     signingOut,
     setSigningOut,
   ] = useState(false);
+
+  // The standalone System icon (below, separated by its own divider) has
+  // no neighbours to fall off onto — just a plain self-hover magnify.
+  const systemMagnificationEnabled = useDockMagnificationEnabled();
+  const [systemHovered, setSystemHovered] = useState(false);
 
   const [
     tooltip,
@@ -901,6 +939,19 @@ export default function AdminSidebar({
                   registerButton={
                     registerButton
                   }
+                  magnification={
+                    systemMagnificationEnabled && systemHovered ? 1.25 : 1
+                  }
+                  onHoverStart={
+                    systemMagnificationEnabled
+                      ? () => setSystemHovered(true)
+                      : undefined
+                  }
+                  onHoverEnd={
+                    systemMagnificationEnabled
+                      ? () => setSystemHovered(false)
+                      : undefined
+                  }
                 />
               </>
             )}
@@ -1217,6 +1268,21 @@ function WorkspaceGroup({
       | null,
   ) => void;
 }) {
+  /* --------------------------------------------------------------------------
+     DOCK-STYLE MAGNIFICATION
+
+     A subtle macOS Dock effect scoped to this one icon cluster (Command/
+     CRM/Delivery/... or Platform/Organisation — each WorkspaceGroup is its
+     own visual cluster already, separated by RailDivider). Only the
+     hovered/focused icon and its immediate neighbours scale; everything
+     else stays put. Disabled entirely on touch (no fine hover pointer)
+     and when the person prefers reduced motion — see
+     useDockMagnificationEnabled above.
+  -------------------------------------------------------------------------- */
+
+  const magnificationEnabled = useDockMagnificationEnabled();
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
   return (
     <div
       className="
@@ -1231,7 +1297,7 @@ function WorkspaceGroup({
       "
     >
       {sections.map(
-        (section) => (
+        (section, index) => (
           <WorkspaceButton
             key={
               section.id
@@ -1255,11 +1321,34 @@ function WorkspaceGroup({
             registerButton={
               registerButton
             }
+            magnification={
+              magnificationEnabled
+                ? dockMagnificationFor(index, hoveredIndex)
+                : 1
+            }
+            onHoverStart={
+              magnificationEnabled
+                ? () => setHoveredIndex(index)
+                : undefined
+            }
+            onHoverEnd={
+              magnificationEnabled
+                ? () => setHoveredIndex((current) => (current === index ? null : current))
+                : undefined
+            }
           />
         ),
       )}
     </div>
   );
+}
+
+function dockMagnificationFor(index: number, hoveredIndex: number | null): number {
+  if (hoveredIndex === null) return 1;
+  const distance = Math.abs(index - hoveredIndex);
+  if (distance === 0) return 1.25;
+  if (distance === 1) return 1.1;
+  return 1;
 }
 
 /* ============================================================================
@@ -1273,6 +1362,9 @@ function WorkspaceButton({
   onShowTooltip,
   onHideTooltip,
   registerButton,
+  magnification = 1,
+  onHoverStart,
+  onHoverEnd,
 }: {
   section: AdminSection;
 
@@ -1298,6 +1390,11 @@ function WorkspaceButton({
       | HTMLButtonElement
       | null,
   ) => void;
+
+  /** 1 = resting size, 1.25 = hovered/focused, 1.1 = an immediate neighbour. */
+  magnification?: number;
+  onHoverStart?: () => void;
+  onHoverEnd?: () => void;
 }) {
   const meta =
     SECTION_META[
@@ -1345,24 +1442,34 @@ function WorkspaceButton({
       }
       onMouseEnter={(
         event,
-      ) =>
+      ) => {
         show(
           event.currentTarget,
-        )
-      }
-      onMouseLeave={
-        onHideTooltip
-      }
+        );
+        onHoverStart?.();
+      }}
+      onMouseLeave={() => {
+        onHideTooltip();
+        onHoverEnd?.();
+      }}
       onFocus={(
         event,
-      ) =>
+      ) => {
         show(
           event.currentTarget,
-        )
-      }
-      onBlur={
-        onHideTooltip
-      }
+        );
+        onHoverStart?.();
+      }}
+      onBlur={() => {
+        onHideTooltip();
+        onHoverEnd?.();
+      }}
+      style={{
+        transform: `scale(${magnification}) translateX(${magnification > 1 ? (magnification - 1) * 8 : 0}px)`,
+        transitionProperty: 'transform, color',
+        transitionDuration: '220ms',
+        transitionTimingFunction: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+      }}
       className={`
         ${SLOT}
 

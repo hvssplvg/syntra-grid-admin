@@ -60,6 +60,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
+import { useSelectedClient } from '@/app/components/admin/SelectedClientContext';
+
 /* =============================================================================
  * TYPES
  * =============================================================================
@@ -452,6 +454,8 @@ export default function ContactsTab() {
 
   /* ---------- Data ---------- */
 
+  const { selectedClientId, selectClient } = useSelectedClient();
+
   const loadContacts = useCallback(
     async (silent = false) => {
       requestRef.current?.abort();
@@ -463,7 +467,11 @@ export default function ContactsTab() {
       setError(null);
 
       try {
-        const response = await fetch('/api/admin/contacts', {
+        const params = new URLSearchParams();
+        if (selectedClientId) params.set('clientId', selectedClientId);
+        const query = params.toString();
+
+        const response = await fetch(`/api/admin/contacts${query ? `?${query}` : ''}`, {
           method: 'GET',
           cache: 'no-store',
           credentials: 'include',
@@ -499,13 +507,19 @@ export default function ContactsTab() {
         }
       }
     },
-    [notify],
+    [notify, selectedClientId],
   );
 
   useEffect(() => {
     void loadContacts();
     return () => requestRef.current?.abort();
   }, [loadContacts]);
+
+  // The local per-row client filter becomes redundant once the API call
+  // itself is already scoped to one client — avoid two filters disagreeing.
+  useEffect(() => {
+    if (selectedClientId) setClientFilter('ALL');
+  }, [selectedClientId]);
 
   useEffect(() => {
     const timer = setInterval(() => setClockTick((value) => value + 1), 30_000);
@@ -923,6 +937,20 @@ export default function ContactsTab() {
   return (
     <PortalTheme.Provider value={themeVars}>
       <div ref={themeRef} className="mx-auto w-full min-w-0 max-w-[1600px]">
+        {selectedClientId ? (
+          <div className="mb-3 flex items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] px-3 py-2 text-[11.5px] text-[var(--text-muted)]">
+            <span>
+              Filtered to <span className="font-semibold text-[var(--text)]">{clients[0]?.client.displayName || clients[0]?.client.name || 'one client'}</span> — set from the header&apos;s client switcher.
+            </span>
+            <button
+              type="button"
+              onClick={() => selectClient(null)}
+              className={cx(focusRing, 'ml-auto text-[11px] font-semibold text-[var(--accent)] hover:underline')}
+            >
+              Show all clients
+            </button>
+          </div>
+        ) : null}
         <section className="overflow-hidden rounded-[26px] border border-[var(--line)] bg-[var(--surface)] shadow-sm">
           <MetricsGrid
             columns="grid-cols-2 sm:grid-cols-3 2xl:grid-cols-6"
@@ -1016,18 +1044,20 @@ export default function ContactsTab() {
               </div>
 
               <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                <Dropdown
-                  value={clientFilter}
-                  onChange={setClientFilter}
-                  options={clientOptions}
-                  ariaLabel="Filter by client"
-                  searchable
-                  searchPlaceholder="Find a client"
-                  emptyText="No clients match"
-                  loading={loading && !feed}
-                  triggerClassName="col-span-2 sm:col-span-1 sm:w-[190px]"
-                  minWidth={250}
-                />
+                {selectedClientId ? null : (
+                  <Dropdown
+                    value={clientFilter}
+                    onChange={setClientFilter}
+                    options={clientOptions}
+                    ariaLabel="Filter by client"
+                    searchable
+                    searchPlaceholder="Find a client"
+                    emptyText="No clients match"
+                    loading={loading && !feed}
+                    triggerClassName="col-span-2 sm:col-span-1 sm:w-[190px]"
+                    minWidth={250}
+                  />
+                )}
                 <Dropdown value={roleFilter} onChange={setRoleFilter} options={roleOptions} ariaLabel="Filter by role" triggerClassName="sm:w-[160px]" minWidth={220} />
                 <Dropdown value={statusFilter} onChange={setStatusFilter} options={statusOptions} ariaLabel="Filter by status" triggerClassName="sm:w-[130px]" minWidth={190} />
                 <Dropdown value={sortMode} onChange={setSortMode} options={SORT_OPTIONS} ariaLabel="Sort contacts" triggerClassName="col-span-2 sm:col-span-1 sm:w-[170px]" minWidth={200} />

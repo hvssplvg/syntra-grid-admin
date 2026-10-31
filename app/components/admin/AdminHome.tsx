@@ -12,6 +12,8 @@ import {
 
 import { useSearchParams } from "next/navigation";
 
+import useSWR from "swr";
+
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -22,14 +24,33 @@ import {
 import AdminShell from "./AdminShell";
 
 import {
+  fetchWorkspacesPayload,
+  WORKSPACES_ENDPOINT,
+  type WorkspaceApiRecord,
+} from "@/lib/workspaces/workspacesApi";
+
+import {
   AdminThemeProvider,
 } from "./AdminThemeProvider";
 
 import {
+  useFullWorkspace,
+} from "./FullWorkspaceContext";
+
+import {
+  useSelectedClient,
+} from "./SelectedClientContext";
+
+import ClientWorkspaceSwap from "./ClientWorkspaceSwap";
+import type { WorkspaceTab as ClientWorkspaceTab } from "../clients/ClientWorkspace";
+
+import {
+  ADMIN_SECTIONS,
   ADMIN_TABS,
   ADMIN_TAB_ORDER,
   COMMAND_HOME_TAB,
   getCommandModule,
+  getSectionLandingTab,
   isCommandExpandedTab,
   isCommandInternalNavigation,
   isCommandTab,
@@ -37,7 +58,9 @@ import {
   filterSectionsByPermission,
   filterTabDefinitions,
   isModuleSecured,
+  findSectionForTab,
   type AdminSection,
+  type AdminSectionId,
   type AdminTab,
   type AdminUser,
   type CommandExpandedTab,
@@ -341,6 +364,62 @@ const TAB_COMPONENTS: Partial<
 };
 
 /* ============================================================================
+   CLIENT WORKSPACE MODE
+
+   When a client is selected in the header's client-context switcher,
+   certain tabs swap their own content for that client's ClientWorkspace
+   instead — reusing its real data rather than either (a) leaving a mocked/
+   placeholder tab unfiltered and misleading, or (b) inventing new backends.
+   Tabs not listed here are left exactly as they are when a client is
+   selected — either because they're already wired to filter themselves
+   (Contracts, Campaigns, Client Health, Contacts), or because they're
+   genuine placeholders this task deliberately leaves untouched (Meetings,
+   Documents, Opportunities, Leads, Proposals, Feedback, Messages, Tasks/
+   Milestones/Roadmaps/Sprints/Requirements/QA), or because they get their
+   own real, directly-filterable implementation instead of a swap
+   (Projects, and Support's own ClientScopedSupportList).
+
+   'overview' is handled separately in CommandWorkspace below, since it
+   isn't reached through this StandardWorkspace/TAB_COMPONENTS dispatch.
+
+   This is purely a navigation/UX convenience — selecting a client never
+   grants access to anything; see SelectedClientContext.tsx's doc comment.
+-------------------------------------------------------------------------- */
+
+const CLIENT_WORKSPACE_SWAP_TABS: Partial<Record<AdminTab, ClientWorkspaceTab>> = {
+  // Engineering — Monitoring is Technology's landing tab and today is
+  // fully mocked data; the rest have no backend at all. All of them swap
+  // to real client data rather than filtering (or leaving unfiltered)
+  // something fake.
+  monitoring: "health",
+  incidents: "health",
+  deployments: "systems",
+  systems: "systems",
+  domains: "systems",
+  environments: "systems",
+  repositories: "systems",
+  backups: "systems",
+
+  // Products — no distinct backend; Project.category (visible on the
+  // 'systems' panel) is the closest real equivalent.
+  product_portfolio: "systems",
+  releases: "systems",
+
+  // Commercial/Finance — Contracts (the section's actual landing tab) is
+  // already real and filtered; these standalone placeholders aren't.
+  finance: "commercial",
+  invoices: "commercial",
+  quotes: "commercial",
+  subscriptions: "commercial",
+  expenses: "commercial",
+  revenue: "commercial",
+
+  // Client Success — Tickets is a separate placeholder from Support
+  // (which gets its own real, filtered implementation instead).
+  tickets: "support",
+};
+
+/* ============================================================================
    CONSTANTS
 ============================================================================ */
 
@@ -484,7 +563,7 @@ export default function AdminHome({
     [identity.permissions],
   );
 
-  const filteredSections = useMemo<AdminSection[]>(
+  const permissionFilteredSections = useMemo<AdminSection[]>(
     () =>
       filterSectionsByPermission(
         identity.isFullAccess,
@@ -497,9 +576,47 @@ export default function AdminHome({
     () =>
       identity.isFullAccess
         ? ADMIN_TABS
-        : filterTabDefinitions(filteredSections),
-    [identity.isFullAccess, filteredSections],
+        : filterTabDefinitions(permissionFilteredSections),
+    [identity.isFullAccess, permissionFilteredSections],
   );
+
+  /* --------------------------------------------------------------------------
+     CLIENT WORKSPACE MODE — SIDEBAR PRIORITISATION
+
+     Purely a display reorder, never a permission change: every section a
+     restricted employee could already reach above is still exactly as
+     reachable here — filteredTabDefinitions (what's permitted) is derived
+     from permissionFilteredSections above, not from this reordered list.
+     When a client is selected, the sections that actually become that
+     client's workspace (CRM, Client Success, Engineering, Products,
+     Delivery, Commercial, Growth) surface first; Command stays first of
+     all since it's the home/overview icon; the always-company-wide
+     sections (Company, Knowledge, Governance, System) sort last, not
+     hidden — see the "Company administration" banner below for how
+     visiting one while a client is selected is made obvious rather than
+     silently appearing to be about that client.
+  -------------------------------------------------------------------------- */
+
+  const { selectedClientId, selectClient } = useSelectedClient();
+
+  const COMPANY_ONLY_SECTION_IDS: ReadonlySet<AdminSectionId> = useMemo(
+    () => new Set(["company", "knowledge", "governance", "system"]),
+    [],
+  );
+
+  const filteredSections = useMemo<AdminSection[]>(() => {
+    if (!selectedClientId) return permissionFilteredSections;
+
+    const command = permissionFilteredSections.filter((section) => section.id === "command");
+    const clientEligible = permissionFilteredSections.filter(
+      (section) => section.id !== "command" && !COMPANY_ONLY_SECTION_IDS.has(section.id),
+    );
+    const companyOnly = permissionFilteredSections.filter((section) =>
+      COMPANY_ONLY_SECTION_IDS.has(section.id),
+    );
+
+    return [...command, ...clientEligible, ...companyOnly];
+  }, [permissionFilteredSections, selectedClientId, COMPANY_ONLY_SECTION_IDS]);
 
   // 'overview' is never a grant — filterSectionsByPermission excludes it
   // unconditionally — but every restricted employee still gets her own
@@ -550,6 +667,11 @@ export default function AdminHome({
 
   const activeTabRef =
     useRef<AdminTab>(initialTab);
+
+  // Set only by the Social Media Graphic Studio (see
+  // FullWorkspaceContext.tsx) while its full-workspace editor is open —
+  // every other tab leaves this false and is completely unaffected.
+  const { full: fullBleedContent } = useFullWorkspace();
 
   /* --------------------------------------------------------------------------
      WORKSPACES (messages / notifications / my-account)
@@ -777,6 +899,69 @@ export default function AdminHome({
   );
 
   /* --------------------------------------------------------------------------
+     WORKSPACE FOCUS (department-grouping nav switcher)
+
+     Purely a navigation convenience over the already permission-filtered
+     sections computed above — switching workspace just navigates to the
+     landing tab of its first mapped adminNav.ts section (see Workspace's
+     doc comment in schema.prisma and app/api/admin/workspaces). It never
+     changes what's reachable: filteredSections/filteredTabDefinitions are
+     completely unaffected by which workspace is active, so nothing the
+     Owner could already reach ever disappears — this is a pure "take me
+     there" shortcut, not a permission boundary. Full-access only for now
+     — no restricted employee accounts exist yet to extend this to.
+  -------------------------------------------------------------------------- */
+
+  const ACTIVE_WORKSPACE_STORAGE_KEY = "syntragrid.active-workspace";
+
+  const { data: workspacesData } = useSWR<{ ok: true; workspaces: WorkspaceApiRecord[] }>(
+    identity.isFullAccess ? WORKSPACES_ENDPOINT : null,
+    fetchWorkspacesPayload,
+  );
+  const workspaces = useMemo(() => workspacesData?.workspaces ?? [], [workspacesData]);
+
+  const [activeWorkspaceKey, setActiveWorkspaceKeyState] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!identity.isFullAccess) return;
+    try {
+      const stored = window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+      // Mirrors AdminHeader.tsx's identical client-context hydration
+      // pattern (a one-time read of a per-browser preference on mount,
+      // never a derived-state loop) — narrowly suppressed rather than
+      // disabling the rule file-wide.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (stored) setActiveWorkspaceKeyState(stored);
+    } catch {
+      // Optional local preference.
+    }
+  }, [identity.isFullAccess]);
+
+  const selectWorkspace = useCallback(
+    (key: string) => {
+      setActiveWorkspaceKeyState(key);
+      try {
+        window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, key);
+      } catch {
+        // Optional local preference.
+      }
+
+      // Executive (and any future workspace with no focus sections) is
+      // deliberately a no-op navigation-wise — it represents "no specific
+      // focus," so switching to it just changes the switcher's own label.
+      const workspace = workspaces.find((candidate) => candidate.key === key);
+      const firstSectionId = workspace?.sectionKeys[0];
+      if (!firstSectionId) return;
+
+      const targetSection = ADMIN_SECTIONS.find((section) => section.id === firstSectionId);
+      if (!targetSection) return;
+
+      setActiveTab(getSectionLandingTab(targetSection, identity.isFullAccess));
+    },
+    [workspaces, identity.isFullAccess, setActiveTab],
+  );
+
+  /* --------------------------------------------------------------------------
      OPEN COMMAND MODULE
   -------------------------------------------------------------------------- */
 
@@ -980,6 +1165,28 @@ export default function AdminHome({
     isCommandTab(activeTab);
 
   /* --------------------------------------------------------------------------
+     COMPANY ADMINISTRATION BANNER
+
+     Company/Knowledge/Governance/System never become "about" the selected
+     client (Team, Settings, Security, etc. have no client relation at
+     all) — this makes that explicit instead of silently showing
+     unscoped, company-wide content underneath a client's name in the
+     header. Only shown for the StandardWorkspace path; Overview/Command
+     tabs are handled by CommandWorkspace's own swap above.
+  -------------------------------------------------------------------------- */
+
+  const activeSectionForBanner = useMemo(
+    () => findSectionForTab(activeTab),
+    [activeTab],
+  );
+
+  const showCompanyAdminBanner =
+    Boolean(selectedClientId) &&
+    !isCommandWorkspace &&
+    Boolean(activeSectionForBanner) &&
+    COMPANY_ONLY_SECTION_IDS.has(activeSectionForBanner!.id);
+
+  /* --------------------------------------------------------------------------
      RENDER
   -------------------------------------------------------------------------- */
 
@@ -992,6 +1199,10 @@ export default function AdminHome({
         tabDefinitions={filteredTabDefinitions}
         sections={filteredSections}
         isFullAccess={identity.isFullAccess}
+        fullBleedContent={fullBleedContent}
+        workspaces={workspaces}
+        activeWorkspaceKey={activeWorkspaceKey}
+        onWorkspaceChange={selectWorkspace}
         navigationDirection={
           navigationDirection
         }
@@ -1036,6 +1247,24 @@ export default function AdminHome({
             }
             onOpenMessages={() => openWorkspace("messages")}
           />
+        ) : showCompanyAdminBanner ? (
+          <div className="flex min-h-full w-full min-w-0 flex-col gap-4">
+            <div className="flex items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] px-3 py-2 text-[11.5px] text-[var(--text-muted)]">
+              <span>
+                Company administration — not scoped to any client, regardless of the header&apos;s client switcher.
+              </span>
+              <button
+                type="button"
+                onClick={() => selectClient(null)}
+                className="ml-auto whitespace-nowrap text-[11px] font-semibold text-[var(--accent)] hover:underline"
+              >
+                Switch to Syntra Grid
+              </button>
+            </div>
+            <StandardWorkspace
+              activeTab={activeTab}
+            />
+          </div>
         ) : (
           <StandardWorkspace
             activeTab={activeTab}
@@ -1074,6 +1303,24 @@ function CommandWorkspace({
 }) {
   const expanded =
     isCommandExpandedTab(activeTab);
+
+  const { selectedClientId, selectClient } = useSelectedClient();
+
+  // A selected client only ever swaps the plain Overview — Analytics/
+  // Activity/Calendar/Notifications are general productivity widgets, not
+  // client-specific, and stay exactly as they are regardless of context.
+  if (!expanded && selectedClientId) {
+    return (
+      <div className="relative min-h-full w-full min-w-0">
+        <ClientWorkspaceSwap
+          key={`${selectedClientId}:overview`}
+          clientId={selectedClientId}
+          initialTab="overview"
+          onBack={() => selectClient(null)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="relative min-h-full w-full min-w-0">
@@ -1407,6 +1654,20 @@ function StandardWorkspace({
 }: {
   activeTab: AdminTab;
 }) {
+  const { selectedClientId, selectClient } = useSelectedClient();
+  const swapToClientTab = CLIENT_WORKSPACE_SWAP_TABS[activeTab];
+
+  if (selectedClientId && swapToClientTab) {
+    return (
+      <ClientWorkspaceSwap
+        key={`${selectedClientId}:${swapToClientTab}`}
+        clientId={selectedClientId}
+        initialTab={swapToClientTab}
+        onBack={() => selectClient(null)}
+      />
+    );
+  }
+
   const ActiveTabComponent =
     TAB_COMPONENTS[activeTab];
 

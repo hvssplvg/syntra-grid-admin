@@ -31,10 +31,18 @@ model AdminUser {
 
   departmentId String?
 
+  // Which Workspace (department-focus nav grouping — see the Workspace
+  // model) this account lands in by default. Purely a navigation
+  // convenience: it changes what's shown first, never what's accessible —
+  // see Workspace's own doc comment. Nullable so every existing account
+  // is unaffected until a default is explicitly set.
+  defaultWorkspaceId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  department Department? @relation("DepartmentMembers", fields: [departmentId], references: [id])
+  department       Department? @relation("DepartmentMembers", fields: [departmentId], references: [id])
+  defaultWorkspace Workspace?  @relation("AdminUserDefaultWorkspace", fields: [defaultWorkspaceId], references: [id])
 
   employee Employee?
 
@@ -84,6 +92,15 @@ model AdminUser {
   permissionGrantsIssued PermissionGrant[] @relation("PermissionGrantGrantedBy")
   accessInvite           AccessInvite?     @relation("AdminUserAccessInvite")
   accessInvitesCreated   AccessInvite[]    @relation("AccessInviteCreatedBy")
+
+  // Which specific clients this account may access when a PermissionGrant
+  // uses AccessScope.CLIENT — see ClientAssignment.
+  clientAssignments     ClientAssignment[] @relation("AdminUserClientAssignments")
+  clientAssignmentsMade ClientAssignment[] @relation("ClientAssignmentAssignedBy")
+
+  // Client Health
+  monitoredEndpointsCreated MonitoredEndpoint[] @relation("MonitoredEndpointCreatedBy")
+  incidentsAcknowledged     Incident[]          @relation("IncidentAcknowledgedBy")
 
   // Overview personalisation & notifications
   overviewPreference     AdminOverviewPreference?
@@ -149,6 +166,7 @@ model AdminUser {
   internalMessageAttachmentsUploaded InternalMessageAttachment[]  @relation("InternalMessageAttachmentUploadedBy")
 
   @@index([departmentId])
+  @@index([defaultWorkspaceId])
 }
 
 /**
@@ -317,12 +335,22 @@ enum AccessAction {
   EDIT
   MANAGE
   APPROVE
+  // Added for the workspace/role-template foundation — a social-media-style
+  // "create and schedule a draft, but require approval before it goes out"
+  // workflow needs PUBLISH as its own action, distinct from CREATE/EDIT.
+  // Additive: existing PermissionGrant rows are untouched.
+  PUBLISH
+  DELETE
 }
 
 enum AccessScope {
   OWN
   DEPARTMENT
   ALL
+  // A grant scoped to exactly the clients in that AdminUser's
+  // ClientAssignment rows, rather than their whole department or
+  // everything. Additive — existing OWN/DEPARTMENT/ALL rows unaffected.
+  CLIENT
 }
 
 model PermissionGrant {
@@ -369,6 +397,119 @@ model AccessInvite {
   createdBy AdminUser? @relation("AccessInviteCreatedBy", fields: [createdById], references: [id])
 
   @@index([expiresAt])
+}
+
+/**
+ * =============================================================================
+ * WORKSPACES & ROLE TEMPLATES
+ * =============================================================================
+ * A Workspace is a named grouping of existing adminNav.ts sections (e.g.
+ * "Technology" -> ["engineering", "delivery"]) — a navigation/UX focus
+ * layer, NOT a source of security permissions. Selecting a workspace
+ * changes what's shown first; PermissionGrant is still the only thing
+ * that determines what a restricted account can actually see or do. A
+ * full-access account (e.g. the Owner) can select any workspace and keeps
+ * every permission regardless — see lib/auth/current-admin.ts.
+ * A RoleTemplate is a named, reusable bundle of PermissionGrant-shaped
+ * rows (RoleTemplateGrant) — applying one to an employee during
+ * onboarding just bulk-creates PermissionGrant rows, the same mechanism
+ * app/api/admin/team/[id]/access already uses for a manually-built grant
+ * list. Not wired into that flow yet — this migration only adds the
+ * schema; the onboarding UI work is a separate, later pass.
+ * NOTE for that later pass: lib/access/role-templates.ts already has a
+ * same-named, UI-only precursor to this (`ROLE_TEMPLATES`, hardcoded
+ * presets that pre-fill the Grant Dashboard Access matrix — never
+ * persisted). That file's own comment says so explicitly. The two
+ * `RoleTemplate` names are in different modules so nothing collides at
+ * compile time, but the later pass should migrate those hardcoded
+ * presets into seeded rows here and have the Team UI read from the
+ * database instead, then delete the old file, rather than maintaining
+ * both.
+ */
+
+model Workspace {
+  id String @id @default(cuid())
+
+  key         String  @unique
+  name        String
+  description String?
+  icon        String?
+  colour      String?
+
+  displayOrder Int @default(0)
+
+  // AdminSectionId values from app/components/admin/adminNav.ts (e.g.
+  // "engineering", "delivery") that belong to this workspace. Validated
+  // app-side against ADMIN_SECTIONS, not a DB enum, for the same reason
+  // PermissionGrant.module isn't one — adding a section never needs a
+  // migration.
+  sectionKeys String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  defaultForUsers AdminUser[]    @relation("AdminUserDefaultWorkspace")
+  roleTemplates   RoleTemplate[]
+
+  @@index([displayOrder])
+}
+
+model RoleTemplate {
+  id String @id @default(cuid())
+
+  key         String  @unique
+  name        String
+  description String?
+
+  defaultWorkspaceId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  defaultWorkspace Workspace?          @relation(fields: [defaultWorkspaceId], references: [id])
+  grants           RoleTemplateGrant[]
+
+  @@index([defaultWorkspaceId])
+}
+
+model RoleTemplateGrant {
+  id String @id @default(cuid())
+
+  roleTemplateId String
+  module         String
+  action         AccessAction
+  scope          AccessScope  @default(ALL)
+
+  roleTemplate RoleTemplate @relation(fields: [roleTemplateId], references: [id], onDelete: Cascade)
+
+  @@unique([roleTemplateId, module, action])
+  @@index([roleTemplateId])
+}
+
+/**
+ * Which specific clients an AdminUser may access — consulted by
+ * row-level access checks (the assertXRowAccess family already used by
+ * campaigns/social-media) when a PermissionGrant has
+ * AccessScope.CLIENT, the same way DEPARTMENT scope already consults
+ * AdminUser.departmentId. Not wired into any check yet — this migration
+ * only adds the schema; enforcement is a separate, later pass.
+ */
+model ClientAssignment {
+  id String @id @default(cuid())
+
+  adminUserId  String
+  clientId     String
+  assignedById String?
+
+  createdAt DateTime @default(now())
+
+  adminUser  AdminUser  @relation("AdminUserClientAssignments", fields: [adminUserId], references: [id], onDelete: Cascade)
+  client     Client     @relation("ClientAssignments", fields: [clientId], references: [id], onDelete: Cascade)
+  assignedBy AdminUser? @relation("ClientAssignmentAssignedBy", fields: [assignedById], references: [id])
+
+  @@unique([adminUserId, clientId])
+  @@index([adminUserId])
+  @@index([clientId])
 }
 
 /**
@@ -434,6 +575,10 @@ model Client {
   projects  Project[]
   tickets   SupportTicket[]
 
+  // Client Health
+  monitoredEndpoints MonitoredEndpoint[]
+  incidents          Incident[]
+
   matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionClient")
 
   // Calendar
@@ -448,6 +593,11 @@ model Client {
 
   // Campaigns
   campaigns Campaign[]
+
+  // Employees assigned specific access to this client (see
+  // ClientAssignment) — distinct from accountOwner, which is a single
+  // commercial owner, not an access grant.
+  assignedAdminUsers ClientAssignment[] @relation("ClientAssignments")
 
   @@index([status])
   @@index([priority])
@@ -728,13 +878,14 @@ model Project {
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
-  deployments  Deployment[]
-  healthChecks HealthCheck[]
-  incidents    Incident[]
-  integrations Integration[]
-  tickets      SupportTicket[]
-  snapshots    UsageSnapshot[]
-  contracts    Contract[]
+  deployments        Deployment[]
+  healthChecks       HealthCheck[]
+  incidents          Incident[]
+  integrations       Integration[]
+  tickets            SupportTicket[]
+  snapshots          UsageSnapshot[]
+  contracts          Contract[]
+  monitoredEndpoints MonitoredEndpoint[]
 
   matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionProject")
 
@@ -820,8 +971,18 @@ model UsageSnapshot {
  */
 
 model HealthCheck {
-  id        String @id @default(cuid())
-  projectId String
+  id String @id @default(cuid())
+
+  // Nullable: this table had zero rows and zero write-paths before the
+  // Client Health feature (verified, not assumed), so loosening this was
+  // risk-free. Client Health's own checks set monitoredEndpointId and
+  // leave projectId null; it stays available for any future, unrelated
+  // project-level use.
+  projectId String?
+
+  // Set on every row this feature writes — see
+  // lib/monitoring/runDueHealthChecks.ts and MonitoredEndpoint below.
+  monitoredEndpointId String?
 
   status  HealthStatus
   healthy Boolean
@@ -834,9 +995,11 @@ model HealthCheck {
 
   checkedAt DateTime @default(now())
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project           Project?           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  monitoredEndpoint MonitoredEndpoint? @relation(fields: [monitoredEndpointId], references: [id], onDelete: Cascade)
 
   @@index([projectId, checkedAt])
+  @@index([monitoredEndpointId, checkedAt])
   @@index([status])
 }
 
@@ -878,16 +1041,39 @@ model Deployment {
  */
 
 model Incident {
-  id        String @id @default(cuid())
-  projectId String
+  id String @id @default(cuid())
+
+  // Nullable for the same reason as HealthCheck.projectId — zero rows,
+  // zero write-paths before this feature. clientId is new: a billing or
+  // support-ticket incident isn't about any one Project.
+  projectId String?
+  clientId  String?
+
+  monitoredEndpointId String?
 
   title       String
   description String?
 
   severity String
+
+  // App-validated union, same convention as PermissionGrant.module —
+  // see lib/client-health/incidents.ts: MONITORING_OUTAGE |
+  // MONITORING_DEGRADED | TICKET_OVERDUE | CONTRACT_RENEWAL |
+  // BILLING_OVERDUE.
+  category String?
   status   String
 
+  // Used to avoid opening a second incident for the same ongoing issue
+  // — checked app-side ("does an unresolved incident with this
+  // dedupeKey already exist?"), not a DB constraint, so a genuinely
+  // recurring issue can still open a fresh incident once the prior one
+  // is resolved.
+  dedupeKey String?
+
   resolved Boolean @default(false)
+
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
 
   startedAt  DateTime  @default(now())
   resolvedAt DateTime?
@@ -895,11 +1081,63 @@ model Incident {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project           Project?           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  client            Client?            @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  monitoredEndpoint MonitoredEndpoint? @relation(fields: [monitoredEndpointId], references: [id], onDelete: Cascade)
+  acknowledgedBy    AdminUser?         @relation("IncidentAcknowledgedBy", fields: [acknowledgedById], references: [id])
 
   @@index([projectId, startedAt])
+  @@index([clientId, startedAt])
+  @@index([monitoredEndpointId])
   @@index([resolved])
   @@index([status])
+  @@index([dedupeKey])
+}
+
+/**
+ * =============================================================================
+ * MONITORED ENDPOINTS — Client Health's real uptime monitoring
+ * =============================================================================
+ * A row here is the explicit authorisation to monitor a URL — nothing is
+ * ever auto-discovered or swept in from Project.productionUrl /
+ * Client.websiteUrl without an admin adding it here first. See
+ * lib/monitoring/safeFetch.ts for the SSRF/private-network guard every
+ * check goes through, and lib/monitoring/runDueHealthChecks.ts for the
+ * poller (app/api/cron/health-check).
+ */
+model MonitoredEndpoint {
+  id String @id @default(cuid())
+
+  clientId  String
+  projectId String?
+
+  label  String
+  url    String
+  method String @default("GET")
+
+  // Server-enforced floor applied in lib/monitoring (requested values
+  // below the floor are clamped, never trusted as-is) — also subject to
+  // the Vercel Hobby-plan cron's real daily cadence regardless of what's
+  // configured here; see runDueHealthChecks.ts's own doc comment.
+  checkIntervalMinutes Int @default(15)
+
+  enabled Boolean @default(true)
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client    Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project   Project?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy AdminUser? @relation("MonitoredEndpointCreatedBy", fields: [createdById], references: [id])
+
+  healthChecks HealthCheck[]
+  incidents    Incident[]
+
+  @@index([clientId])
+  @@index([projectId])
+  @@index([enabled])
 }
 
 /**

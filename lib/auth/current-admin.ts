@@ -193,8 +193,14 @@ export async function requireClientEditor() {
 
 const SCOPE_RANK: Record<AccessScope, number> = {
   [AccessScope.OWN]: 0,
-  [AccessScope.DEPARTMENT]: 1,
-  [AccessScope.ALL]: 2,
+  // Narrower than a whole department (an assigned subset of clients),
+  // wider than just your own rows. Not consulted by any row-level check
+  // yet (see ClientAssignment's doc comment in schema.prisma) — ranked
+  // now so merging grants for the same module+action already behaves
+  // correctly once CLIENT-scoped grants exist.
+  [AccessScope.CLIENT]: 1,
+  [AccessScope.DEPARTMENT]: 2,
+  [AccessScope.ALL]: 3,
 };
 
 export type ResolvedIdentity = {

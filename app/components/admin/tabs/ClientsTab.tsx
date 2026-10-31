@@ -61,6 +61,7 @@ import {
 } from 'lucide-react';
 
 import ClientWorkspace from '../../clients/ClientWorkspace';
+import { useSelectedClient } from '../SelectedClientContext';
 import { CLIENTS_ENDPOINT, fetchClientsPayload } from '@/lib/clients/clientsApi';
 import { deleteClientLogo } from '@/lib/clients/uploadClientLogo';
 import { LogoUploader } from '@/lib/clients/LogoUploader';
@@ -759,6 +760,33 @@ export default function ClientsTab() {
   const theme = useThemeBridge();
 
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+
+  /* --------------------------------------------------------------------------
+     CLIENT WORKSPACE MODE
+
+     When Meldex is selected in the header, CRM shouldn't still show the
+     full company-wide directory — this auto-opens the matching client,
+     turning this tab into that client's profile. "Show all clients"
+     (rendered inside the opened ClientWorkspace view below) clears only
+     this tab's local state, letting someone peek at the full directory
+     without leaving client mode elsewhere — it doesn't change the header's
+     own context, so navigating away and back re-opens the same client.
+     ClientWorkspace's own mount effect already syncs the header context
+     the other way (clicking a different client row here updates it too —
+     built in an earlier task), so this only needs to react when the
+     global selection changes to something this tab hasn't applied yet.
+  -------------------------------------------------------------------------- */
+
+  const { selectedClientId: globalClientId } = useSelectedClient();
+  const appliedGlobalClientIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (globalClientId !== appliedGlobalClientIdRef.current) {
+      appliedGlobalClientIdRef.current = globalClientId;
+      setSelectedClientId(globalClientId);
+    }
+  }, [globalClientId]);
+
   const [accountOwners, setAccountOwners] = useState<AccountOwner[]>([]);
 
   const [optionsLoading, setOptionsLoading] = useState(true);

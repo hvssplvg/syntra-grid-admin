@@ -65,6 +65,8 @@ import {
 import { CLIENTS_ENDPOINT } from '@/lib/clients/clientsApi';
 import { LogoUploader } from '@/lib/clients/LogoUploader';
 import { deleteClientLogo } from '@/lib/clients/uploadClientLogo';
+import { fetchClientHealthDetail, type ClientHealthDetail } from '@/lib/client-health/clientHealthApi';
+import { useSelectedClient } from '@/app/components/admin/SelectedClientContext';
 
 /* =============================================================================
  * TYPES
@@ -217,7 +219,7 @@ type ClientResponse = {
   error?: string;
 };
 
-type WorkspaceTab =
+export type WorkspaceTab =
   | 'overview'
   | 'contacts'
   | 'projects'
@@ -225,6 +227,7 @@ type WorkspaceTab =
   | 'support'
   | 'meetings'
   | 'systems'
+  | 'health'
   | 'documents';
 
 type ClientWorkspaceProps = {
@@ -232,6 +235,16 @@ type ClientWorkspaceProps = {
   onBack: () => void;
   accountOwners: AccountOwner[];
   optionsLoading: boolean;
+  /**
+   * Which sub-tab to land on. Used by other departments that swap their
+   * own content area for this client's workspace (e.g. Technology lands
+   * on 'systems'/'health', Finance lands on 'commercial') — see
+   * ClientWorkspaceSwap.tsx. Callers that want a different landing tab
+   * per context should remount this component (change its `key`) rather
+   * than rely on this prop changing after mount; it is only read once,
+   * as the initial state.
+   */
+  initialTab?: WorkspaceTab;
 };
 
 type ToastState = {
@@ -255,6 +268,7 @@ const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string; icon: LucideIcon 
   { id: 'projects', label: 'Projects', icon: BriefcaseBusiness },
   { id: 'commercial', label: 'Commercial', icon: CircleDollarSign },
   { id: 'systems', label: 'Systems', icon: Server },
+  { id: 'health', label: 'Health & Monitoring', icon: ShieldCheck },
   { id: 'support', label: 'Support', icon: LifeBuoy },
   { id: 'meetings', label: 'Meetings', icon: MessageSquareText },
   { id: 'documents', label: 'Documents', icon: FileText },
@@ -389,7 +403,7 @@ function safeHref(value: string | null | undefined) {
  * =============================================================================
  */
 
-export default function ClientWorkspace({ clientId, onBack, accountOwners, optionsLoading }: ClientWorkspaceProps) {
+export default function ClientWorkspace({ clientId, onBack, accountOwners, optionsLoading, initialTab }: ClientWorkspaceProps) {
   const reduceMotion = useReducedMotion();
   const theme = useThemeBridge();
   const tabsId = useId();
@@ -397,7 +411,7 @@ export default function ClientWorkspace({ clientId, onBack, accountOwners, optio
 
   const [client, setClient] = useState<ClientRecord | null>(null);
   const [editOpen, setEditOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('overview');
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(initialTab ?? 'overview');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -459,6 +473,53 @@ export default function ClientWorkspace({ clientId, onBack, accountOwners, optio
     void loadClient();
     return () => requestRef.current?.abort();
   }, [loadClient]);
+
+  // Keep the header's client-context switcher in sync with whichever
+  // client this workspace is actually showing — opening it by any path
+  // (the Clients list today, a future direct link) must never leave the
+  // header implying a different client than what's on screen (see
+  // SelectedClientContext.tsx's doc comment).
+  const { selectClient } = useSelectedClient();
+  useEffect(() => {
+    selectClient(clientId);
+  }, [clientId, selectClient]);
+
+  /* ---------------------------------------------------------------------
+     HEALTH & SUPPORT (lazy — fetched once, on first visit to either tab)
+
+     Reuses Client Health's existing per-client detail endpoint as-is
+     (GET /api/admin/client-health/[clientId], built last session) —
+     this is the "dedicated Client 360 section" loading the main
+     clientSelect query deliberately defers to (see that route's own
+     comment). One fetch serves both the new Health & Monitoring tab and
+     the Support tab's real ticket data, rather than two.
+  --------------------------------------------------------------------- */
+
+  const [healthDetail, setHealthDetail] = useState<ClientHealthDetail | null>(null);
+  const [healthStatus, setHealthStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [healthError, setHealthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setHealthDetail(null);
+    setHealthStatus('idle');
+    setHealthError(null);
+  }, [clientId]);
+
+  useEffect(() => {
+    if (healthStatus !== 'idle') return;
+    if (activeTab !== 'health' && activeTab !== 'support') return;
+
+    setHealthStatus('loading');
+    fetchClientHealthDetail(clientId)
+      .then((detail) => {
+        setHealthDetail(detail);
+        setHealthStatus('ready');
+      })
+      .catch((caught) => {
+        setHealthError(caught instanceof Error ? caught.message : 'Could not load health and support data.');
+        setHealthStatus('error');
+      });
+  }, [activeTab, healthStatus, clientId]);
 
   const handleClientSaved = useCallback(
     (updated: ClientRecord) => {
@@ -772,17 +833,11 @@ export default function ClientWorkspace({ clientId, onBack, accountOwners, optio
             {activeTab === 'projects' ? <ProjectsPanel client={client} /> : null}
             {activeTab === 'commercial' ? <CommercialPanel client={client} /> : null}
             {activeTab === 'systems' ? <SystemsPanel client={client} totals={totals} /> : null}
+            {activeTab === 'health' ? (
+              <HealthMonitoringPanel status={healthStatus} error={healthError} detail={healthDetail} />
+            ) : null}
             {activeTab === 'support' ? (
-              <PlannedPanel
-                icon={LifeBuoy}
-                title={`Support for ${title}`}
-                description="Tickets and support activity, filtered to this client from the global Support and Tickets modules."
-                stats={[
-                  { label: 'Tickets', value: client._count.tickets },
-                  { label: 'Open', value: openSupport },
-                ]}
-                features={['Ticket timeline', 'Response times', 'Linked incidents', 'Satisfaction']}
-              />
+              <SupportPanel status={healthStatus} error={healthError} detail={healthDetail} openCount={openSupport} totalCount={client._count.tickets} />
             ) : null}
             {activeTab === 'meetings' ? (
               <PlannedPanel
@@ -1369,6 +1424,187 @@ function SystemsPanel({
                 </div>
               );
             })}
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+/* =============================================================================
+ * HEALTH & MONITORING — reuses Client Health's own per-client detail
+ * endpoint as-is (see the lazy-fetch effect above). No new backend.
+ * =============================================================================
+ */
+
+const HEALTH_STATUS_TONE: Record<string, Tone> = {
+  HEALTHY: 'green',
+  NEEDS_ATTENTION: 'amber',
+  AT_RISK: 'red',
+  UNKNOWN: 'neutral',
+  DEGRADED: 'amber',
+  OFFLINE: 'red',
+};
+
+function healthTone(status: string): Tone {
+  return HEALTH_STATUS_TONE[status] ?? 'neutral';
+}
+
+function HealthMonitoringPanel({
+  status,
+  error,
+  detail,
+}: {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  error: string | null;
+  detail: ClientHealthDetail | null;
+}) {
+  if (status === 'loading' || status === 'idle') {
+    return (
+      <div className="flex min-h-[260px] items-center justify-center rounded-[22px] border border-[var(--line)] bg-[var(--surface)]">
+        <Loader2 size={20} className="animate-spin text-[var(--text-subtle)]" />
+      </div>
+    );
+  }
+
+  if (status === 'error' || !detail) {
+    return <InlineEmpty icon={ShieldCheck} text={error ?? 'Could not load health and monitoring data.'} />;
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className="flex items-center gap-3 rounded-[22px] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-sm sm:p-5">
+        <ToneBadge tone={healthTone(detail.health.status)}>{formatEnum(detail.health.status)}</ToneBadge>
+        <p className="text-[10.5px] text-[var(--text-subtle)]">
+          {detail.health.applicableDimensions.length === 0
+            ? 'Nothing is configured yet to assess — there is no evidence either way.'
+            : `Computed from ${detail.health.applicableDimensions.join(', ')}.`}
+        </p>
+      </section>
+
+      <Panel title="Why this status">
+        {detail.health.reasons.length === 0 ? (
+          <InlineEmpty icon={CheckCircle2} text="No issues found across everything that's applicable to this client." />
+        ) : (
+          <ul className="space-y-2">
+            {detail.health.reasons.map((reason, index) => (
+              <li key={index} className="text-[11px] leading-5 text-[var(--text)]">
+                {reason.summary}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+
+      <Panel title="Monitored endpoints" action={detail.monitoredEndpoints.length ? <CountPill value={detail.monitoredEndpoints.length} /> : undefined}>
+        {detail.monitoredEndpoints.length === 0 ? (
+          <InlineEmpty icon={Globe2} text="Not configured — add a monitored URL from Client Health to authorise uptime checks for this client." />
+        ) : (
+          <div className="-mx-2 divide-y divide-[var(--line)]">
+            {detail.monitoredEndpoints.map((endpoint) => {
+              const latest = endpoint.healthChecks[0];
+              return (
+                <div key={endpoint.id} className="flex items-center justify-between gap-3 px-2 py-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-[11.5px] font-medium text-[var(--text)]">{endpoint.label}</p>
+                    <p className="truncate text-[9.5px] text-[var(--text-subtle)]">{endpoint.url}</p>
+                  </div>
+                  <ToneBadge tone={latest ? healthTone(latest.status) : 'neutral'} compact>
+                    {latest ? formatEnum(latest.status) : 'Awaiting first check'}
+                  </ToneBadge>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Incidents" action={detail.incidents.length ? <CountPill value={detail.incidents.length} /> : undefined}>
+        {detail.incidents.length === 0 ? (
+          <InlineEmpty icon={AlertCircle} text="None recorded." />
+        ) : (
+          <div className="-mx-2 divide-y divide-[var(--line)]">
+            {detail.incidents.map((incident) => (
+              <div key={incident.id} className="flex items-center justify-between gap-3 px-2 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-[11.5px] font-medium text-[var(--text)]">{incident.title}</p>
+                  <p className="text-[9.5px] text-[var(--text-subtle)]">{formatDate(incident.startedAt)}</p>
+                </div>
+                <ToneBadge tone={incident.resolved ? 'green' : 'red'} compact>
+                  {incident.status}
+                </ToneBadge>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+/* =============================================================================
+ * SUPPORT — reuses the same Client Health detail fetch for real ticket
+ * data instead of the old "Planned" placeholder.
+ * =============================================================================
+ */
+
+export function SupportPanel({
+  status,
+  error,
+  detail,
+  openCount,
+  totalCount,
+}: {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  error: string | null;
+  detail: ClientHealthDetail | null;
+  openCount: number;
+  totalCount: number;
+}) {
+  if (status === 'loading' || status === 'idle') {
+    return (
+      <div className="flex min-h-[260px] items-center justify-center rounded-[22px] border border-[var(--line)] bg-[var(--surface)]">
+        <Loader2 size={20} className="animate-spin text-[var(--text-subtle)]" />
+      </div>
+    );
+  }
+
+  if (status === 'error' || !detail) {
+    return <InlineEmpty icon={LifeBuoy} text={error ?? 'Could not load support data.'} />;
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className="overflow-hidden rounded-[22px] border border-[var(--line)] shadow-sm">
+        <MetricsGrid
+          columns="grid-cols-2 sm:grid-cols-3"
+          items={[
+            { label: 'Tickets', value: totalCount, helper: 'All time', icon: LifeBuoy },
+            { label: 'Open', value: openCount, helper: openCount ? 'Needs attention' : 'Nothing outstanding', icon: AlertCircle, warn: openCount > 0 },
+            { label: 'Overdue', value: detail.overdueTicketCount, helper: detail.overdueTicketCount ? 'Past the expected response window' : 'None', icon: Clock3, warn: detail.overdueTicketCount > 0 },
+          ]}
+        />
+      </section>
+
+      <Panel title="Tickets">
+        {detail.tickets.length === 0 ? (
+          <InlineEmpty icon={LifeBuoy} text="No tickets yet for this client." />
+        ) : (
+          <div className="-mx-2 divide-y divide-[var(--line)]">
+            {detail.tickets.map((ticket) => (
+              <div key={ticket.id} className="flex items-center justify-between gap-3 px-2 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[11.5px] font-medium text-[var(--text)]">{ticket.title}</p>
+                  <p className="text-[9.5px] text-[var(--text-subtle)]">{formatDate(ticket.createdAt)}</p>
+                </div>
+                <ToneBadge tone={genericTone(ticket.priority)} compact>
+                  {formatEnum(ticket.priority)}
+                </ToneBadge>
+                <ToneBadge tone={genericTone(ticket.status)} compact>
+                  {formatEnum(ticket.status)}
+                </ToneBadge>
+              </div>
+            ))}
           </div>
         )}
       </Panel>

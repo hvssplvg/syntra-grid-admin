@@ -68,6 +68,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
+import { useSelectedClient } from '@/app/components/admin/SelectedClientContext';
+
 /* =============================================================================
  * TYPES
  * =============================================================================
@@ -822,6 +824,12 @@ export default function ContractsTab() {
   const themeRef = useRef<HTMLDivElement>(null);
   const themeVars = useThemeBridge(themeRef);
 
+  // The app-wide client-context switcher (header) — when set, narrows
+  // this list to just that client (the server already supported this
+  // filter — see app/api/admin/contracts/route.ts — nothing here is new
+  // backend, just finally sending it).
+  const { selectedClientId, selectClient } = useSelectedClient();
+
   const [feed, setFeed] = useState<ContractFeed | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -860,7 +868,7 @@ export default function ContractsTab() {
   // Any change to the query returns to the first page.
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, typeFilter, sort]);
+  }, [search, statusFilter, typeFilter, sort, selectedClientId]);
 
   /* ---------- Data ---------- */
 
@@ -879,6 +887,7 @@ export default function ContractsTab() {
         if (search) params.set('search', search);
         if (statusFilter !== 'ALL') params.set('status', statusFilter);
         if (typeFilter !== 'ALL') params.set('type', typeFilter);
+        if (selectedClientId) params.set('clientId', selectedClientId);
 
         const response = await fetch(`/api/admin/contracts?${params.toString()}`, {
           method: 'GET',
@@ -925,7 +934,7 @@ export default function ContractsTab() {
         }
       }
     },
-    [notify, page, search, sort, statusFilter, typeFilter],
+    [notify, page, search, sort, statusFilter, typeFilter, selectedClientId],
   );
 
   useEffect(() => {
@@ -1159,6 +1168,19 @@ export default function ContractsTab() {
   return (
     <PortalTheme.Provider value={themeVars}>
       <div ref={themeRef} className="mx-auto w-full min-w-0 max-w-[1600px]">
+        {selectedClientId && (
+          <div className="mb-3 flex items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] px-3 py-2 text-[11.5px] text-[var(--text-muted)]">
+            <span>
+              Filtered to{' '}
+              <span className="font-semibold text-[var(--text)]">{feed?.contracts[0]?.client ? clientTitle(feed.contracts[0].client) : 'one client'}</span> — set from the
+              header&apos;s client switcher.
+            </span>
+            <button type="button" onClick={() => selectClient(null)} className={cx('ml-auto text-[11px] font-semibold text-[var(--accent)] hover:underline', focusRing)}>
+              Show all clients
+            </button>
+          </div>
+        )}
+
         <section className="overflow-hidden rounded-[26px] border border-[var(--line)] bg-[var(--surface)] shadow-sm">
           <MetricsGrid
             columns="grid-cols-2 sm:grid-cols-3 2xl:grid-cols-6"
@@ -1322,6 +1344,7 @@ export default function ContractsTab() {
         <CreateContractModal
           key={createKey}
           open={createOpen}
+          defaultClientId={selectedClientId}
           onClose={() => setCreateOpen(false)}
           onCreated={(contract) => {
             setCreateOpen(false);
@@ -1815,15 +1838,23 @@ function CreateContractModal({
   open,
   onClose,
   onCreated,
+  defaultClientId,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: (contract: ContractDetail) => void;
+  /** Pre-fills the client field from the header's client-context
+   *  switcher when one is selected (point 5: context-aware creation) —
+   *  still just a convenience default, never validated as-is: the
+   *  create route re-validates the submitted clientId server-side
+   *  regardless of how the field was filled in. Still fully editable
+   *  before saving. */
+  defaultClientId?: string | null;
 }) {
   const titleId = useId();
   const reduceMotion = useReducedMotion();
 
-  const [form, setForm] = useState<ContractForm>(emptyForm);
+  const [form, setForm] = useState<ContractForm>(() => ({ ...emptyForm(), clientId: defaultClientId ?? '' }));
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [extraProjects, setExtraProjects] = useState<ProjectOption[]>([]);
   const [optionsLoading, setOptionsLoading] = useState(true);

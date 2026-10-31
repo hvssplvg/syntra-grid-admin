@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation';
 
 import AdminHome from '@/app/components/admin/AdminHome';
+import { FullWorkspaceProvider } from '@/app/components/admin/FullWorkspaceContext';
+import { SelectedClientProvider } from '@/app/components/admin/SelectedClientContext';
 import { getCurrentIdentity } from '@/lib/auth/current-admin';
 
 export const dynamic = 'force-dynamic';
@@ -30,19 +32,23 @@ export default async function DashboardPage() {
   );
 
   return (
-    <AdminHome
-      admin={{
-        id: admin.id,
-        fullName,
-        email: admin.email,
-        role: admin.role,
-      }}
-      identity={{
-        isFullAccess,
-        employeeId: employee?.id ?? null,
-        departmentId: employee?.departmentId ?? null,
-        permissions: flatPermissions,
-      }}
-    />
+    <SelectedClientProvider>
+      <FullWorkspaceProvider>
+        <AdminHome
+          admin={{
+            id: admin.id,
+            fullName,
+            email: admin.email,
+            role: admin.role,
+          }}
+          identity={{
+            isFullAccess,
+            employeeId: employee?.id ?? null,
+            departmentId: employee?.departmentId ?? null,
+            permissions: flatPermissions,
+          }}
+        />
+      </FullWorkspaceProvider>
+    </SelectedClientProvider>
   );
 }

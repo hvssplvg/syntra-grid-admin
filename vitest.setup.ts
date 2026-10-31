@@ -15,6 +15,7 @@ vi.mock("@/lib/auth/current-admin", () => {
     getCurrentIdentity: vi.fn(),
     hasPermission: vi.fn(),
     requirePermission: vi.fn(),
+    requireAdmin: vi.fn(),
   };
 });
 
