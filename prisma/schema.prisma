@@ -116,6 +116,9 @@ model AdminUser {
   monitoredEndpointsCreated MonitoredEndpoint[] @relation("MonitoredEndpointCreatedBy")
   incidentsAcknowledged     Incident[]          @relation("IncidentAcknowledgedBy")
 
+  // Technology Operations
+  managedSystemsCreated ManagedSystem[] @relation("ManagedSystemCreatedBy")
+
   // Overview personalisation & notifications
   overviewPreference     AdminOverviewPreference?
   notifications          Notification[]
@@ -627,6 +630,9 @@ model Client {
   monitoredEndpoints MonitoredEndpoint[]
   incidents          Incident[]
 
+  // Technology Operations
+  managedSystems ManagedSystem[]
+
   matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionClient")
 
   // Calendar
@@ -943,6 +949,7 @@ model Project {
   snapshots          UsageSnapshot[]
   contracts          Contract[]
   monitoredEndpoints MonitoredEndpoint[]
+  managedSystems     ManagedSystem[]
 
   matchedMonzoTransactions MonzoTransaction[] @relation("MonzoTransactionProject")
 
@@ -1180,14 +1187,36 @@ model MonitoredEndpoint {
 
   enabled Boolean @default(true)
 
+  // Concurrency lock shared by the cron poller (runDueHealthChecks.ts) and
+  // the manual Check Now route — a stale (>20s old) value self-heals, see
+  // lib/monitoring/applyHealthCheckResult.ts.
+  checkInProgressAt DateTime?
+
+  // Debounces incident creation: reset to 0 on a healthy result,
+  // incremented on a non-healthy one. Only gates OPENING a new incident —
+  // escalating an already-open one is never blocked by this. See
+  // lib/monitoring/applyHealthCheckResult.ts.
+  consecutiveFailureCount Int @default(0)
+
+  // Per-endpoint override for the default threshold
+  // (DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD); null uses the default.
+  consecutiveFailureThreshold Int?
+
+  // Optional link into the Technology Operations systems inventory (see
+  // ManagedSystem below) — purely additive, never read/written by any
+  // existing Client Health code path. A MonitoredEndpoint keeps working
+  // identically whether or not it's linked to a system.
+  managedSystemId String?
+
   createdById String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  client    Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  project   Project?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  createdBy AdminUser? @relation("MonitoredEndpointCreatedBy", fields: [createdById], references: [id])
+  client        Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project       Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  managedSystem ManagedSystem? @relation(fields: [managedSystemId], references: [id], onDelete: SetNull)
+  createdBy     AdminUser?     @relation("MonitoredEndpointCreatedBy", fields: [createdById], references: [id])
 
   healthChecks HealthCheck[]
   incidents    Incident[]
@@ -1195,6 +1224,146 @@ model MonitoredEndpoint {
   @@index([clientId])
   @@index([projectId])
   @@index([enabled])
+  @@index([managedSystemId])
+}
+
+/**
+ * =============================================================================
+ * MANAGED SYSTEMS — Technology Operations systems inventory
+ * =============================================================================
+ * The central record of a website/app/API/service/infra Syntra Grid builds
+ * or maintains, for a client or for itself. Deployments and incidents are
+ * deliberately NOT a direct relation here — they're derived through
+ * `projectId` (Deployment.projectId / Incident.projectId already exist and
+ * are the real join keys), so this model never duplicates data Project
+ * already owns. MonitoredEndpoint links here optionally via its own
+ * managedSystemId, so the SAME HealthCheck history Client Health already
+ * reads/writes is what a system's monitoring section shows — never a
+ * second monitoring pipeline.
+ *
+ * clientId is nullable: null means this is Syntra Grid's own internal
+ * system, mirroring the exact precedent already used by
+ * SocialAccount.clientId / BrandKit.clientId (both "null = Syntra Grid's
+ * own") — not a fake Client row, not an isInternal flag. No onDelete
+ * override on the client relation below, matching BrandKit.client exactly.
+ *
+ * Deliberately stores no secrets/credentials — productionUrl/stagingUrl/
+ * repositoryUrl are reference links only, never fetched server-side (unlike
+ * MonitoredEndpoint.url, which IS polled and goes through safeFetch.ts's
+ * SSRF guard for exactly that reason). These get basic input-hygiene
+ * validation at the API layer (http/https scheme, length), not SSRF checks.
+ */
+model ManagedSystem {
+  id String @id @default(cuid())
+
+  clientId  String?
+  projectId String?
+
+  name        String
+  description String?
+
+  systemType      ManagedSystemType
+  lifecycleStatus ManagedSystemLifecycleStatus @default(ACTIVE)
+
+  hostingProvider String?
+  repositoryUrl   String?
+  techStack       String[] @default([])
+
+  productionUrl String?
+  stagingUrl    String?
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client    Client?    @relation(fields: [clientId], references: [id])
+  project   Project?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy AdminUser? @relation("ManagedSystemCreatedBy", fields: [createdById], references: [id])
+
+  monitoredEndpoints MonitoredEndpoint[]
+  restaurantLink     RestaurantLink?
+
+  @@index([clientId])
+  @@index([projectId])
+  @@index([systemType])
+  @@index([lifecycleStatus])
+}
+
+enum ManagedSystemType {
+  WEBSITE
+  WEB_APP
+  MOBILE_APP
+  API
+  BACKEND_SERVICE
+  INFRASTRUCTURE
+  RESTAURANT_TENANT
+}
+
+/**
+ * Maps one ManagedSystem (systemType = RESTAURANT_TENANT) to one restaurant
+ * record in the separate Restaurant Admin application's own Supabase
+ * project. This database never stores restaurant operational data or
+ * Restaurant Admin credentials — see lib/restaurant-platform/client.ts for
+ * the server-only API client that talks to that system, authenticated
+ * with its own signing key, never a Supabase service-role credential.
+ *
+ * provisioningRequestId is generated here and persisted BEFORE the first
+ * call to Restaurant Admin's management API, then reused on every retry
+ * of that same logical request — the local half of the idempotency
+ * design in syntragrid-restaurant-admin's provision_restaurant() RPC.
+ * provisioningState only has three values because that RPC is atomic:
+ * PENDING means "the local record exists, the remote call has not been
+ * confirmed yet" (safe to retry with the same provisioningRequestId),
+ * never a partially-created remote restaurant.
+ */
+model RestaurantLink {
+  id String @id @default(cuid())
+
+  managedSystemId String @unique
+
+  provisioningRequestId String                           @unique
+  provisioningState     RestaurantLinkProvisioningState @default(PENDING)
+  provisioningError     String?
+  /// The original create-restaurant payload, persisted so a failed or
+  /// ambiguous (e.g. timed-out) remote call can be retried with the exact
+  /// same provisioningRequestId and the exact same data, never a second,
+  /// possibly-different payload reusing the same key.
+  provisioningPayload Json?
+
+  externalRestaurantId String? @unique
+  externalSlug         String? @unique
+
+  /// Restaurant Admin's own restaurant.status (ACTIVE/SUSPENDED/ARCHIVED),
+  /// cached here so the Overview/Directory can show counts without an
+  /// HTTP call per restaurant on every render. Refreshed whenever Detail
+  /// is viewed or status is changed — may be briefly stale otherwise;
+  /// never treated as authoritative (Detail always re-fetches live).
+  remoteStatus         String?
+  remoteStatusSyncedAt DateTime?
+
+  lastSyncedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  managedSystem ManagedSystem @relation(fields: [managedSystemId], references: [id], onDelete: Cascade)
+
+  @@index([provisioningState])
+}
+
+enum RestaurantLinkProvisioningState {
+  PENDING
+  PROVISIONED
+  FAILED
+}
+
+enum ManagedSystemLifecycleStatus {
+  PLANNED
+  ACTIVE
+  MAINTENANCE
+  DEPRECATED
+  RETIRED
 }
 
 /**
