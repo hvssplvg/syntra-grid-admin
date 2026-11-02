@@ -35,6 +35,7 @@ import {
   TicketCheck,
   UserRoundPlus,
   Users,
+  UtensilsCrossed,
   Workflow,
   Wrench,
   type LucideIcon,
@@ -79,6 +80,7 @@ export type AdminTab =
   | "monitoring"
   | "deployments"
   | "systems"
+  | "restaurant_platform"
   | "domains"
   | "environments"
   | "repositories"
@@ -821,6 +823,16 @@ export const ADMIN_TABS: Record<
     status: "PLANNED",
   },
 
+  restaurant_platform: {
+    tab: "restaurant_platform",
+    title: "Restaurant Platform",
+    description:
+      "Onboard and manage restaurants on the Restaurant Admin platform.",
+    section: "Engineering",
+    icon: UtensilsCrossed,
+    status: "ACTIVE",
+  },
+
   domains: {
     tab: "domains",
     title: "Domains",
@@ -1526,6 +1538,7 @@ export const SECURED_MODULE_KEYS: ReadonlySet<AdminTab> = new Set([
   "brand_assets",
   "seo_analytics",
   "client_health",
+  "restaurant_platform",
 ]);
 
 export function isModuleSecured(tab: AdminTab): boolean {
