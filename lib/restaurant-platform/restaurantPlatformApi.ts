@@ -123,12 +123,13 @@ export async function createRestaurantApi(input: CreateRestaurantInput): Promise
   restaurantId: string;
   restaurantName: string;
   restaurantSlug: string;
-  inviteLink: string;
+  /** Null if this request id had already been provisioned by an earlier attempt. */
+  inviteLink: string | null;
 }> {
   return apiRequest(`/restaurants`, { method: "POST", body: JSON.stringify(input) });
 }
 
-export async function retryProvisioningApi(managedSystemId: string): Promise<{ restaurantId: string; inviteLink: string }> {
+export async function retryProvisioningApi(managedSystemId: string): Promise<{ restaurantId: string; inviteLink: string | null }> {
   return apiRequest(`/restaurants/${managedSystemId}/retry`, { method: "POST" });
 }
 

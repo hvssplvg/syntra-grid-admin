@@ -141,7 +141,17 @@ export type CreateRemoteRestaurantResult = {
   restaurantId: string;
   restaurantName: string;
   restaurantSlug: string;
-  inviteLink: string;
+  /** Null when `replay` is true — see the field below. */
+  inviteLink: string | null;
+  /**
+   * True when this call reused an existing provisioningRequestId from an
+   * earlier, already-committed attempt rather than creating a new
+   * restaurant — the atomic RPC's idempotent-replay path. No new
+   * invitation token exists to return in that case; the caller already
+   * has (or has lost) the one from the original attempt, and must use
+   * the explicit reissue endpoint for a fresh link.
+   */
+  replay: boolean;
 };
 
 export async function listRemoteRestaurants(filters: {

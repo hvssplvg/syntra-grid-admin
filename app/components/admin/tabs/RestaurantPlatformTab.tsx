@@ -249,7 +249,7 @@ function CreateRestaurantDialog({ onClose, onCreated }: { onClose: () => void; o
   const [country, setCountry] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<{ inviteLink: string } | null>(null);
+  const [success, setSuccess] = useState<{ inviteLink: string | null } | null>(null);
 
   const submit = async () => {
     if (!name.trim() || !ownerEmail.trim()) return;
@@ -282,10 +282,18 @@ function CreateRestaurantDialog({ onClose, onCreated }: { onClose: () => void; o
             <CheckCircle2 size={16} className="text-[var(--success)]" />
             <h3 className="text-[13px] font-semibold text-[var(--text)]">Restaurant created</h3>
           </div>
-          <p className="mt-2 text-[11.5px] leading-5 text-[var(--text-muted)]">
-            Send this owner activation link — it is shown once and cannot be retrieved again. If it&apos;s lost, reissue a new one from the restaurant&apos;s detail page.
-          </p>
-          <div className="mt-3 break-all rounded-xl bg-[var(--surface-muted)] px-3 py-2 text-[11px] text-[var(--text)]">{success.inviteLink}</div>
+          {success.inviteLink ? (
+            <>
+              <p className="mt-2 text-[11.5px] leading-5 text-[var(--text-muted)]">
+                Send this owner activation link — it is shown once and cannot be retrieved again. If it&apos;s lost, reissue a new one from the restaurant&apos;s detail page.
+              </p>
+              <div className="mt-3 break-all rounded-xl bg-[var(--surface-muted)] px-3 py-2 text-[11px] text-[var(--text)]">{success.inviteLink}</div>
+            </>
+          ) : (
+            <p className="mt-2 text-[11.5px] leading-5 text-[var(--text-muted)]">
+              This restaurant already existed from an earlier attempt — its invitation link was already shown once and can&apos;t be retrieved again. Reissue a new one from the restaurant&apos;s detail page.
+            </p>
+          )}
           <button type="button" onClick={() => { onCreated(); }} className={cx(BTN_PRIMARY, FOCUS, "mt-4 h-9 w-full")}>
             Done
           </button>
@@ -400,7 +408,8 @@ function RestaurantDetailPanel({ managedSystemId, onClose, onChanged }: { manage
   const handleRetry = async () => {
     setBusy(true);
     try {
-      await retryProvisioningApi(managedSystemId);
+      const result = await retryProvisioningApi(managedSystemId);
+      if (result.inviteLink) setReissueLink(result.inviteLink);
       reload();
       onChanged();
     } catch (caught) {

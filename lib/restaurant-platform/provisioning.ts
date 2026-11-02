@@ -9,7 +9,7 @@ import {
 export type ProvisioningPayload = Omit<CreateRemoteRestaurantInput, "requestId">;
 
 export type AttemptProvisioningResult =
-  | { ok: true; restaurantId: string; restaurantName: string; restaurantSlug: string; inviteLink: string }
+  | { ok: true; restaurantId: string; restaurantName: string; restaurantSlug: string; inviteLink: string | null; replay: boolean }
   | { ok: false; error: string; code: string; retryable: boolean };
 
 /**
@@ -75,10 +75,11 @@ export async function attemptRemoteProvisioning(params: {
         data: {
           // A non-retryable rejection is a terminal failure for this
           // payload; anything else stays PENDING so the same request id
-          // can be safely retried once Restaurant Admin's atomic RPC is
-          // live (see the known limitation noted on that app's create
-          // endpoint — today's non-atomic path means a retry is not yet
-          // guaranteed duplicate-free on the remote side either).
+          // can be safely retried — Restaurant Admin's provision_restaurant()
+          // RPC is idempotent on exactly that key, so retrying never
+          // creates a duplicate (once that migration is applied to the
+          // target database — see its deployment precondition note in
+          // syntragrid-restaurant-admin's app/api/platform-mgmt/restaurants/route.ts).
           provisioningState: retryable ? "PENDING" : "FAILED",
           provisioningError: message,
         },
