@@ -162,6 +162,7 @@ const SprintsTab = dynamic(() => import("./tabs/SprintsTab"), { loading: TabLoad
 const SubscriptionsTab = dynamic(() => import("./tabs/SubscriptionsTab"), { loading: TabLoadingFallback });
 const SupportTab = dynamic(() => import("./tabs/SupportTab"), { loading: TabLoadingFallback });
 const SystemsTab = dynamic(() => import("./tabs/SystemsTab"), { loading: TabLoadingFallback });
+const RestaurantPlatformTab = dynamic(() => import("./tabs/RestaurantPlatformTab"), { loading: TabLoadingFallback });
 const TasksTab = dynamic(() => import("./tabs/TasksTab"), { loading: TabLoadingFallback });
 const TeamTab = dynamic(() => import("./tabs/TeamTab"), { loading: TabLoadingFallback });
 const TicketsTab = dynamic(() => import("./tabs/TicketsTab"), { loading: TabLoadingFallback });
@@ -296,6 +297,7 @@ const TAB_COMPONENTS: Partial<
   monitoring: MonitoringTab,
   deployments: DeploymentsTab,
   systems: SystemsTab,
+  restaurant_platform: RestaurantPlatformTab,
   domains: DomainsTab,
   environments: EnvironmentsTab,
   repositories: RepositoriesTab,
