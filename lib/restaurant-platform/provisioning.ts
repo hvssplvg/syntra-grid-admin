@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import {
   createRemoteRestaurant,
   RestaurantManagementApiError,
+  RestaurantManagementUnavailableError,
   type CreateRemoteRestaurantInput,
 } from "@/lib/restaurant-platform/client";
 
@@ -65,7 +66,7 @@ export async function attemptRemoteProvisioning(params: {
     return { ok: true, ...result };
   } catch (error) {
     const isApiError = error instanceof RestaurantManagementApiError;
-    const code = isApiError ? error.code : "NETWORK_ERROR";
+    const code = isApiError ? error.code : error instanceof RestaurantManagementUnavailableError ? "SERVICE_UNAVAILABLE" : "NETWORK_ERROR";
     const message = error instanceof Error ? error.message : "Could not reach the Restaurant Management API.";
     const retryable = !NON_RETRYABLE_CODES.has(code);
 

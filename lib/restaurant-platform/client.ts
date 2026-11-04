@@ -34,6 +34,20 @@ export class RestaurantManagementApiError extends Error {
   }
 }
 
+/**
+ * The upstream never responded at all — connection refused, DNS failure,
+ * timeout, etc. (`fetch()` itself threw). Distinct from
+ * RestaurantManagementApiError, which means the upstream DID respond,
+ * just with a non-2xx status. Callers must not treat this as "not found"
+ * or any other business-logic outcome — it means the service is down.
+ */
+export class RestaurantManagementUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("Restaurant management service unavailable.");
+    this.cause = cause;
+  }
+}
+
 function getConfig() {
   const baseUrl = process.env.RESTAURANT_ADMIN_BASE_URL;
   const keyId = process.env.RESTAURANT_MGMT_KEY_ID;
@@ -62,18 +76,27 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const nonce = crypto.randomUUID();
   const signature = sign({ method, path, timestamp, nonce, rawBody, secret });
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      "X-PlatformMgmt-KeyId": keyId,
-      "X-PlatformMgmt-Timestamp": timestamp,
-      "X-PlatformMgmt-Nonce": nonce,
-      "X-PlatformMgmt-Signature": signature,
-    },
-    body: rawBody || undefined,
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "X-PlatformMgmt-KeyId": keyId,
+        "X-PlatformMgmt-Timestamp": timestamp,
+        "X-PlatformMgmt-Nonce": nonce,
+        "X-PlatformMgmt-Signature": signature,
+      },
+      body: rawBody || undefined,
+      cache: "no-store",
+    });
+  } catch (cause) {
+    // fetch() throws (rather than resolving with a response) only when
+    // the request never reached the server at all — ECONNREFUSED,
+    // ENOTFOUND, a TLS failure, a timeout. Never conflate this with a
+    // real "not found" or any other upstream-returned outcome.
+    throw new RestaurantManagementUnavailableError(cause);
+  }
 
   const payload = await response.json().catch(() => null);
 

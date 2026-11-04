@@ -7,7 +7,12 @@ import {
   assertRestaurantPlatformRowAccess,
   requireRestaurantPlatformPermission,
 } from "@/lib/restaurant-platform/permissions";
-import { getRemoteRestaurantDetail, listRemoteInvitations, RestaurantManagementApiError } from "@/lib/restaurant-platform/client";
+import {
+  getRemoteRestaurantDetail,
+  listRemoteInvitations,
+  RestaurantManagementApiError,
+  RestaurantManagementUnavailableError,
+} from "@/lib/restaurant-platform/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,6 +81,16 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         invitations: invitationsResult.items,
       });
     } catch (error) {
+      // Distinguish "the upstream is simply not reachable" (its own kind
+      // of outage, never this restaurant's fault) from "the upstream
+      // responded but with an error" — conflating the two is what made a
+      // dead connection look like a missing restaurant.
+      if (error instanceof RestaurantManagementUnavailableError) {
+        return NextResponse.json({ ok: false, error: error.message }, { status: 503 });
+      }
+      if (error instanceof RestaurantManagementApiError && (error.status === 401 || error.status === 403)) {
+        return NextResponse.json({ ok: false, error: "Restaurant management request could not be authenticated." }, { status: 502 });
+      }
       const message = error instanceof RestaurantManagementApiError ? error.message : "Could not reach the Restaurant Management API.";
       return NextResponse.json({ ok: false, error: message }, { status: 502 });
     }
