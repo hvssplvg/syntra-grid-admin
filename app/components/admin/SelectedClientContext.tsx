@@ -28,10 +28,17 @@
 // only ever narrows what full-access-you chooses to look at. It must
 // never be the sole gate in front of any API response.
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 const CLIENT_CONTEXT_STORAGE_KEY = "syntragrid.workspace-context";
 const CLIENT_URL_PARAM = "client";
+
+/** Fired only by an actual selectClient() call that changes the id — never
+ *  by hydration (see the hydration effect below, which sets the raw state
+ *  directly). ClientSwitchOverlay.tsx watches this to know when to play the
+ *  branded transition, keyed on `token` so re-firing the same destination
+ *  id still triggers a fresh overlay. */
+type LastSwitch = { toClientId: string | null; token: number };
 
 type SelectedClientContextValue = {
   /** null until the initial URL/localStorage read completes (client-side
@@ -43,12 +50,15 @@ type SelectedClientContextValue = {
    *  value possible on the server/before hydration. */
   selectedClientId: string | null;
   selectClient: (id: string | null) => void;
+  /** See LastSwitch above. null until the first real switch happens. */
+  lastSwitch: LastSwitch | null;
 };
 
 const SelectedClientContext = createContext<SelectedClientContextValue>({
   hydrated: false,
   selectedClientId: null,
   selectClient: () => {},
+  lastSwitch: null,
 });
 
 function readUrlClientId(): string | null {
@@ -71,10 +81,18 @@ function syncUrl(id: string | null) {
 export function SelectedClientProvider({ children }: { children: ReactNode }) {
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [lastSwitch, setLastSwitch] = useState<LastSwitch | null>(null);
+  const switchTokenRef = useRef(0);
+  // Mirrors selectedClientId so selectClient (a stable, no-deps callback)
+  // can compare against the current value synchronously without reading a
+  // stale closure — kept in lockstep by the hydration effect below and by
+  // selectClient itself, never read during render.
+  const selectedClientIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const fromUrl = readUrlClientId();
     if (fromUrl) {
+      selectedClientIdRef.current = fromUrl;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedClientId(fromUrl);
       setHydrated(true);
@@ -87,7 +105,9 @@ export function SelectedClientProvider({ children }: { children: ReactNode }) {
       // `client:<id>` (see AdminHeader.tsx's COMPANY_CONTEXT/client
       // context ids) — only the second form selects an actual client.
       if (stored?.startsWith("client:")) {
-        setSelectedClientId(stored.slice("client:".length));
+        const id = stored.slice("client:".length);
+        selectedClientIdRef.current = id;
+        setSelectedClientId(id);
       }
     } catch {
       // Optional local preference.
@@ -97,6 +117,11 @@ export function SelectedClientProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const selectClient = useCallback((id: string | null) => {
+    if (selectedClientIdRef.current !== id) {
+      switchTokenRef.current += 1;
+      setLastSwitch({ toClientId: id, token: switchTokenRef.current });
+    }
+    selectedClientIdRef.current = id;
     setSelectedClientId(id);
     syncUrl(id);
     try {
@@ -106,7 +131,10 @@ export function SelectedClientProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const value = useMemo(() => ({ hydrated, selectedClientId, selectClient }), [hydrated, selectedClientId, selectClient]);
+  const value = useMemo(
+    () => ({ hydrated, selectedClientId, selectClient, lastSwitch }),
+    [hydrated, selectedClientId, selectClient, lastSwitch],
+  );
 
   return <SelectedClientContext.Provider value={value}>{children}</SelectedClientContext.Provider>;
 }

@@ -110,7 +110,10 @@ export function isTicketOverdue(ticket: SupportTicketInput, now: Date): boolean 
   return daysBetween(now, ticket.createdAt) >= OVERDUE_TICKET_THRESHOLD_DAYS[ticket.priority];
 }
 
-function computeMonitoring(endpoints: MonitoringEndpointInput[]): { applicable: boolean; reasons: HealthReason[] } {
+// Exported so lib/systems/server.ts can derive a ManagedSystem's own
+// aggregate monitoring status from its linked endpoints using this exact,
+// already-correct logic — rather than a second, parallel copy of it.
+export function computeMonitoring(endpoints: MonitoringEndpointInput[]): { applicable: boolean; reasons: HealthReason[] } {
   if (endpoints.length === 0) return { applicable: false, reasons: [] };
 
   const reasons: HealthReason[] = [];
@@ -221,6 +224,20 @@ export function computeClientHealth(input: ClientHealthComputeInput): ClientHeal
     status = "AT_RISK";
   } else if (reasons.some((reason) => reason.severity === "attention")) {
     status = "NEEDS_ATTENTION";
+  } else if (reasons.some((reason) => reason.dimension === "monitoring" && reason.severity === "info")) {
+    // At least one monitored endpoint has never completed a check —
+    // computeMonitoring's only "info" reason is exactly this pending
+    // case (confirmed above), never a confirmed-fine signal. Unconfirmed
+    // must never be reported as Healthy on the strength of other
+    // dimensions alone, regardless of how many other dimensions apply —
+    // this was previously falling through to HEALTHY whenever more than
+    // one dimension applied (e.g. monitoring + the always-applicable
+    // support), which silently laundered "awaiting first check" into
+    // "Healthy". Other dimensions' own "info" reasons (e.g. open-but-not-
+    // overdue support tickets) are genuinely neutral/fine and don't hit
+    // this branch, since this checks specifically for monitoring's info
+    // reason, not any info reason.
+    status = "UNKNOWN";
   } else if (applicableDimensions.length === 1 && applicableDimensions[0] === "support" && input.tickets.length === 0) {
     // The only always-applicable dimension has literally no data at all
     // (no tickets ever raised) and nothing else is configured — there is

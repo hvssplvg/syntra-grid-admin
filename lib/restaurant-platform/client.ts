@@ -127,8 +127,10 @@ export type RemoteRestaurantDetail = RemoteRestaurantSummary & {
   timezone: string;
   currency: string;
   logoUrl: string | null;
+  coverImageUrl: string | null;
   primaryColor: string | null;
   secondaryColor: string | null;
+  dashboardTheme: string;
   updatedAt: string;
   enabledModules: string[];
   disabledModules: string[];
@@ -156,8 +158,35 @@ export type CreateRemoteRestaurantInput = {
   currency: string;
   timezone: string;
   logoUrl?: string;
+  coverImageUrl?: string;
   primaryColor?: string;
   secondaryColor?: string;
+  /** Optional-module keys to disable, applied atomically during
+   *  provisioning by Restaurant Admin's provision_restaurant() RPC —
+   *  never as a separate post-create call. */
+  disabledModuleKeys?: string[];
+  /** Theme id from Restaurant Admin's theme registry (see
+   *  listRemoteThemes below) — applied atomically with creation, same
+   *  story as disabledModuleKeys. Defaults to 'contemporary' server-side
+   *  when omitted. */
+  dashboardTheme?: string;
+};
+
+export type RemoteThemeDefinition = {
+  id: string;
+  label: string;
+  description: string;
+  suitedFor: string;
+  isDark: boolean;
+  tokens: Record<string, string>;
+};
+
+export type RemoteModuleDefinition = {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+  optional: boolean;
 };
 
 export type CreateRemoteRestaurantResult = {
@@ -214,6 +243,18 @@ export async function setRemoteModuleEnabled(restaurantId: string, moduleKey: st
     `/api/platform-mgmt/restaurants/${encodeURIComponent(restaurantId)}/modules/${encodeURIComponent(moduleKey)}`,
     { enabled }
   );
+}
+
+export async function listRemoteModules(): Promise<{ items: RemoteModuleDefinition[] }> {
+  return request("GET", "/api/platform-mgmt/modules");
+}
+
+export async function listRemoteThemes(): Promise<{ items: RemoteThemeDefinition[] }> {
+  return request("GET", "/api/platform-mgmt/themes");
+}
+
+export async function setRemoteDashboardTheme(restaurantId: string, theme: string): Promise<{ restaurantId: string; theme: string }> {
+  return request("PATCH", `/api/platform-mgmt/restaurants/${encodeURIComponent(restaurantId)}/theme`, { theme });
 }
 
 export async function listRemoteInvitations(restaurantId: string): Promise<{ items: RemoteInvitation[] }> {

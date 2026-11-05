@@ -18,6 +18,12 @@ function cleanString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function cleanStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const cleaned = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
 /* ============================================================================
    GET /api/admin/restaurant-platform/restaurants?clientId=
 
@@ -71,8 +77,9 @@ export async function GET(request: NextRequest) {
 /* ============================================================================
    POST /api/admin/restaurant-platform/restaurants
    body: { name, ownerEmail, contactEmail?, phone?, address?, city?,
-           country?, currency, timezone, logoUrl?, primaryColor?,
-           secondaryColor?, clientId?, newClient?: { name, slug? } }
+           country?, currency, timezone, logoUrl?, coverImageUrl?,
+           primaryColor?, secondaryColor?, disabledModuleKeys?: string[],
+           clientId?, newClient?: { name, slug? } }
 
    The local Client (if new) + ManagedSystem + RestaurantLink are created
    in one transaction and committed BEFORE the remote call — so a crash
@@ -118,8 +125,11 @@ export async function POST(request: NextRequest) {
       city: cleanString(body?.city) ?? undefined,
       country: cleanString(body?.country) ?? undefined,
       logoUrl: cleanString(body?.logoUrl) ?? undefined,
+      coverImageUrl: cleanString(body?.coverImageUrl) ?? undefined,
       primaryColor: cleanString(body?.primaryColor) ?? undefined,
       secondaryColor: cleanString(body?.secondaryColor) ?? undefined,
+      disabledModuleKeys: cleanStringArray(body?.disabledModuleKeys),
+      dashboardTheme: cleanString(body?.dashboardTheme) ?? undefined,
     };
 
     const requestId = crypto.randomUUID();

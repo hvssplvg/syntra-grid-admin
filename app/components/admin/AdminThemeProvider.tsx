@@ -281,6 +281,29 @@ export function AdminThemeProvider({
     root.style.colorScheme = theme;
 
     /*
+     * Also mirror every theme variable onto :root, not just the
+     * admin-theme-root div below. Some admin UI (e.g. SystemsTab's and
+     * RestaurantPlatformTab's modals) portals directly to document.body via
+     * createPortal, which escapes admin-theme-root's inline style entirely
+     * -- CSS custom properties only inherit to descendants, and a portal's
+     * target is a sibling of admin-theme-root, not a child of it. Without
+     * this, every var(--surface)/var(--text)/etc. in a portaled modal
+     * resolves to nothing, rendering a transparent card with unstyled
+     * (browser-default black) text. :root is an ancestor of everything,
+     * including any portal, so setting the same variables there fixes this
+     * for every current and future portal without each one needing to know
+     * about admin-theme-root.
+     */
+    const themeVariables =
+      theme === 'dark'
+        ? DARK_THEME
+        : LIGHT_THEME;
+
+    for (const [key, val] of Object.entries(themeVariables)) {
+      root.style.setProperty(key, val);
+    }
+
+    /*
      * We deliberately do NOT add/remove Tailwind's global `dark` class here.
      * This admin has its own theme system and should not unexpectedly change
      * unrelated public/auth pages.

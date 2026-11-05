@@ -45,8 +45,10 @@ export type RestaurantDetail = {
     timezone: string;
     currency: string;
     logoUrl: string | null;
+    coverImageUrl: string | null;
     primaryColor: string | null;
     secondaryColor: string | null;
+    dashboardTheme: string;
     createdAt: string;
     updatedAt: string;
     enabledModules: string[];
@@ -66,10 +68,33 @@ export type CreateRestaurantInput = {
   city?: string;
   country?: string;
   logoUrl?: string;
+  coverImageUrl?: string;
   primaryColor?: string;
   secondaryColor?: string;
+  /** Optional-module keys to disable — applied atomically with creation. */
+  disabledModuleKeys?: string[];
+  /** Theme id — applied atomically with creation, defaults to
+   *  'contemporary' server-side when omitted. */
+  dashboardTheme?: string;
   clientId?: string;
   newClient?: { name: string };
+};
+
+export type ModuleDefinition = {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+  optional: boolean;
+};
+
+export type ThemeDefinition = {
+  id: string;
+  label: string;
+  description: string;
+  suitedFor: string;
+  isDark: boolean;
+  tokens: Record<string, string>;
 };
 
 export class RestaurantPlatformApiError extends Error {
@@ -118,6 +143,16 @@ export async function fetchRestaurantDetail(id: string): Promise<RestaurantDetai
   return apiRequest<RestaurantDetail>(`/restaurants/${id}`);
 }
 
+export async function fetchModuleRegistry(): Promise<ModuleDefinition[]> {
+  const result = await apiRequest<{ items: ModuleDefinition[] }>(`/modules`);
+  return result.items;
+}
+
+export async function fetchThemeRegistry(): Promise<ThemeDefinition[]> {
+  const result = await apiRequest<{ items: ThemeDefinition[] }>(`/themes`);
+  return result.items;
+}
+
 export async function createRestaurantApi(input: CreateRestaurantInput): Promise<{
   managedSystemId: string;
   restaurantId: string;
@@ -139,6 +174,10 @@ export async function setRestaurantStatusApi(managedSystemId: string, status: Re
 
 export async function setModuleEnabledApi(managedSystemId: string, moduleKey: string, enabled: boolean): Promise<void> {
   await apiRequest(`/restaurants/${managedSystemId}/modules/${moduleKey}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
+}
+
+export async function setDashboardThemeApi(managedSystemId: string, theme: string): Promise<void> {
+  await apiRequest(`/restaurants/${managedSystemId}/theme`, { method: "PATCH", body: JSON.stringify({ theme }) });
 }
 
 export async function issueOwnerInvitationApi(managedSystemId: string, ownerEmail: string): Promise<{ invitationId: string; inviteLink: string }> {

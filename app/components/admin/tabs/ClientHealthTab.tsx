@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   CircleDollarSign,
   Headphones,
@@ -22,10 +23,14 @@ import {
 
 import { ClientMark } from "@/lib/clients/ClientMark";
 import { useSelectedClient } from "@/app/components/admin/SelectedClientContext";
+import { EndpointHistoryPanel } from "@/app/components/admin/client-health/EndpointHistoryPanel";
 import {
   acknowledgeIncidentApi,
   addMonitoredEndpointApi,
+  checkEndpointNowApi,
+  ClientHealthApiError,
   deleteMonitoredEndpointApi,
+  deriveEndpointDisplayState,
   fetchClientHealthDetail,
   fetchClientHealthList,
   resolveIncidentApi,
@@ -137,29 +142,45 @@ export default function ClientHealthTab() {
   // narrows to just that client, same as every other client-aware view.
   const { selectedClientId, selectClient } = useSelectedClient();
 
+  const requestRef = useRef<AbortController | null>(null);
+
   const load = useCallback(() => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+
     setStatus("loading");
     setError(null);
-    fetchClientHealthList({
-      status: statusFilter || undefined,
-      dimension: dimensionFilter || undefined,
-      priority: priorityFilter || undefined,
-      search: search.trim() || undefined,
-      clientId: selectedClientId || undefined,
-    })
+    fetchClientHealthList(
+      {
+        status: statusFilter || undefined,
+        dimension: dimensionFilter || undefined,
+        priority: priorityFilter || undefined,
+        search: search.trim() || undefined,
+        clientId: selectedClientId || undefined,
+      },
+      controller.signal,
+    )
       .then((result) => {
         setItems(result);
         setStatus("ready");
       })
       .catch((caught) => {
+        if (caught instanceof DOMException && caught.name === "AbortError") return;
         setError(caught instanceof Error ? caught.message : "Could not load Client Health.");
         setStatus("error");
+      })
+      .finally(() => {
+        if (requestRef.current === controller) requestRef.current = null;
       });
   }, [statusFilter, dimensionFilter, priorityFilter, search, selectedClientId]);
 
   useEffect(() => {
     const handle = window.setTimeout(load, search ? 300 : 0);
-    return () => window.clearTimeout(handle);
+    return () => {
+      window.clearTimeout(handle);
+      requestRef.current?.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, dimensionFilter, priorityFilter, search, selectedClientId]);
 
@@ -167,6 +188,21 @@ export default function ClientHealthTab() {
     const counts: Record<ClientHealthStatus, number> = { HEALTHY: 0, NEEDS_ATTENTION: 0, AT_RISK: 0, UNKNOWN: 0 };
     for (const item of items) counts[item.health.status] += 1;
     return counts;
+  }, [items]);
+
+  // Coverage/incident/staleness aggregates — every number here comes
+  // straight from listClientHealth's real rows (via lib/client-health/
+  // compute.ts), never a separately-recomputed or decorative figure.
+  const coverage = useMemo(() => {
+    const totalEndpoints = items.reduce((sum, item) => sum + item.monitoredEndpointCount, 0);
+    const activeIncidents = items.reduce((sum, item) => sum + item.activeIncidentCount, 0);
+    const monitoredClientCount = items.filter((item) => item.monitoredEndpointCount > 0).length;
+    const coveragePercent = items.length > 0 ? Math.round((monitoredClientCount / items.length) * 100) : null;
+    const oldestLastCheckedAt = items
+      .map((item) => item.lastCheckedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0] ?? null;
+    return { totalEndpoints, activeIncidents, coveragePercent, oldestLastCheckedAt };
   }, [items]);
 
   return (
@@ -221,6 +257,25 @@ export default function ClientHealthTab() {
             </button>
           );
         })}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className={cx(CARD, "p-3")}>
+          <span className="block text-[15px] font-semibold text-[var(--text)]">{coverage.totalEndpoints}</span>
+          <span className="block text-[10px] text-[var(--text-muted)]">Monitored endpoints</span>
+        </div>
+        <div className={cx(CARD, "p-3")}>
+          <span className={cx("block text-[15px] font-semibold", coverage.activeIncidents > 0 ? "text-[var(--danger)]" : "text-[var(--text)]")}>{coverage.activeIncidents}</span>
+          <span className="block text-[10px] text-[var(--text-muted)]">Active incidents</span>
+        </div>
+        <div className={cx(CARD, "p-3")}>
+          <span className="block text-[15px] font-semibold text-[var(--text)]">{coverage.coveragePercent === null ? "—" : `${coverage.coveragePercent}%`}</span>
+          <span className="block text-[10px] text-[var(--text-muted)]">Clients with monitoring</span>
+        </div>
+        <div className={cx(CARD, "p-3")}>
+          <span className="block text-[15px] font-semibold text-[var(--text)]">{coverage.oldestLastCheckedAt ? formatRelativeTime(coverage.oldestLastCheckedAt) : "—"}</span>
+          <span className="block text-[10px] text-[var(--text-muted)]">Oldest last check</span>
+        </div>
       </div>
 
       <div className={cx(CARD, "p-4")}>
@@ -370,6 +425,8 @@ function ClientHealthDetailPanel({ clientId, onClose, onChanged }: { clientId: s
   const [error, setError] = useState<string | null>(null);
   const [addEndpointOpen, setAddEndpointOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [checkNowMessage, setCheckNowMessage] = useState<{ id: string; tone: "error" | "info"; text: string } | null>(null);
+  const [historyOpenId, setHistoryOpenId] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     setStatus("loading");
@@ -419,6 +476,22 @@ function ClientHealthDetailPanel({ clientId, onClose, onChanged }: { clientId: s
       await resolveIncidentApi(id);
       reload();
       onChanged();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleCheckNow = async (id: string) => {
+    setBusyId(id);
+    setCheckNowMessage(null);
+    try {
+      const result = await checkEndpointNowApi(id);
+      setCheckNowMessage({ id, tone: "info", text: `${result.check.status} · ${result.check.responseTimeMs}ms` });
+      reload();
+      onChanged();
+    } catch (caught) {
+      const message = caught instanceof ClientHealthApiError ? caught.message : "Check Now failed.";
+      setCheckNowMessage({ id, tone: "error", text: message });
     } finally {
       setBusyId(null);
     }
@@ -489,24 +562,72 @@ function ClientHealthDetailPanel({ clientId, onClose, onChanged }: { clientId: s
                   <ul className="mt-2 space-y-2">
                     {detail.monitoredEndpoints.map((endpoint) => {
                       const latest = endpoint.healthChecks[0];
+                      const relatedIncidents = detail.incidents.filter((incident) => incident.monitoredEndpointId === endpoint.id);
+                      const historyOpen = historyOpenId === endpoint.id;
+                      const message = checkNowMessage?.id === endpoint.id ? checkNowMessage : null;
+                      const displayState = deriveEndpointDisplayState(endpoint);
                       return (
-                        <li key={endpoint.id} className="flex items-center justify-between gap-2 rounded-xl bg-[var(--surface-muted)] px-3 py-2">
-                          <span className="min-w-0">
-                            <span className="block truncate text-[11.5px] font-medium text-[var(--text)]">{endpoint.label}</span>
-                            <span className="block truncate text-[10px] text-[var(--text-subtle)]">{endpoint.url}</span>
-                            <span className="block text-[10px] text-[var(--text-subtle)]">
-                              {latest ? `${latest.status} · ${latest.responseTimeMs ?? "?"}ms · ${formatRelativeTime(latest.checkedAt)}` : "Awaiting first check"}
+                        <li key={endpoint.id} className="rounded-xl bg-[var(--surface-muted)] px-3 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="min-w-0">
+                              <span className="block truncate text-[11.5px] font-medium text-[var(--text)]">{endpoint.label}</span>
+                              <span className="block truncate text-[10px] text-[var(--text-subtle)]">{endpoint.url}</span>
+                              <span className="block text-[10px] text-[var(--text-subtle)]">
+                                {latest ? `${latest.status} · ${latest.responseTimeMs ?? "?"}ms · HTTP ${latest.statusCode ?? "—"} · ${formatRelativeTime(latest.checkedAt)}` : "Awaiting first check"}
+                                {" · every "}
+                                {endpoint.checkIntervalMinutes}min{latest ? ` · next ≈ ${formatRelativeTime(latest.checkedAt)} + cadence (actual cadence depends on the cron schedule)` : ""}
+                              </span>
+                              {relatedIncidents.length > 0 && (
+                                <span className="mt-1 block text-[10px] font-medium text-[var(--danger)]">
+                                  {relatedIncidents.filter((incident) => !incident.resolved).length} active incident{relatedIncidents.filter((incident) => !incident.resolved).length === 1 ? "" : "s"}
+                                </span>
+                              )}
+                              {displayState === "configuration_issue" && (
+                                <span className="mt-1 block text-[10px] font-medium text-[var(--warning)]">
+                                  Monitoring configuration issue — no check has run since this was added over 36h ago. Verify the cron schedule and CRON_SECRET, or use Check Now.
+                                </span>
+                              )}
+                              {message && (
+                                <span className={cx("mt-1 block text-[10px] font-medium", message.tone === "error" ? "text-[var(--danger)]" : "text-[var(--success)]")}>{message.text}</span>
+                              )}
                             </span>
-                          </span>
-                          <button
-                            type="button"
-                            disabled={busyId === endpoint.id}
-                            onClick={() => void handleDeleteEndpoint(endpoint.id)}
-                            className={cx(FOCUS, "shrink-0 rounded-md p-1.5 text-[var(--text-subtle)] hover:bg-[var(--surface)] hover:text-[var(--danger)]")}
-                            aria-label={`Stop monitoring ${endpoint.label}`}
-                          >
-                            <Trash2 size={13} />
-                          </button>
+
+                            <div className="flex shrink-0 items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={busyId === endpoint.id}
+                                onClick={() => void handleCheckNow(endpoint.id)}
+                                className={cx(FOCUS, "flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-semibold text-[var(--text-subtle)] hover:bg-[var(--surface)] hover:text-[var(--text)]")}
+                                aria-label={`Check ${endpoint.label} now`}
+                              >
+                                {busyId === endpoint.id ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                                Check now
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setHistoryOpenId(historyOpen ? null : endpoint.id)}
+                                className={cx(FOCUS, "flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-semibold text-[var(--text-subtle)] hover:bg-[var(--surface)] hover:text-[var(--text)]")}
+                                aria-expanded={historyOpen}
+                                aria-label={`${historyOpen ? "Hide" : "Show"} history for ${endpoint.label}`}
+                              >
+                                <ChevronDown size={12} className={cx("transition-transform", historyOpen && "rotate-180")} />
+                                History
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={busyId === endpoint.id}
+                                onClick={() => void handleDeleteEndpoint(endpoint.id)}
+                                className={cx(FOCUS, "shrink-0 rounded-md p-1.5 text-[var(--text-subtle)] hover:bg-[var(--surface)] hover:text-[var(--danger)]")}
+                                aria-label={`Stop monitoring ${endpoint.label}`}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {historyOpen && <EndpointHistoryPanel endpointId={endpoint.id} />}
                         </li>
                       );
                     })}
@@ -619,12 +740,12 @@ function AddEndpointDialog({ clientId, onClose, onAdded }: { clientId: string; o
 
         <div className="mt-3 space-y-2.5">
           <div>
-            <label className="mb-1 block text-[10.5px] font-medium text-[var(--text-muted)]">Label</label>
-            <input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Production website" className={cx(FOCUS, "h-9 w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3 text-[12px] text-[var(--text)]")} />
+            <label htmlFor="add-endpoint-label" className="mb-1 block text-[10.5px] font-medium text-[var(--text-muted)]">Label</label>
+            <input id="add-endpoint-label" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Production website" className={cx(FOCUS, "h-9 w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3 text-[12px] text-[var(--text)]")} />
           </div>
           <div>
-            <label className="mb-1 block text-[10.5px] font-medium text-[var(--text-muted)]">URL</label>
-            <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com" className={cx(FOCUS, "h-9 w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3 text-[12px] text-[var(--text)]")} />
+            <label htmlFor="add-endpoint-url" className="mb-1 block text-[10.5px] font-medium text-[var(--text-muted)]">URL</label>
+            <input id="add-endpoint-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com" className={cx(FOCUS, "h-9 w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3 text-[12px] text-[var(--text)]")} />
           </div>
         </div>
 

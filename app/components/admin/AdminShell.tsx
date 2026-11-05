@@ -16,6 +16,7 @@ import {
 
 import AdminHeader from "./AdminHeader";
 import AdminSidebar from "./AdminSidebar";
+import ClientSwitchOverlay from "./ClientSwitchOverlay";
 
 import {
   ADMIN_TABS,
@@ -900,6 +901,8 @@ export default function AdminShell({
 
   return (
     <>
+      <ClientSwitchOverlay />
+
       {/* ======================================================================
           DESKTOP
       ====================================================================== */}

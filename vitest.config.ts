@@ -14,5 +14,18 @@ export default defineConfig({
   test: {
     environment: "node",
     setupFiles: ["./vitest.setup.ts"],
+    // e2e/ holds Playwright specs (own runner, own config) — exclude them
+    // here so Vitest's default include glob doesn't also try to collect
+    // test.describe()-based files meant for `npx playwright test`. The
+    // rest of this list is Vitest's own default exclude set, preserved
+    // since setting `exclude` at all replaces it rather than extending it.
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/cypress/**",
+      "**/.{idea,git,cache,output,temp}/**",
+      "**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build}.config.*",
+      "**/e2e/**",
+    ],
   },
 });

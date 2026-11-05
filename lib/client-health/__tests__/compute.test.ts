@@ -58,6 +58,34 @@ describe("computeClientHealth — monitoring", () => {
     expect(result.status).toBe("HEALTHY");
     expect(result.reasons).toHaveLength(0);
   });
+
+  it("a pending endpoint (never checked) is never Healthy — not even when another dimension also applies", () => {
+    // Regression: with only `monitoring` applicable, the pre-existing
+    // UNKNOWN-fallback condition (support-only + zero tickets) never
+    // fired here since monitoring is a second applicable dimension, so
+    // this fell through to the HEALTHY default — silently laundering
+    // "awaiting first check" into "Healthy" the moment any other
+    // dimension (even the always-applicable, data-free `support`) was
+    // present. Caught via Playwright e2e against the real admin UI.
+    const result = computeClientHealth({ ...EMPTY_INPUT, endpoints: [{ id: "e1", label: "Production site", latestCheckStatus: null, latestCheckAt: null }] });
+    expect(result.status).toBe("UNKNOWN");
+    expect(result.status).not.toBe("HEALTHY");
+    expect(result.reasons.some((r) => r.dimension === "monitoring" && r.severity === "info")).toBe(true);
+  });
+
+  it("a pending endpoint still blocks Healthy even alongside a genuinely fine support ticket", () => {
+    const result = computeClientHealth({
+      ...EMPTY_INPUT,
+      endpoints: [{ id: "e1", label: "Production site", latestCheckStatus: null, latestCheckAt: null }],
+      tickets: [{ status: "RESOLVED", priority: "LOW", createdAt: NOW }],
+    });
+    expect(result.status).toBe("UNKNOWN");
+  });
+
+  it("an open-but-not-overdue support ticket on its own (no monitoring) still reports HEALTHY — only monitoring's own pending reason blocks it", () => {
+    const result = computeClientHealth({ ...EMPTY_INPUT, tickets: [{ status: "OPEN", priority: "LOW", createdAt: NOW }] });
+    expect(result.status).toBe("HEALTHY");
+  });
 });
 
 describe("computeClientHealth — support (heuristic overdue thresholds)", () => {

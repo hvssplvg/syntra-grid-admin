@@ -142,6 +142,12 @@ export const BRAND_REQUEST_ATTACHMENTS_FOLDER = 'syntragrid/brand-request-attach
 // never drifts from it.
 export const EMPLOYEE_AVATAR_FOLDER = 'syntragrid/employees';
 
+// Restaurant Platform onboarding uploads (logo + cover image), captured
+// before the restaurant record exists on the Restaurant Admin side — the
+// resulting URL is stored there, not here; this repo only hosts the asset.
+export const RESTAURANT_LOGO_FOLDER = 'syntragrid/restaurant-platform/logos';
+export const RESTAURANT_COVER_FOLDER = 'syntragrid/restaurant-platform/covers';
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

@@ -52,6 +52,7 @@ export type ClientHealthSummary = {
   openTicketCount: number;
   overdueTicketCount: number;
   monitoredEndpointCount: number;
+  activeIncidentCount: number;
   lastCheckedAt: string | null;
   nextRenewalAt: string | null;
   outstandingAmount: number;
@@ -81,6 +82,11 @@ const CLIENT_HEALTH_SELECT = {
   contracts: { select: { status: true, renewalAt: true, endDate: true, autoRenew: true } },
   invoices: { select: { status: true, balance: true, dueAt: true } },
   billing: { select: { outstandingAmount: true } },
+  // Lightweight by default — just enough for toSummary's activeIncidentCount
+  // (always re-derived by filtering !resolved, never assumed pre-filtered,
+  // so this stays correct even when getClientHealthDetail below overrides
+  // this key with its own richer select for the full incident list).
+  incidents: { select: { id: true, resolved: true } },
 } satisfies Prisma.ClientSelect;
 
 type ClientHealthRow = Prisma.ClientGetPayload<{ select: typeof CLIENT_HEALTH_SELECT }>;
@@ -130,6 +136,7 @@ function toSummary(client: ClientHealthRow): ClientHealthSummary {
     openTicketCount,
     overdueTicketCount,
     monitoredEndpointCount: client.monitoredEndpoints.length,
+    activeIncidentCount: client.incidents.filter((incident) => !incident.resolved).length,
     lastCheckedAt: lastCheckedAt ? lastCheckedAt.toISOString() : null,
     nextRenewalAt: upcomingRenewal ? upcomingRenewal.toISOString() : null,
     outstandingAmount: client.billing ? Number(client.billing.outstandingAmount) : 0,
@@ -191,6 +198,7 @@ export async function getClientHealthDetail(clientId: string) {
         take: 50,
         select: {
           id: true,
+          monitoredEndpointId: true,
           title: true,
           description: true,
           severity: true,

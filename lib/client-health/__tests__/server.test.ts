@@ -16,6 +16,7 @@ function baseClient(overrides: Partial<Record<string, unknown>> = {}) {
     contracts: [],
     invoices: [],
     billing: null,
+    incidents: [],
     ...overrides,
   };
 }

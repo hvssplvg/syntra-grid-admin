@@ -810,7 +810,7 @@ export const ADMIN_TABS: Record<
       "Production releases and deployment activity.",
     section: "Engineering",
     icon: Rocket,
-    status: "IN_DEVELOPMENT",
+    status: "ACTIVE",
   },
 
   systems: {
@@ -820,7 +820,7 @@ export const ADMIN_TABS: Record<
       "Registry of systems operated and maintained by Syntra Grid.",
     section: "Engineering",
     icon: Boxes,
-    status: "PLANNED",
+    status: "ACTIVE",
   },
 
   restaurant_platform: {
@@ -870,7 +870,7 @@ export const ADMIN_TABS: Record<
       "Production incidents, outages and operational response.",
     section: "Engineering",
     icon: Wrench,
-    status: "PLANNED",
+    status: "ACTIVE",
   },
 
   backups: {
@@ -1538,7 +1538,10 @@ export const SECURED_MODULE_KEYS: ReadonlySet<AdminTab> = new Set([
   "brand_assets",
   "seo_analytics",
   "client_health",
+  "systems",
   "restaurant_platform",
+  "deployments",
+  "incidents",
 ]);
 
 export function isModuleSecured(tab: AdminTab): boolean {

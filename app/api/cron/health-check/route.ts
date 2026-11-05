@@ -34,5 +34,9 @@ export async function GET(request: NextRequest) {
 
   const result = await runDueHealthChecks();
 
+  // Durable record of each run — previously only visible in the HTTP
+  // response, which nothing ever read after the fact.
+  console.log("health-check cron run:", JSON.stringify(result));
+
   return NextResponse.json(result);
 }

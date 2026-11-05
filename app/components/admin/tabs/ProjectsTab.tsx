@@ -16,7 +16,7 @@
  * asked for.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   BriefcaseBusiness,
@@ -106,7 +106,13 @@ export default function ProjectsTab() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | ProjectStatus>('ALL');
 
+  const requestRef = useRef<AbortController | null>(null);
+
   const load = useCallback(() => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+
     setLoading(true);
     setError(null);
 
@@ -117,6 +123,7 @@ export default function ProjectsTab() {
       method: 'GET',
       cache: 'no-store',
       credentials: 'include',
+      signal: controller.signal,
       headers: { Accept: 'application/json' },
     })
       .then((response) => response.json().catch(() => ({ ok: false })) as Promise<ProjectsResponse>)
@@ -127,14 +134,21 @@ export default function ProjectsTab() {
         setProjects(payload.projects);
       })
       .catch((cause) => {
+        if (cause instanceof DOMException && cause.name === 'AbortError') return;
         setError(cause instanceof Error ? cause.message : 'Projects could not be loaded.');
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (requestRef.current === controller) {
+          requestRef.current = null;
+          setLoading(false);
+        }
+      });
   }, [selectedClientId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
+    return () => requestRef.current?.abort();
   }, [load]);
 
   const visibleProjects = useMemo(() => {

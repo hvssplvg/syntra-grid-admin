@@ -66,6 +66,7 @@ import { CLIENTS_ENDPOINT } from '@/lib/clients/clientsApi';
 import { LogoUploader } from '@/lib/clients/LogoUploader';
 import { deleteClientLogo } from '@/lib/clients/uploadClientLogo';
 import { fetchClientHealthDetail, type ClientHealthDetail } from '@/lib/client-health/clientHealthApi';
+import { EndpointHistoryPanel } from '@/app/components/admin/client-health/EndpointHistoryPanel';
 import { useSelectedClient } from '@/app/components/admin/SelectedClientContext';
 
 /* =============================================================================
@@ -1459,6 +1460,8 @@ function HealthMonitoringPanel({
   error: string | null;
   detail: ClientHealthDetail | null;
 }) {
+  const [openHistoryId, setOpenHistoryId] = useState<string | null>(null);
+
   if (status === 'loading' || status === 'idle') {
     return (
       <div className="flex min-h-[260px] items-center justify-center rounded-[22px] border border-[var(--line)] bg-[var(--surface)]">
@@ -1504,14 +1507,24 @@ function HealthMonitoringPanel({
             {detail.monitoredEndpoints.map((endpoint) => {
               const latest = endpoint.healthChecks[0];
               return (
-                <div key={endpoint.id} className="flex items-center justify-between gap-3 px-2 py-2.5">
-                  <div className="min-w-0">
-                    <p className="truncate text-[11.5px] font-medium text-[var(--text)]">{endpoint.label}</p>
-                    <p className="truncate text-[9.5px] text-[var(--text-subtle)]">{endpoint.url}</p>
-                  </div>
-                  <ToneBadge tone={latest ? healthTone(latest.status) : 'neutral'} compact>
-                    {latest ? formatEnum(latest.status) : 'Awaiting first check'}
-                  </ToneBadge>
+                <div key={endpoint.id} className="px-2 py-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setOpenHistoryId((current) => (current === endpoint.id ? null : endpoint.id))}
+                    className="flex w-full items-center justify-between gap-3 text-left"
+                    aria-expanded={openHistoryId === endpoint.id}
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-[11.5px] font-medium text-[var(--text)]">{endpoint.label}</p>
+                      <p className="truncate text-[9.5px] text-[var(--text-subtle)]">
+                        {endpoint.url} · every {endpoint.checkIntervalMinutes}min
+                      </p>
+                    </div>
+                    <ToneBadge tone={latest ? healthTone(latest.status) : 'neutral'} compact>
+                      {latest ? `${formatEnum(latest.status)} · HTTP ${latest.statusCode ?? '—'}` : 'Awaiting first check'}
+                    </ToneBadge>
+                  </button>
+                  {openHistoryId === endpoint.id && <EndpointHistoryPanel endpointId={endpoint.id} />}
                 </div>
               );
             })}
